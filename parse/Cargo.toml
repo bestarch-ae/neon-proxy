@@ -1,0 +1,20 @@
+[package]
+name = "parse"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+thiserror = "1"
+base64 = "0.21"
+solana-transaction-status = "1.16"
+tracing = "0.1"
+
+common = { path = "../common", package = "neon-proxy-common" }
+
+[dev-dependencies]
+solana-rpc-client = "1.16"
+solana-sdk = "1.16"
+test-log = { version = "0.2", default-features = false, features = ["trace"] }
+serde_json = "1"

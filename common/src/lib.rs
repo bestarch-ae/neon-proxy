@@ -1,3 +1,5 @@
+pub use ethnum;
+pub use evm_loader;
 pub mod types;
 
 // ===== Reexports =====
