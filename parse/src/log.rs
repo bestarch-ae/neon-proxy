@@ -376,3 +376,34 @@ pub fn parse(lines: impl IntoIterator<Item = impl AsRef<str>>) -> Result<NeonLog
     };
     Ok(log_info)
 }
+
+#[cfg(test)]
+mod tests {
+    use serde::Deserialize;
+    use test_log::test;
+
+    #[derive(Debug, Deserialize)]
+    struct Meta {
+        #[serde(rename = "logMessages")]
+        log_messages: Vec<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct DumbTx {
+        meta: Meta,
+    }
+
+    #[test]
+    fn parse_logs() {
+        let path = "tests/data/";
+        for entry in std::fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            if entry.metadata().unwrap().is_file() {
+                let buf = std::fs::read(entry.path()).unwrap();
+                let tx: DumbTx = serde_json::from_slice(&buf).unwrap();
+                println!("Parsing: {:?}", entry.path());
+                super::parse(tx.meta.log_messages).unwrap();
+            }
+        }
+    }
+}

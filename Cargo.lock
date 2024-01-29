@@ -2015,11 +2015,11 @@ name = "parse"
 version = "0.1.0"
 dependencies = [
  "base64 0.21.7",
+ "hex",
  "neon-proxy-common",
+ "serde",
  "serde_json",
  "solana-rpc-client",
- "solana-sdk",
- "solana-transaction-status",
  "test-log",
  "thiserror",
  "tracing",
