@@ -5,7 +5,7 @@ use solana_sdk::clock::UnixTimestamp;
 use solana_sdk::message::v0::LoadedAddresses;
 use solana_sdk::slot_history::Slot;
 use solana_sdk::transaction::{Result as TransactionResult, VersionedTransaction};
-use solana_transaction_status::InnerInstruction;
+use solana_transaction_status::InnerInstructions;
 
 /// Solana transaction with block info.
 #[derive(Debug, Clone)]
@@ -21,7 +21,7 @@ pub struct SolanaTransaction {
     pub loaded_addresses: LoadedAddresses,
     pub status: TransactionResult<()>,
     pub log_messages: Vec<String>,
-    pub inner_instructions: Vec<InnerInstruction>, // Do we really need this
+    pub inner_instructions: Vec<InnerInstructions>, // Do we really need this
     pub compute_units_consumed: u64,
     pub fee: u64,
 }
