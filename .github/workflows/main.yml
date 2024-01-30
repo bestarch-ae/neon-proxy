@@ -6,6 +6,8 @@ jobs:
   check:
     name: Check
     runs-on: neon-proxy
+    env:
+      NEON_REVISION: dev
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
