@@ -141,9 +141,60 @@ mod tests {
         status: String,
         is_canceled: bool,
         is_completed: bool,
+        v: String,
+        r: String,
+        s: String,
+        calldata: String,
+        logs: Vec<ReferenceEvent>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ReferenceEvent {
+        event_type: u32,
+        is_hidden: bool,
+        address: String,
+        topic_list: Vec<String>,
+        data: String,
+        sol_sig: String,
+        idx: u64,
+        inner_idx: Option<u64>,
+        total_gas_used: u64,
+        is_reverted: bool,
+        event_level: u64,
+        event_order: u64,
+        neon_sig: String,
+        block_hash: String,
+        block_slot: u64,
+        neon_tx_idx: u64,
+        block_log_idx: Option<u64>,
+        neon_tx_log_idx: Option<u64>,
     }
 
     type Reference = HashMap<String, Vec<ReferenceRow>>;
+
+    fn check_events(ref_logs: &[ReferenceEvent], my_logs: &[common::types::EventLog]) {
+        for (ref_log, my_log) in ref_logs.iter().zip(my_logs.iter()) {
+            println!("event type {:?} {}", my_log.event_type, ref_log.event_type);
+            assert_eq!(ref_log.event_type, my_log.event_type as u32);
+            assert_eq!(ref_log.is_hidden, my_log.is_hidden);
+            assert_eq!(ref_log.event_level, my_log.level);
+            assert_eq!(ref_log.event_order, my_log.order);
+
+            assert_eq!(
+                ref_log.address,
+                my_log.address.map(|a| a.to_string()).unwrap_or_default()
+            );
+            assert_eq!(
+                ref_log.topic_list,
+                my_log
+                    .topic_list
+                    .iter()
+                    .map(|t| format!("0x{}", t))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(ref_log.data, format!("0x{}", hex::encode(&my_log.data)));
+        }
+    }
 
     #[test]
     fn parse_2f() {
@@ -205,6 +256,14 @@ mod tests {
             //assert_eq!(refr.status, format!("{:#0x}", info.status));
             assert_eq!(refr.is_canceled, info.is_cancelled);
             assert_eq!(refr.is_completed, info.is_completed);
+
+            // TODO: we don't have v,r,s fields for some reason?
+
+            assert_eq!(
+                refr.calldata,
+                format!("0x{}", hex::encode(info.transaction.call_data()))
+            );
+            check_events(&refr.logs, &info.events);
         }
     }
 }

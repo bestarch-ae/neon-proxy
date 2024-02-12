@@ -78,6 +78,7 @@ pub struct NeonTxInfo {
 
 /// Event kinds can be logged to solana transaction logs.
 #[derive(Debug, Clone, Copy)]
+#[repr(u32)]
 pub enum EventKind {
     Log = 1,
 
@@ -99,6 +100,30 @@ pub enum EventKind {
     Return = 300,
     // Could not find this one
     Cancel = 301,
+}
+
+impl EventKind {
+    pub fn is_exit(&self) -> bool {
+        matches!(
+            self,
+            EventKind::ExitStop
+                | EventKind::ExitReturn
+                | EventKind::ExitSelfDestruct
+                | EventKind::ExitRevert
+        )
+    }
+
+    pub fn is_start(&self) -> bool {
+        matches!(
+            self,
+            EventKind::EnterCall
+                | EventKind::EnterCallCode
+                | EventKind::EnterStaticCall
+                | EventKind::EnterDelegateCall
+                | EventKind::EnterCreate
+                | EventKind::EnterCreate2
+        )
+    }
 }
 
 // ===== Alternative Event =====

@@ -380,6 +380,38 @@ pub fn parse(lines: impl IntoIterator<Item = impl AsRef<str>>) -> Result<NeonLog
             }
         }
     }
+
+    // complete event list
+    let mut current_level = 0;
+    let mut current_order = 0;
+    let mut addr_stack = Vec::new();
+    let mut event_level;
+    let mut event_addr;
+
+    for event in &mut event_list {
+        if event.event_type.is_start() {
+            current_level += 1;
+            event_level = current_level;
+            event_addr = event.address;
+            addr_stack.push(event.address.unwrap());
+        } else if event.event_type.is_exit() {
+            event_level = current_level;
+            current_level -= 1;
+            event_addr = addr_stack.pop();
+        } else {
+            event_level = current_level;
+            if addr_stack.is_empty() {
+                event_addr = None;
+            } else {
+                event_addr = Some(*addr_stack.last().unwrap());
+            }
+        }
+        current_order += 1;
+        event.level = event_level;
+        event.order = current_order;
+        event.address = event_addr;
+    }
+
     let log_info = NeonLogInfo {
         sig: neon_tx_sig,
         ix: neon_tx_ix,
