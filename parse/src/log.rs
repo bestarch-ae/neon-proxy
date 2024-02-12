@@ -60,6 +60,7 @@ pub struct NeonLogTxIx {
 
 #[derive(Debug, Copy, Clone)]
 enum Mnemonic {
+    Miner,
     Hash,
     Return,
     Log(u8),
@@ -271,6 +272,11 @@ impl Mnemonic {
             is_canceled: false,
         })
     }
+
+    // TODO
+    fn decode_miner(_input: &str) {
+        warn!("miner opcode not implemented yet")
+    }
 }
 
 #[derive(Debug, Error)]
@@ -283,6 +289,7 @@ impl FromStr for Mnemonic {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "HASH" => Ok(Mnemonic::Hash),
+            "MINER" => Ok(Mnemonic::Miner),
             "RETURN" => Ok(Mnemonic::Return),
             "ENTER" => Ok(Mnemonic::Enter),
             "EXIT" => Ok(Mnemonic::Exit),
@@ -292,7 +299,10 @@ impl FromStr for Mnemonic {
                 let n = n.parse().map_err(|_| BadMnemonic)?;
                 Ok(Mnemonic::Log(n))
             }
-            _ => Err(BadMnemonic),
+            s => {
+                println!("Invalid mnemonic {}", s);
+                Err(BadMnemonic)
+            }
         }
     }
 }
@@ -362,6 +372,10 @@ pub fn parse(lines: impl IntoIterator<Item = impl AsRef<str>>) -> Result<NeonLog
                         continue;
                     }
                     neon_tx_ix = Some(Mnemonic::decode_tx_gas(rest)?);
+                }
+                Mnemonic::Miner => {
+                    // TODO
+                    Mnemonic::decode_miner(rest);
                 }
             }
         }
