@@ -60,6 +60,7 @@ pub struct NeonLogTxIx {
 
 #[derive(Debug, Copy, Clone)]
 enum Mnemonic {
+    Miner,
     Hash,
     Return,
     Log(u8),
@@ -271,6 +272,11 @@ impl Mnemonic {
             is_canceled: false,
         })
     }
+
+    // TODO
+    fn decode_miner(_input: &str) {
+        warn!("miner opcode not implemented yet")
+    }
 }
 
 #[derive(Debug, Error)]
@@ -283,6 +289,7 @@ impl FromStr for Mnemonic {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "HASH" => Ok(Mnemonic::Hash),
+            "MINER" => Ok(Mnemonic::Miner),
             "RETURN" => Ok(Mnemonic::Return),
             "ENTER" => Ok(Mnemonic::Enter),
             "EXIT" => Ok(Mnemonic::Exit),
@@ -292,7 +299,10 @@ impl FromStr for Mnemonic {
                 let n = n.parse().map_err(|_| BadMnemonic)?;
                 Ok(Mnemonic::Log(n))
             }
-            _ => Err(BadMnemonic),
+            s => {
+                println!("Invalid mnemonic {}", s);
+                Err(BadMnemonic)
+            }
         }
     }
 }
@@ -363,9 +373,45 @@ pub fn parse(lines: impl IntoIterator<Item = impl AsRef<str>>) -> Result<NeonLog
                     }
                     neon_tx_ix = Some(Mnemonic::decode_tx_gas(rest)?);
                 }
+                Mnemonic::Miner => {
+                    // TODO
+                    Mnemonic::decode_miner(rest);
+                }
             }
         }
     }
+
+    // complete event list
+    let mut current_level = 0;
+    let mut current_order = 0;
+    let mut addr_stack = Vec::new();
+    let mut event_level;
+    let mut event_addr;
+
+    for event in &mut event_list {
+        if event.event_type.is_start() {
+            current_level += 1;
+            event_level = current_level;
+            event_addr = event.address;
+            addr_stack.push(event.address.unwrap());
+        } else if event.event_type.is_exit() {
+            event_level = current_level;
+            current_level -= 1;
+            event_addr = addr_stack.pop();
+        } else {
+            event_level = current_level;
+            if addr_stack.is_empty() {
+                event_addr = None;
+            } else {
+                event_addr = Some(*addr_stack.last().unwrap());
+            }
+        }
+        current_order += 1;
+        event.level = event_level;
+        event.order = current_order;
+        event.address = event_addr;
+    }
+
     let log_info = NeonLogInfo {
         sig: neon_tx_sig,
         ix: neon_tx_ix,
