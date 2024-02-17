@@ -10,6 +10,7 @@ thiserror = "1"
 base64 = "0.21"
 tracing = "0.1"
 hex = "0.4"
+arrayref = "0.3"
 
 common = { path = "../common", package = "neon-proxy-common" }
 

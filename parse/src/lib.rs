@@ -2,6 +2,8 @@ use common::solana_sdk::transaction::VersionedTransaction;
 use thiserror::Error;
 
 use common::evm_loader::types::{Address, Transaction};
+use common::solana_sdk::account_info::AccountInfo;
+use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
 use common::types::{NeonTxInfo, SolanaTransaction};
 
@@ -9,6 +11,30 @@ use self::log::NeonLogInfo;
 
 mod log;
 mod transaction;
+
+pub trait AccountsDb {
+    fn init_account(&mut self, _pubkey: Pubkey) {}
+    fn get_by_key<'a>(&'a mut self, _pubkey: &'a Pubkey) -> Option<AccountInfo<'a>> {
+        None
+    }
+}
+
+impl<T: AccountsDb> AccountsDb for Option<T> {
+    fn get_by_key<'a>(&'a mut self, pubkey: &'a Pubkey) -> Option<AccountInfo<'a>> {
+        self.as_mut().and_then(|i| i.get_by_key(pubkey))
+    }
+}
+
+impl AccountsDb for () {}
+
+fn is_neon_pubkey(pk: Pubkey) -> bool {
+    use std::str::FromStr;
+
+    let neon_dev_pubkey = Pubkey::from_str("eeLSJgWzzxrqKv1UxtRVVH8FX3qCQWUs9QuAjJpETGU").unwrap();
+    let neon_main_pubkey = Pubkey::from_str("NeonVMyRX5GbCrsAHnUwx1nYYoJAtskU1bWUo6JGNyG").unwrap();
+
+    pk == neon_dev_pubkey || pk == neon_main_pubkey
+}
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -33,11 +59,36 @@ struct SolTxMetaInfo {
     pub ident: SolTxSigSlotInfo,
 }
 
-fn parse_transactions(tx: VersionedTransaction) -> Result<Vec<(usize, Transaction)>, Error> {
+fn parse_transactions(
+    tx: VersionedTransaction,
+    accountsdb: &mut impl AccountsDb,
+) -> Result<Vec<(usize, Transaction)>, Error> {
     let mut txs = Vec::new();
+    tracing::debug!("parsing tx {:?}", tx);
+    assert!(
+        tx.message.address_table_lookups().is_none(),
+        "ALT not implemented yet"
+    );
+    let pubkeys = tx.message.static_account_keys();
+    tracing::debug!("pubkeys {:?}", pubkeys);
+    let neon_idx = pubkeys.iter().position(|x| is_neon_pubkey(*x));
+    let Some(neon_idx) = neon_idx else {
+        tracing::warn!("not a neon transaction");
+        return Ok(txs);
+    };
     for (idx, ix) in tx.message.instructions().iter().enumerate() {
-        let neon_tx = transaction::parse(&ix.data)?;
-        tracing::info!("neon tx {:?}", neon_tx);
+        tracing::debug!("instruction {:?}", ix);
+        if ix.program_id_index != neon_idx as u8 {
+            tracing::debug!("not a neon instruction");
+            continue;
+        }
+        let neon_pubkey = pubkeys[neon_idx];
+        let mut pubkeys_for_ix = vec![];
+        for acc_idx in &ix.accounts {
+            pubkeys_for_ix.push(pubkeys[*acc_idx as usize]);
+        }
+        let neon_tx = transaction::parse(&ix.data, &pubkeys_for_ix, accountsdb, neon_pubkey)?;
+        tracing::debug!("neon tx {:?}", neon_tx);
         if let Some(neon_tx) = neon_tx {
             txs.push((idx, neon_tx));
         }
@@ -90,7 +141,10 @@ fn merge_logs_transactions(
     tx_infos
 }
 
-pub fn parse(transaction: SolanaTransaction) -> Result<Vec<NeonTxInfo>, Error> {
+pub fn parse(
+    transaction: SolanaTransaction,
+    mut accountsdb: impl AccountsDb,
+) -> Result<Vec<NeonTxInfo>, Error> {
     let SolanaTransaction {
         slot, tx, tx_idx, ..
     } = transaction;
@@ -101,7 +155,7 @@ pub fn parse(transaction: SolanaTransaction) -> Result<Vec<NeonTxInfo>, Error> {
     let _meta_info = SolTxMetaInfo {
         ident: sig_slot_info,
     };
-    let neon_txs = parse_transactions(tx)?;
+    let neon_txs = parse_transactions(tx, &mut accountsdb)?;
 
     let log_info = match log::parse(transaction.log_messages) {
         Ok(log) => log,
@@ -114,9 +168,14 @@ pub fn parse(transaction: SolanaTransaction) -> Result<Vec<NeonTxInfo>, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::rc::Rc;
+
+    use common::solana_sdk::account::Account;
     use common::solana_transaction_status::EncodedTransactionWithStatusMeta;
     use serde::Deserialize;
-    use std::collections::HashMap;
     use test_log::test;
 
     #[allow(dead_code)]
@@ -196,15 +255,168 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Debug)]
+    struct Data {
+        data: Vec<u8>,
+        lamports: u64,
+    }
+
+    #[derive(Clone, Debug)]
+    struct DummyAdb {
+        map: HashMap<Pubkey, Data>,
+        neon_pubkey: Pubkey,
+    }
+
+    impl DummyAdb {
+        pub fn new(neon: Pubkey) -> Self {
+            DummyAdb {
+                map: Default::default(),
+                neon_pubkey: neon,
+            }
+        }
+    }
+
+    impl AccountsDb for DummyAdb {
+        fn get_by_key<'a>(&'a mut self, pubkey: &'a Pubkey) -> Option<AccountInfo<'a>> {
+            tracing::debug!(%pubkey, "getting data for account");
+            let data = self.map.get_mut(pubkey)?;
+
+            let account_info = AccountInfo {
+                key: pubkey,
+                owner: &self.neon_pubkey,
+                data: Rc::new(RefCell::new(data.data.as_mut())),
+                lamports: Rc::new(RefCell::new(&mut data.lamports)),
+                is_signer: false,
+                is_writable: false,
+                executable: false,
+                rent_epoch: 0,
+            };
+            Some(account_info)
+        }
+
+        fn init_account(&mut self, pubkey: Pubkey) {
+            tracing::debug!(%pubkey, "init account");
+            self.map.entry(pubkey).or_insert_with(|| Data {
+                data: vec![0; 1024 * 1024],
+                lamports: 0,
+            });
+        }
+    }
+
+    #[test]
+    fn parse_5py() {
+        let transaction_path = "tests/data/transactions/5puyNh1S37eZBnnr711GXY7khpw1BizCo3Yvri9yG8JACdsZGRjE1Xr1U6DFH9ukYQFMKan8X3QeggG6FoK3zobU/transaction.json";
+        parse_tx(transaction_path, None::<PathBuf>, &mut ());
+    }
+
     #[test]
     fn parse_2f() {
         let transaction_path = "tests/data/2FSmsnCJYenPWsbrK1vFpkhgeFGKXC13gB3wDwqqyUfEnZmWpEJ6iUSjtLrtNn5QZh54bz5brWMonccG7WHA4Wp5.json";
         let reference_path = "tests/data/reference/2FSmsnCJYenPWsbrK1vFpkhgeFGKXC13gB3wDwqqyUfEnZmWpEJ6iUSjtLrtNn5QZh54bz5brWMonccG7WHA4Wp5.json";
 
+        parse_tx(transaction_path, Some(reference_path), &mut ());
+    }
+
+    #[test]
+    fn parse_4sqy() {
+        let neon_main_pubkey: Pubkey = "NeonVMyRX5GbCrsAHnUwx1nYYoJAtskU1bWUo6JGNyG"
+            .parse()
+            .unwrap();
+        let mut adb = DummyAdb::new(neon_main_pubkey);
+        let holder_txs = [
+            "4CTqsT8zT7VUF3f8DUqCiDo5ow773FvpTZ6skxGsG86qFfc97QAGzU6JKkV25XbXa9NnnxdCnDJKVjRwWgygUnHr",
+            "5hV1MnLmrEz2HPYqdxmUPUvBx9kRA1PPFYAJh6vMBXg9vTxtJLxSfLDcvz3pg41JtwxeXNuYyY18vzDPPn1LadV6",
+        ];
+        for sig in holder_txs {
+            let holder_tx = format!("tests/data/transactions/{}/transaction.json", sig);
+            parse_tx(holder_tx, None::<PathBuf>, &mut adb);
+        }
+
+        let transaction_path = "tests/data/transactions/4sqyU24FKWAqHPtMMFpGmNf2tPFVoTwDpJckWPEEP6RNSaEyAvqyP4DgQ25ppHAfsi7D3SEWULQhm4pA9EwYa8c1/transaction.json";
+        parse_tx(transaction_path, None::<PathBuf>, &mut adb);
+    }
+
+    #[test]
+    fn parse_4y() {
+        let neon_main_pubkey: Pubkey = "NeonVMyRX5GbCrsAHnUwx1nYYoJAtskU1bWUo6JGNyG"
+            .parse()
+            .unwrap();
+        let mut adb = DummyAdb::new(neon_main_pubkey);
+        let holder_txs = [
+            "4qPmDg7TGrChw5MiQ8JDnYN3vKNzM5Ad8cN9cB4VKYVVzRsjSqUthDqAKHQLV9zdJ9MNoLDEX51VoHTcpEhxgJVA", "3ke75eWbkfyLrfSvhpQfAU8ds443rST8BzUHQ1ZoZaJT57jQnbZ8W76vXH8JSZ77RQ84EJEg6t2Bv9XMCDuhbSax", "34fcmpuGHe5VASDYH2k3wT89yUinpr3MserH56yirxU7mXSnHcSnJux3afkWeoPEWMzAQvoNw1HFRNpCeMAQrUXr", "i2EnR1kii1dBM49JxEVhNdSzkBVQDqFNne3uuJLuAm6Xi65CYfXC65yoY48R6zCEmPeMUBgt4TFzvrYs2zxMC17", "4USg9ocunMPAWjckzP6VLJsb7TJjYVEnWw7MkhrGSE7Cw4dWC6EsJRGZFCzzrF3e4YnVB6gMhNyze7juXxmnMhnB", "4fWAaCTWkWtfLzKSA56bYqv3u7cXcfFvAYPqL2axm2WvqkkW35zxV6QkTdnpaUZ4jKdaXz9otrkfKqXX3KP2wMeF", "348k5fVEJxcqAD324ocePqnMQmxMQHAvqVaJUBMHR8FZnvtxsJKsacJMCdJGbvWuCPdFPrxamLEuUgsF1xJjdSuX", "2efSzZXnKFAyLkF65X8zf97zZ2CNCbAPrBy8Bec2qfeFu9wogMyvh1nKh4msahFaokM9S7HszuMJ6s8Lg7HAQi1M", "2RHX2DKNW7hP8ezXH464qZ8iuRv3KoLx2vbakDdSMkeLPm3xhDgrZ7e5Ymx9SH7DftNdYDvaaax9JVY45mMk8w6E", "4eFL5mCsesd6zQxmUayPGHMYnoo3hQR5n9rj7FJjBXVQt8ksGoDR472RkkygpsqUVA6gbkijpySUqBuRmRwPeZxi", "2hL3vAEanHuhXMzpyxsjTSqoeRguwD4RiQMeuRcJb4gfQcAVRcjnQGBXGxnmGgvGo1TDwiBbofdtoQ1usg7rTNVM", "3ucN3b4epyZVgKSiANZjCWmL1An3KKjaRCGY4HPrcVSJrAemRUrnKnL9ZdXk7UYxAyEf1Qhx8Nu2xGGipdwXMRFz", "JwHdsAJQBZSpNAR8WcTDkhDAzoTFZG3uafWxgTJXt2YRa5kdTzJi6Q7GR41XezqkGunRw24NybZ3eHdcnSkuRR2", "2D6nwinjyQDGtK2VdyFQMX7uEQToRe1sMJpLTe2rbN5H8vyagdaAoHj5MP844rikAS8ZY3mFHEfd3eVDs2C5ZHLP", "5fHtmUcWik5w3HgzGPxjSJPmzx1VN3kAHm1xmRTqPLYZcFCxzUf9fpQYKb6U7QiiiF24rfNuxmV6dTJDadyU5QJg", "u5FJwsceK9mcKVydFYEaTbzqbm3LFnaiiRA9pt6oDVDBvJLG2cbMWaZhbrXa6jYBeDLmqHfHZM1KjoJRg7bpLFw", "2BX2VQ3EsV67UMtLmySMWkFuSbsXZvM6YwUFYMRFsAXLxBqgKoiBExzSwwhHKqKoiPn66RwSG58x8NeVtLj6rZqx", "5FJqeLe2VyLzSpXpV5gDw5Kwmg1q2DeaPMcmhjUZkQVfHpQpr36MWCSsm2cqB3XrqNvaPd9z3uUwfKFm6xJ9b1Qe", "2QPsVsJXsT7S15MDmpmavDKfDHJsaBw2aSVR4KPS1zxjsdp3sv5KK6hQbX6xZiFnn9BaRJ17y3tf4cwJtQYUPi3G", "ZZtaMfoz9fv8w7fMSFUxYs6wPX1AWzYMkAkV9RFg63cB1yCdAnJ6sUQrvA2THJLzBe14G8hYZQdamBVwAx81CeC", "63AUC8PUxcZSQ3znuErHiY24yKhTqUCs8gvHsqCPDjqcxd1HNC9gjQChF2UsfYE7esMeJxsbkDKZGGC6iKxEdFht", "2hAUcSRZpujccwcTSJVVjtP28oiDPXVmadCeH6Ly8HVsugMBCoB4KXjTaA8xfUY9wn25PEbxV81u2sD3LSapWi7K", "4ADi9vAzXk4xba6RC5SfWZpxaNVBQ8e5YFGh1922ewymzoYWHLkHNC8xH2cLSNAvKEczDo5D5ov1PA4vikSd3vAK", "3pdKy3zj1pxxQQio27QAVVaMn28fdBqn1LCemkz2c1Ymq4KjtzA5LqUGGVA23frHzJCzGb23QmG8RUYpcrTnfpfF", "DitGj2jaBewrM3JfEtEcokdBC2DdMFfpqa18VyEbiHqptiRSmnzNW5HS5iHti3r3tDoBr6npV5RiTPukmCNWtMX", "PQcPTfSYs3znVPyAHiWadK4s7MpEU9vY8i8xnqRYdT2Hx9Ru6HdCYVuLJj9KsCn2zTi2bY8FcqzbTdFbe6mAFRW", "3L1p9FbKHUvYT5uMEFYDMns51iXaWD9f4fiZ6DvmHoFCJaXbb2pscuxEXiFeSxRy6N9WQ4Tzw3Wg3Jf4b7V9EtBD", "4HMs5DmzS3apZERMwmcXimRgnDAym8pER6zSYX1bahjqHCfkDMSzDK9W9c7ibgLtjcTwRYgpKhmWNm8ekGgrVC2u", "4GpYPpNo5Kir2uo9jqqKw72Ek6XZVN7nhWr451fNFzqXfZs63v8nqzjAiNPmSpVpAsR2Y6gLAp7xD96b2WH8K8PE", "pTJ2mxeivBoYUPvdx8TyoSsofejTd9WTVm6BqmsqHuKy7T8d7TQQPDn6PNzQKDzar9SMHGJAHya3yCqYT8Ajh9U", "yKqvYkWwBkFb4M4Ph7iFmLzfpsbTJShydwKqvfnjbzKYGcovM2ivLeufdrgLWDHEz6fYt3hnQB1YuNg5zAgdiZP", "287d4PX8NGCFmKtVVPUDuKyoG4vr3ccDBHDycCDHC81aDNbCf5djQYtUHWA8MjwWe6WWQyqgvmhBuyJAr6aQ7ELX", "2fsQckyXutB9vYLQwW5etCT6VhuUvT7kKQDWZ5nTu6TZWRaesAa93v1ya3WurBgqBvZsi8sgpuq45K3fACdF92EK", "3Bb2CEVBZ6GLrBfhH9tKRzGzqLFNS7rKVZiR7ARmkKc9DBLNuTsFaw7oBY98JzjnvuwmobbAdSfNGpSQovoYzpaY", "2crqLhRp7uWsgAk7FNu5fqpzgiKD7w545LyzLTD9u6MVxJF14MVTedFJSQ6paKKk6Ng6uHhGhKPyGYr24rxL3RA5", "51WjWdL8wMENU5k5aNk9Vj7Zeq3qnz4iTN3wjvJE7byUyYrZ3Bc8zkn7CaXXij5BMJkUqzTb4VRxvXbbdpng7sWp", "ndF6CeW27PgQKGMrmnEt3X8VMoocZSQV3Ejv1ANBXC77pKEHi6C3ZNReTPyMUjctFrJkUiNL11wcx1U6PrbUkP5", "2RgsXXhFct5MJKbWfzxcHnuy1hSCm4bGMPhDmfy6aF85gPkVoWP56w5RfTSvSabeFTEeheZqEFcooaxzZzq76wgn", "Nkr3KqqP2EoxodDsYyun1DdWPzypArcXkatnm2uRGn19HLNWusRRN2Zs8Eg4WovnFKwmehc8DtazsK4qBAW3sN5", "5LQbGUkhoo3acj8nmVcaVFCTs1pdmbR2SDerwEtWg3kjbPFpnbphyCtGho1KHmSrdus2m1J8eXzYGdw27yXSmpKh", "3S1LYG6f7zt5tCix9rjKtKw8TiYbRyobHSiTo42eHCubHxDye1SmB2ewsWDi9Sif3CkGSVexbZxtagM7hiapCAYv", "43LF5byrKukAHWVoKDs8nmrtZ5whNGXHnway1fPGGLgi3Fg79gEgQitk98V8hwy8AnFrrN5ofhmpGrCtUgsXStMD", "2ibbXFBPxM1hRXhPoZnSDhitZPtRg4HA9i4KDTJz4p68uz4aYmGbzgXKdhtnjhupqECF1BtCmLvPz12n1QyhLUuu", "5mNpknjuMUcaYZ2pgvGGaqdK39zw3b1Yi1JviHXw7YFR26LyEKUMc31Z5ipgEaz3GiNJqzmDDhg8hvGXTb7kXZXa", "2HagjhtQdhn2ERzN1oU5jFqR2xW41po3jKpWWg7LtMEcDkVUM3rEn2x5YjP5VAC76khRoGeiGaq5sQ55PuBWjvuo", "4JVkaUxwCDcpcvNcdUmN3nCUxEaqZEpeR4sVSwFC4h4UbbqssiDPCwTnNQ84k1y1gq5riYg33nTf8sCbVP7mE1Jj", "4C6JybtaGvoZrLh4XdR2sBvjUGASgEJaQFo4Uqmy2xmyukw6QFABYYEfupRHziXSyKtt3kk48ejR2mVPw8WGPXM7", "4XeffxBhc2wjzZq2Du7m8YV2oTyca5ifMJXfSZ9hbggKyf5iDPJ5LCbLqUfEfd7c29LxeDzsY38y9vauUNiwXoYY", "fcidGxE5FpFqkg62sUvvdNoHw5NbGWYgBnhZcnAVEFm4F1osVLpm8BQuxLKz4XiGdT7dehGEMeLmMdccrsVnZHb", "2vxRdn78XBPcxnRVbi9Y6JnvWbinXN45AcZsZxw2fZPkSG8wQzLCTLTVL1GXUh4q4FyMuF6Xc99L64hnNzi5qWuF", "2YG3E8MHvDCLpszSuuGZYt57uz33magJ6wKtJnBRLo1VaAVc7qxuf3Pni54kitKsDVn5wwSjhomp3qdAJ9CKDjk1", "4CJyK9LTYUf84TnLo3GSm1GaMuQsPpBqVFZGzaPzdBEs7HRhEECfEYubYA2SFvcRFwJ8dGNU2wfcvPRoj4QB9WTK", "4M2Vhtuvov6XGTGHgSpc8xsWeXnybdXBy6KAkjqf2r1E1rdw5om66xQa3V5QEEFbeeB5MFbEwPC5sd9RqVwdsrQQ", "2eYzQsREeazxZapaobPpbZB8TqVWKTH12ym7XtmZczvRZKjgPqpU63VFqkfunRDg2VDqE3T5ieiNXeg6Bpm3FYEj", "2cbRsBaid3Y3BdrzY4i2EeR3kwra6n2Ej6bvxuexYt3FjgjqGWh7LRffb6Ccedp7ydmvxnc3BoK7nCDfwpiGpnJn", "5gEZqrJ3tEujBXWNq9sZNyVq7r5v5wbSmCRwsGPoXriaV7Vrx4Sp1q3g9rJwVRjQgE1BpPhHd4EQUfNxAegrGTyd", "25Z6vuAj6VHsRaCnMhu7rnSVTWex4uE8dr3FvagPp3F2nq33qsekTNWwfVu2o5oTBCFeR1Fg9PU7eBBCEbF3xyfR", "5puyNh1S37eZBnnr711GXY7khpw1BizCo3Yvri9yG8JACdsZGRjE1Xr1U6DFH9ukYQFMKan8X3QeggG6FoK3zobU", "3UiTA1DxE3G9vKrRWGbzMbRo614vRtBrYyg4FQJmdKs27VGSkGLQ4WSdKQY1juGfhpc4Ax7u9P4mdAsocdSz5Jrz"
+        ];
+        for sig in holder_txs.iter().rev() {
+            let holder_tx = format!("tests/data/transactions/{}/transaction.json", sig);
+            parse_tx(holder_tx, None::<PathBuf>, &mut adb);
+        }
+
+        let transaction_path = "tests/data/transactions/4YcHMcHwXkpqTfuqafaJigL9SKoYcRhUD9LimTHKjbkhJeLSpdjdsJCirjTqrM7VZC4RBrDJZdrjW5ZAUbqHqhq5/transaction.json";
+        parse_tx(transaction_path, None::<PathBuf>, &mut adb);
+    }
+
+    #[test]
+    fn parse_many_old() {
+        use std::path::PathBuf;
+        let tx_path = "tests/data/";
+        let ref_path = "tests/data/reference";
+
+        for entry in std::fs::read_dir(tx_path).unwrap() {
+            let entry = entry.unwrap();
+            if entry.metadata().unwrap().is_file() {
+                let fname = entry.file_name();
+                let mut ref_file_name = PathBuf::new();
+                ref_file_name.push(ref_path);
+                ref_file_name.push(fname);
+                println!("Parsing: {:?}", entry.path());
+                let ref_file_name = ref_file_name.exists().then_some(ref_file_name);
+                parse_tx(entry.path(), ref_file_name, &mut ());
+            }
+        }
+    }
+
+    #[test]
+    fn parse_many_new() {
+        use std::path::PathBuf;
+        let tx_path = "tests/data/transactions";
+        let ref_path = "tests/data/reference";
+
+        for entry in std::fs::read_dir(tx_path).unwrap() {
+            let entry = entry.unwrap();
+            if entry.metadata().unwrap().is_dir() {
+                let fname = entry.file_name();
+                let mut ref_file_name = PathBuf::new();
+                ref_file_name.push(ref_path);
+                ref_file_name.push(fname);
+                println!("Parsing: {:?}", entry.path());
+                let ref_file_name = ref_file_name.exists().then_some(ref_file_name);
+                let mut tx_path = entry.path();
+                tx_path.push("transaction.json");
+                parse_tx(tx_path, ref_file_name, &mut ());
+            }
+        }
+    }
+
+    fn read_account(tx: &str, pubkey: Pubkey) -> Account {
+        let mut path = PathBuf::new();
+        path.push("tests/data/transactions");
+        path.push(tx);
+        path.push(pubkey.to_string());
+
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn parse_tx(
+        transaction_path: impl AsRef<Path>,
+        reference_path: Option<impl AsRef<Path>>,
+        adb: &mut impl AccountsDb,
+    ) {
         let encoded: EncodedTransactionWithStatusMeta =
             serde_json::from_str(&std::fs::read_to_string(transaction_path).unwrap()).unwrap();
         let tx = encoded.transaction.decode().unwrap();
-        let neon_txs = parse_transactions(tx).unwrap();
+
+        let pubkeys = tx.message.static_account_keys();
+        tracing::info!(?pubkeys);
+        let neon_txs = parse_transactions(tx, adb).unwrap();
         let logs = match encoded.meta.unwrap().log_messages {
             common::solana_transaction_status::option_serializer::OptionSerializer::Some(logs) => {
                 logs
@@ -213,6 +425,12 @@ mod tests {
         };
         let logs = log::parse(logs).unwrap();
         let neon_tx_infos = merge_logs_transactions(neon_txs, logs, 276140928, 3);
+
+        tracing::info!(?neon_tx_infos);
+
+        let Some(reference_path) = reference_path else {
+            return;
+        };
         let references: Vec<_> =
             serde_json::from_str::<Reference>(&std::fs::read_to_string(reference_path).unwrap())
                 .unwrap()
