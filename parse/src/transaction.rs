@@ -16,6 +16,8 @@ pub enum Error {
     InvalidInstruction,
     #[error("not implemented")]
     NotImplemented,
+    #[error("account not found: {0}")]
+    AccountNotFound(Pubkey),
 }
 
 pub fn parse(
@@ -103,9 +105,10 @@ fn decode_exec_from_account(
     pubkey: Pubkey,
 ) -> Result<Transaction, Error> {
     let holder_key = accounts[0];
-    let account = adb.get_by_key(&holder_key).unwrap();
+    let account = adb
+        .get_by_key(&holder_key)
+        .ok_or(Error::AccountNotFound(holder_key))?;
     let holder = Holder::from_account(&pubkey, account).unwrap();
-
     let message = holder.transaction();
     let trx = Transaction::from_rlp(&message)?;
 
@@ -123,7 +126,10 @@ fn decode_step_from_account(
     };
     use common::evm_loader::account::{TAG_HOLDER, TAG_STATE, TAG_STATE_FINALIZED};
 
-    let holder_or_storage = adb.get_by_key(&accounts[0]).unwrap();
+    let holder_key = accounts[0];
+    let holder_or_storage = adb
+        .get_by_key(&holder_key)
+        .ok_or(Error::AccountNotFound(holder_key))?;
     let tag = common::evm_loader::account::tag(&pubkey, &holder_or_storage).unwrap();
     tracing::debug!(tag, "holder account tag");
     match tag {
@@ -140,7 +146,7 @@ fn decode_step_from_account(
         TAG_STATE_FINALIZED | TAG_STATE_FINALIZED_DEPRECATED => {
             tracing::warn!("TAG_STATE_FINALIZED not implemented");
         }
-        _ => todo!("unknown tag {}", tag),
+        _ => todo!("unknown tag {} (not implemented)", tag),
     }
     todo!()
 }
