@@ -3,5 +3,6 @@
 resolver = "2"
 members = [
     "common",
-    "parse"
+    "parse",
+    "sol2neon"
 ]

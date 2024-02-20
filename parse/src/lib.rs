@@ -25,8 +25,6 @@ impl<T: AccountsDb> AccountsDb for Option<T> {
     }
 }
 
-impl AccountsDb for () {}
-
 fn is_neon_pubkey(pk: Pubkey) -> bool {
     use std::str::FromStr;
 
@@ -143,7 +141,7 @@ fn merge_logs_transactions(
 
 pub fn parse(
     transaction: SolanaTransaction,
-    mut accountsdb: impl AccountsDb,
+    accountsdb: &mut impl AccountsDb,
 ) -> Result<Vec<NeonTxInfo>, Error> {
     let SolanaTransaction {
         slot, tx, tx_idx, ..
@@ -155,7 +153,7 @@ pub fn parse(
     let _meta_info = SolTxMetaInfo {
         ident: sig_slot_info,
     };
-    let neon_txs = parse_transactions(tx, &mut accountsdb)?;
+    let neon_txs = parse_transactions(tx, accountsdb)?;
 
     let log_info = match log::parse(transaction.log_messages) {
         Ok(log) => log,
@@ -173,7 +171,6 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::rc::Rc;
 
-    use common::solana_sdk::account::Account;
     use common::solana_transaction_status::EncodedTransactionWithStatusMeta;
     use serde::Deserialize;
     use test_log::test;
@@ -207,6 +204,7 @@ mod tests {
         logs: Vec<ReferenceEvent>,
     }
 
+    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     struct ReferenceEvent {
         event_type: u32,
