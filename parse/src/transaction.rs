@@ -18,6 +18,8 @@ pub enum Error {
     NotImplemented,
     #[error("account not found: {0}")]
     AccountNotFound(Pubkey),
+    #[error("unknown instruction tag: {:x}", .0)]
+    UnknownTag(u8),
 }
 
 pub fn parse(
@@ -47,6 +49,14 @@ pub fn parse(
             let tx = decode_step_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
             return Ok(Some(tx));
         }
+        0x24 => {
+            tracing::info!("found holder create instruction");
+            decode_holder_create(&bytes[1..], accounts, adb, neon_pubkey)?;
+        }
+        0x25 => {
+            tracing::info!("found holder delete instruction");
+            decode_holder_delete(&bytes[1..], accounts, adb, neon_pubkey)?;
+        }
         0x26 => {
             tracing::info!("found holder write instruction");
             decode_holder_write(&bytes[1..], accounts, adb, neon_pubkey)?;
@@ -58,10 +68,44 @@ pub fn parse(
         }
         _ => {
             tracing::warn!("not implemented tag: 0x{:x}", tag);
-            panic!("not implemented tag");
+            return Err(Error::UnknownTag(*tag));
         }
     }
     Ok(None) // TODO
+}
+
+fn decode_holder_create(
+    _instruction: &[u8],
+    accounts: &[Pubkey],
+    adb: &mut impl AccountsDb,
+    neon_pubkey: Pubkey,
+) -> Result<(), Error> {
+    use common::evm_loader::account::TAG_HOLDER;
+
+    let holder_pubkey = accounts[0];
+
+    adb.init_account(holder_pubkey);
+    let account = adb.get_by_key(&holder_pubkey).unwrap();
+    account.data.borrow_mut()[0] = TAG_HOLDER;
+    let mut holder = Holder::from_account(&neon_pubkey, account).unwrap();
+    holder.clear();
+
+    Ok(())
+}
+
+fn decode_holder_delete(
+    _instruction: &[u8],
+    accounts: &[Pubkey],
+    adb: &mut impl AccountsDb,
+    _neon_pubkey: Pubkey,
+) -> Result<(), Error> {
+    let holder_pubkey = accounts[0];
+
+    if let Some(holder) = adb.get_by_key(&holder_pubkey) {
+        let mut data = holder.data.borrow_mut();
+        data.fill(0);
+    }
+    Ok(())
 }
 
 fn decode_holder_write(
