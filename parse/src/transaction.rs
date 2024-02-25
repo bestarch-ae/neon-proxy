@@ -18,7 +18,7 @@ pub enum Error {
     NotImplemented,
     #[error("account not found: {0}")]
     AccountNotFound(Pubkey),
-    #[error("unknown instruction tag: {:x}", .0)]
+    #[error("unknown instruction tag: 0x{:x}", .0)]
     UnknownTag(u8),
 }
 
@@ -60,6 +60,9 @@ pub fn parse(
         0x26 => {
             tracing::info!("found holder write instruction");
             decode_holder_write(&bytes[1..], accounts, adb, neon_pubkey)?;
+        }
+        0x27 => {
+            tracing::info!("found deprecated deposit instruction");
         }
         0x2a => {
             tracing::info!("found deprecated tx exec from account");
