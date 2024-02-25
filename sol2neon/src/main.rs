@@ -236,6 +236,8 @@ impl From<EncodedTransactionWithStatusMeta> for Wrapped<SolanaTransaction> {
 }
 
 fn main() -> Result<(), Error> {
+    tracing_subscriber::fmt::init();
+
     let args = Args::parse();
     let mut accounts_db = DummyAdb::new(args.neon_pubkey);
 
