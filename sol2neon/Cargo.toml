@@ -14,3 +14,4 @@ neon_parse = { path = "../parse", package = "parse" }
 tracing = "0.1"
 anyhow = "1"
 hex = "0.4"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }

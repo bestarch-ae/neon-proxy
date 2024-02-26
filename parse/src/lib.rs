@@ -63,6 +63,11 @@ fn parse_transactions(
 ) -> Result<Vec<(usize, Transaction)>, Error> {
     let mut txs = Vec::new();
     tracing::debug!("parsing tx {:?}", tx);
+    tracing::debug!(
+        alt = ?tx.message.address_table_lookups(),
+        static_accounts = ?tx.message.static_account_keys(),
+        "accounts"
+    );
     assert!(
         tx.message.address_table_lookups().is_none(),
         "ALT not implemented yet"

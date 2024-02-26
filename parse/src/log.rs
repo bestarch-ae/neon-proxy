@@ -1,6 +1,7 @@
 use std::str::FromStr;
 use std::str::Utf8Error;
 
+use arrayref::array_ref;
 use base64::prelude::{Engine, BASE64_STANDARD as BASE64};
 use thiserror::Error;
 use tracing::{error, warn};
@@ -110,9 +111,9 @@ impl Mnemonic {
             error!("Invalid event: topics count mismatch");
             return Err(Error::InvalidEvent);
         }
-        let mut buf = [0u8; 20];
+        let mut buf = [0u8; 32];
         let _len = BASE64.decode_slice_unchecked(parts[0].as_bytes(), &mut buf)?;
-        let address = Address::from(buf);
+        let address = Address::from(*array_ref![buf, 0, 20]);
         let topic_list = parts[2..2 + (msg_topics_count as usize)]
             .iter()
             .map(|part| {
@@ -194,24 +195,19 @@ impl Mnemonic {
     /// EXIT SELFDESTRUCT
     /// EXIT REVERT data
     fn decode_tx_exit(input: &str) -> Result<NeonLogTxEvent, Error> {
+        let split = input.split(' ').collect::<Vec<_>>();
+        let event = split[0];
+
         let mut buf = [0u8; 32];
-        let len = BASE64.decode_slice(input.as_bytes(), &mut buf)?;
+        let len = BASE64.decode_slice(event.as_bytes(), &mut buf)?;
         let mut data = Vec::new();
 
         let event_kind = match &buf[..len] {
             b"STOP" => EventKind::ExitStop,
             b"RETURN" => EventKind::ExitReturn,
             b"SELFDESTRUCT" => EventKind::ExitSelfDestruct,
-            e if e.starts_with(b"REVERT") => {
-                for (i, part) in e.split(|c| *c == b' ').enumerate() {
-                    if i == 0 && part != b"REVERT" {
-                        error!(kind = ?part, "Invalid EXIT event: unknown event kind");
-                        return Err(Error::InvalidEvent);
-                    }
-                    if i == 1 {
-                        data = BASE64.decode(part)?;
-                    }
-                }
+            b"REVERT" => {
+                data = BASE64.decode(split[1])?;
                 EventKind::ExitRevert
             }
             e => {
@@ -339,6 +335,7 @@ pub fn parse(lines: impl IntoIterator<Item = impl AsRef<str>>) -> Result<NeonLog
         if line.starts_with("Program data: ") {
             let line = line.strip_prefix("Program data: ").unwrap();
             let (mnemonic, rest) = parse_mnemonic(line)?;
+            tracing::debug!(?mnemonic, "parsing mnemonic");
             match mnemonic {
                 Mnemonic::Hash => {
                     if neon_tx_sig.is_some() {
