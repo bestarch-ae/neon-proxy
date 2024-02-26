@@ -8,6 +8,26 @@ use super::AccountsDb;
 use arrayref::array_ref;
 use thiserror::Error;
 
+pub mod tag {
+    pub const DEPOSIT: u8 = 0x31;
+    pub const HOLDER_CREATE: u8 = 0x24;
+    pub const HOLDER_DELETE: u8 = 0x25;
+    pub const HOLDER_WRITE: u8 = 0x26;
+
+    pub const TX_EXEC_FROM_DATA: u8 = 0x32;
+    pub const TX_EXEC_FROM_ACCOUNT: u8 = 0x33;
+    pub const TX_STEP_FROM_DATA: u8 = 0x34;
+    pub const TX_STEP_FROM_ACCOUNT: u8 = 0x35;
+    pub const TX_STEP_FROM_ACCOUNT_NO_CHAINID: u8 = 0x36;
+
+    pub const DEPOSIT_DEPRECATED: u8 = 0x27;
+    pub const TX_EXEC_FROM_DATA_DEPRECATED: u8 = 0x1f;
+    pub const TX_EXEC_FROM_ACCOUNT_DEPRECATED: u8 = 0x2a;
+    pub const TX_STEP_FROM_DATA_DEPRECATED: u8 = 0x20;
+    pub const TX_STEP_FROM_ACCOUNT_DEPRECATED: u8 = 0x21;
+    pub const TX_STEP_FROM_ACCOUNT_NO_CHAINID_DEPRECATED: u8 = 0x22;
+}
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("neon error")]
@@ -29,50 +49,71 @@ pub fn parse(
     neon_pubkey: Pubkey,
 ) -> Result<Option<Transaction>, Error> {
     let tag = bytes.first().ok_or_else(|| Error::InvalidInstruction)?;
-    match tag {
-        0x31 => {
+    match *tag {
+        tag::DEPOSIT => {
             tracing::info!("found deposit instruction");
         }
-        0x32 => {
-            tracing::info!("found execute from instruction");
-            let tx = decode_execute_from_ix(&bytes[1..])?;
-            return Ok(Some(tx));
-        }
-        /* old */
-        0x1f => {
+        tag::TX_EXEC_FROM_DATA => {
             tracing::info!("found deprecated tx exec from data");
             let tx = decode_execute_from_ix(&bytes[1..])?;
             return Ok(Some(tx));
         }
-        0x20 => {
+        tag::TX_STEP_FROM_DATA => {
+            tracing::info!("found tx step from data");
+            let tx = decode_step_from_ix(&bytes[1..], accounts, adb, neon_pubkey)?;
+            return Ok(Some(tx));
+        }
+        tag::TX_STEP_FROM_ACCOUNT => {
+            tracing::info!("found tx step from account");
+            let tx = decode_step_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
+            return Ok(Some(tx));
+        }
+        tag::TX_EXEC_FROM_ACCOUNT => {
+            tracing::info!("found tx exec from account");
+            let tx = decode_exec_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
+            return Ok(Some(tx));
+        }
+        tag::TX_STEP_FROM_ACCOUNT_NO_CHAINID => {
+            todo!()
+        }
+        tag::HOLDER_CREATE => {
+            tracing::info!("found holder create instruction");
+            decode_holder_create(&bytes[1..], accounts, adb, neon_pubkey)?;
+        }
+        tag::HOLDER_DELETE => {
+            tracing::info!("found holder delete instruction");
+            decode_holder_delete(&bytes[1..], accounts, adb, neon_pubkey)?;
+        }
+        tag::HOLDER_WRITE => {
+            tracing::info!("found holder write instruction");
+            decode_holder_write(&bytes[1..], accounts, adb, neon_pubkey)?;
+        }
+        /* old: currently uses the same code, but potentially may change */
+        tag::DEPOSIT_DEPRECATED => {
+            tracing::info!("found deprecated deposit instruction");
+        }
+        tag::TX_EXEC_FROM_DATA_DEPRECATED => {
+            tracing::info!("found deprecated tx exec from data");
+            let tx = decode_execute_from_ix(&bytes[1..])?;
+            return Ok(Some(tx));
+        }
+        tag::TX_STEP_FROM_DATA_DEPRECATED => {
             tracing::info!("found deprecated tx step from data");
             let tx = decode_step_from_ix(&bytes[1..], accounts, adb, neon_pubkey)?;
             return Ok(Some(tx));
         }
-        0x21 => {
+        tag::TX_STEP_FROM_ACCOUNT_DEPRECATED => {
             tracing::info!("found deprecated tx step from account");
             let tx = decode_step_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
             return Ok(Some(tx));
         }
-        0x24 => {
-            tracing::info!("found holder create instruction");
-            decode_holder_create(&bytes[1..], accounts, adb, neon_pubkey)?;
-        }
-        0x25 => {
-            tracing::info!("found holder delete instruction");
-            decode_holder_delete(&bytes[1..], accounts, adb, neon_pubkey)?;
-        }
-        0x26 => {
-            tracing::info!("found holder write instruction");
-            decode_holder_write(&bytes[1..], accounts, adb, neon_pubkey)?;
-        }
-        0x27 => {
-            tracing::info!("found deprecated deposit instruction");
-        }
-        0x2a => {
+        tag::TX_EXEC_FROM_ACCOUNT_DEPRECATED => {
             tracing::info!("found deprecated tx exec from account");
             let tx = decode_exec_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
             return Ok(Some(tx));
+        }
+        tag::TX_STEP_FROM_ACCOUNT_NO_CHAINID_DEPRECATED => {
+            todo!()
         }
         _ => {
             tracing::warn!("not implemented tag: 0x{:x}", tag);
