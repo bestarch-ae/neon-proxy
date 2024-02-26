@@ -35,6 +35,26 @@ jobs:
         with:
           command: test
 
+  build:
+    name: Build artifacts
+    runs-on: neon-proxy
+    env:
+      NEON_REVISION: dev
+    steps:
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: target/release/sol2neon
+
 #  fmt:
 #    name: Rustfmt
 #    runs-on: neon-proxy
