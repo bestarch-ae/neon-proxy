@@ -300,7 +300,7 @@ impl FromStr for Mnemonic {
                 Ok(Mnemonic::Log(n))
             }
             s => {
-                println!("Invalid mnemonic {}", s);
+                tracing::warn!("Invalid mnemonic {}", s);
                 Err(BadMnemonic)
             }
         }
@@ -382,7 +382,7 @@ pub fn parse(lines: impl IntoIterator<Item = impl AsRef<str>>) -> Result<NeonLog
     }
 
     // complete event list
-    let mut current_level = 0;
+    let mut current_level: u64 = 0;
     let mut current_order = 0;
     let mut addr_stack = Vec::new();
     let mut event_level;
@@ -396,7 +396,8 @@ pub fn parse(lines: impl IntoIterator<Item = impl AsRef<str>>) -> Result<NeonLog
             addr_stack.push(event.address.unwrap());
         } else if event.event_type.is_exit() {
             event_level = current_level;
-            current_level -= 1;
+            //current_level -= 1;
+            current_level = current_level.saturating_sub(1); // TODO
             event_addr = addr_stack.pop();
         } else {
             event_level = current_level;
@@ -445,9 +446,9 @@ mod tests {
         for entry in std::fs::read_dir(path).unwrap() {
             let entry = entry.unwrap();
             if entry.metadata().unwrap().is_file() {
+                println!("Parsing: {:?}", entry.path());
                 let buf = std::fs::read(entry.path()).unwrap();
                 let tx: DumbTx = serde_json::from_slice(&buf).unwrap();
-                println!("Parsing: {:?}", entry.path());
                 super::parse(tx.meta.log_messages).unwrap();
             }
         }
