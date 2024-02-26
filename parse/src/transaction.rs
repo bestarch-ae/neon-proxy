@@ -74,7 +74,9 @@ pub fn parse(
             return Ok(Some(tx));
         }
         tag::TX_STEP_FROM_ACCOUNT_NO_CHAINID => {
-            todo!()
+            tracing::info!("found tx step from account no chain_id");
+            let tx = decode_step_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
+            return Ok(Some(tx));
         }
         tag::HOLDER_CREATE => {
             tracing::info!("found holder create instruction");
@@ -113,7 +115,9 @@ pub fn parse(
             return Ok(Some(tx));
         }
         tag::TX_STEP_FROM_ACCOUNT_NO_CHAINID_DEPRECATED => {
-            todo!()
+            tracing::info!("found deprecated tx step from account no chain_id");
+            let tx = decode_step_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
+            return Ok(Some(tx));
         }
         _ => {
             tracing::warn!("not implemented tag: 0x{:x}", tag);
