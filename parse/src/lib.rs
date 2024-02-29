@@ -3,6 +3,8 @@ use thiserror::Error;
 
 use common::evm_loader::types::{Address, Transaction};
 use common::solana_sdk::account_info::AccountInfo;
+use common::solana_sdk::message::v0::LoadedAddresses;
+use common::solana_sdk::message::AccountKeys;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
 use common::types::{NeonTxInfo, SolanaTransaction};
@@ -60,20 +62,16 @@ struct SolTxMetaInfo {
 fn parse_transactions(
     tx: VersionedTransaction,
     accountsdb: &mut impl AccountsDb,
+    loaded: &LoadedAddresses,
 ) -> Result<Vec<(usize, Transaction)>, Error> {
     let mut txs = Vec::new();
-    tracing::debug!("parsing tx {:?}", tx);
+    tracing::debug!("parsing tx {:?} with loaded addresses: {:?}", tx, loaded);
     tracing::debug!(
         alt = ?tx.message.address_table_lookups(),
         static_accounts = ?tx.message.static_account_keys(),
         "accounts"
     );
-    assert!(
-        tx.message.address_table_lookups().is_none(),
-        "ALT not implemented yet"
-    );
-    let pubkeys = tx.message.static_account_keys();
-    tracing::debug!("pubkeys {:?}", pubkeys);
+    let pubkeys = AccountKeys::new(tx.message.static_account_keys(), Some(loaded));
     let neon_idx = pubkeys.iter().position(|x| is_neon_pubkey(*x));
     let Some(neon_idx) = neon_idx else {
         tracing::warn!("not a neon transaction");
@@ -158,7 +156,8 @@ pub fn parse(
     let _meta_info = SolTxMetaInfo {
         ident: sig_slot_info,
     };
-    let neon_txs = parse_transactions(tx, accountsdb)?;
+    let loaded = &transaction.loaded_addresses;
+    let neon_txs = parse_transactions(tx, accountsdb, loaded)?;
 
     let log_info = match log::parse(transaction.log_messages) {
         Ok(log) => log,
@@ -176,6 +175,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::rc::Rc;
 
+    use common::solana_sdk::message::v0::LoadedAddresses;
     use common::solana_transaction_status::EncodedTransactionWithStatusMeta;
     use serde::Deserialize;
     use test_log::test;
@@ -380,7 +380,7 @@ mod tests {
 
         let pubkeys = tx.message.static_account_keys();
         tracing::info!(?pubkeys);
-        let neon_txs = parse_transactions(tx, adb).unwrap();
+        let neon_txs = parse_transactions(tx, adb, &LoadedAddresses::default()).unwrap();
         let logs = match encoded.meta.unwrap().log_messages {
             common::solana_transaction_status::option_serializer::OptionSerializer::Some(logs) => {
                 logs
