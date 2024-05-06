@@ -32,6 +32,7 @@ pub struct TraverseLedger {
     api: SolanaApi,
     target_key: Pubkey,
     // Sigatures buffer. Starts with the oldest/last processed, ends with the most recent.
+    // TODO: Limit this
     buffer: VecDeque<Signature>,
     next_request: Instant,
 }

@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod mock;
 
+use async_trait::async_trait;
 use common::solana_sdk::commitment_config::CommitmentLevel;
 use common::solana_sdk::hash::Hash;
 use common::solana_sdk::pubkey::Pubkey;
@@ -10,9 +11,11 @@ use common::solana_transaction_status::EncodedConfirmedTransactionWithStatusMeta
 use common::solana_transaction_status::{TransactionStatus, UiTransactionEncoding};
 use solana_client::client_error::Result as ClientResult;
 use solana_client::nonblocking::rpc_client::RpcClient;
-use solana_client::rpc_client::GetConfirmedSignaturesForAddress2Config;
+use solana_client::rpc_client::{GetConfirmedSignaturesForAddress2Config, RpcClientConfig};
 use solana_client::rpc_config::{RpcSendTransactionConfig, RpcTransactionConfig};
 use solana_client::rpc_response::RpcConfirmedTransactionStatusWithSignature;
+use solana_client::rpc_sender::RpcSender;
+use solana_rpc_client::http_sender::HttpSender;
 
 pub const SIGNATURES_LIMIT: usize = 1000;
 
@@ -22,8 +25,11 @@ pub struct SolanaApi {
 
 impl SolanaApi {
     pub fn new(endpoint: impl ToString) -> Self {
-        SolanaApi {
-            client: RpcClient::new(endpoint.to_string()),
+        Self {
+            client: RpcClient::new_sender(
+                LoggedSender(HttpSender::new(endpoint.to_string())),
+                RpcClientConfig::default(),
+            ),
         }
     }
 
@@ -84,6 +90,30 @@ impl SolanaApi {
                 },
             )
             .await
+    }
+}
+
+struct LoggedSender(HttpSender);
+
+#[async_trait]
+impl RpcSender for LoggedSender {
+    fn get_transport_stats(&self) -> solana_client::rpc_sender::RpcTransportStats {
+        self.0.get_transport_stats()
+    }
+
+    fn url(&self) -> String {
+        self.0.url()
+    }
+
+    async fn send(
+        &self,
+        request: solana_client::rpc_request::RpcRequest,
+        params: serde_json::Value,
+    ) -> ClientResult<serde_json::Value> {
+        tracing::trace!(?request, ?params, "sending request");
+        let result = self.0.send(request, params).await;
+        tracing::trace!(?result, "request result");
+        result
     }
 }
 
