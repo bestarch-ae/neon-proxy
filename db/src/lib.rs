@@ -1,4 +1,9 @@
 use common::types::NeonTxInfo;
+use sqlx::PgPool;
+
+pub async fn connect(url: &str) -> Result<PgPool, sqlx::Error> {
+    PgPool::connect(url).await
+}
 
 pub struct TransactionRepo {
     pool: sqlx::PgPool,
@@ -43,7 +48,7 @@ impl TransactionRepo {
                    $19, $20, $21, $22, $23, $24)
             "#,
             format!("0x{}", tx.neon_signature),
-            tx.tx_type as i8,
+            tx.tx_type as i32,
             tx.from.to_string(),
             tx.sol_signature,
             tx.sol_ix_idx as i64,
