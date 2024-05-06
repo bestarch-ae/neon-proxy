@@ -48,6 +48,7 @@ pub struct NeonLogTxReturn {
     pub is_canceled: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct NeonLogTxCancel {
     pub gas_used: u64,
