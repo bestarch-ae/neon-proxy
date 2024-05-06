@@ -5,12 +5,15 @@ use std::collections::VecDeque;
 use std::str::FromStr;
 use std::time::Duration;
 
-use common::solana_sdk::pubkey::Pubkey;
-use common::solana_sdk::signature::Signature;
-use common::types::SolanaTransaction;
 use solana_client::client_error::ClientError;
 use thiserror::Error;
 use tokio::time::{sleep_until, Instant};
+
+use common::solana_sdk::pubkey::Pubkey;
+use common::solana_sdk::signature::Signature;
+use common::solana_sdk::slot_history::Slot;
+use common::solana_transaction_status::UiConfirmedBlock;
+use common::types::SolanaTransaction;
 
 use crate::convert::{decode_ui_transaction, TxDecodeError};
 use crate::solana_api::{SolanaApi, SIGNATURES_LIMIT};
@@ -27,6 +30,24 @@ pub enum TraverseError {
     TxDecodeError(#[from] TxDecodeError),
 }
 
+#[derive(Debug)]
+pub(crate) struct CachedBlock {
+    pub block: UiConfirmedBlock,
+    pub slot: Slot,
+    /// Index of last processed transaction
+    pub last_idx: u64,
+}
+
+impl CachedBlock {
+    fn new(block: UiConfirmedBlock, slot: Slot) -> Self {
+        Self {
+            block,
+            slot,
+            last_idx: 0,
+        }
+    }
+}
+
 pub struct TraverseLedger {
     last_observed: Option<Signature>,
     api: SolanaApi,
@@ -34,6 +55,7 @@ pub struct TraverseLedger {
     // Sigatures buffer. Starts with the oldest/last processed, ends with the most recent.
     // TODO: Limit this
     buffer: VecDeque<Signature>,
+    cached_block: Option<CachedBlock>,
     next_request: Instant,
 }
 
@@ -44,26 +66,64 @@ impl TraverseLedger {
             target_key,
             last_observed,
             buffer: VecDeque::new(),
+            cached_block: None,
             next_request: Instant::now(),
         }
     }
 
     pub async fn next(&mut self) -> Option<Result<SolanaTransaction, TraverseError>> {
-        let signature = self.next_signature().await?;
+        let signature = self.peek_signature().await?;
+
         let tx = match self.api.get_transaction(&signature).await {
             Err(err) => {
-                self.buffer.push_front(signature); // Retry
+                tracing::error!(%signature, "could not request transaction");
                 return Some(Err(err.into()));
             }
             Ok(tx) => tx,
         };
-        Some(decode_ui_transaction(tx).map_err(Into::into))
+
+        let block = match self.get_block(tx.slot).await {
+            Err(err) => {
+                tracing::error!(slot = tx.slot, %signature, "could not request block");
+                return Some(Err(err.into()));
+            }
+            Ok(block) => block,
+        };
+
+        match decode_ui_transaction(tx, block) {
+            Ok(tx) => {
+                self.buffer.pop_front(); // cleanup
+                Some(Ok(tx))
+            }
+            Err(err) => {
+                tracing::error!(%signature, ?block, "could not decode transaction");
+                Some(Err(err.into()))
+            }
+        }
     }
 
-    async fn next_signature(&mut self) -> Option<Signature> {
+    async fn get_block(&mut self, slot: Slot) -> Result<&mut CachedBlock, ClientError> {
+        if self
+            .cached_block
+            .as_ref()
+            .map_or(true, |cached| cached.slot != slot)
+        {
+            let block = self.api.get_block(slot).await?;
+            println!(
+                "block: {slot} sigs {:?} txs {:?}",
+                block.signatures.as_ref().map(Vec::len),
+                block.transactions.as_ref().map(Vec::len),
+            );
+            self.cached_block = Some(CachedBlock::new(block, slot));
+        }
+
+        Ok(self.cached_block.as_mut().expect("just replaced the block"))
+    }
+
+    async fn peek_signature(&mut self) -> Option<Signature> {
         loop {
-            if let Some(sign) = self.buffer.pop_front() {
-                break Some(sign);
+            if let Some(sign) = self.buffer.front() {
+                break Some(*sign);
             }
 
             sleep_until(self.next_request).await;

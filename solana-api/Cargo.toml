@@ -19,4 +19,4 @@ tracing = "0.1"
 anyhow = "1.0.82"
 clap = { version = "4.5.4", features = ["derive"] }
 dashmap = "5.5.3"
-tracing-subscriber = { version = "0.3", features = ["fmt"] }
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }

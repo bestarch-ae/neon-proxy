@@ -5,7 +5,10 @@ use common::solana_transaction_status::EncodedConfirmedTransactionWithStatusMeta
 use common::solana_transaction_status::UiLoadedAddresses;
 use common::solana_transaction_status::{EncodedTransaction, EncodedTransactionWithStatusMeta};
 use common::types::SolanaTransaction;
+use solana_rpc_client::rpc_client::SerializableTransaction;
 use thiserror::Error;
+
+use crate::traverse::CachedBlock;
 
 #[derive(Debug, Error)]
 pub enum TxDecodeError {
@@ -17,6 +20,10 @@ pub enum TxDecodeError {
     MissingCUnits,
     #[error("absent transaction loaded addresses")]
     MissingLoadedAddr,
+    #[error("absent signatures in block")]
+    MissingSignatures,
+    #[error("transaction cannot be found in block")]
+    MissingTxInBlock,
     #[error("invalide loaded addresses: {0}")]
     InvalidLoadedAddr(ParsePubkeyError),
     #[error("invalid transaction encoding ({0:?})")]
@@ -38,6 +45,7 @@ impl<T> OptionSerializerExt for OptionSerializer<T> {
 
 pub fn decode_ui_transaction(
     tx: EncodedConfirmedTransactionWithStatusMeta,
+    block: &mut CachedBlock,
 ) -> Result<SolanaTransaction, TxDecodeError> {
     let EncodedConfirmedTransactionWithStatusMeta {
         slot,
@@ -55,13 +63,27 @@ pub fn decode_ui_transaction(
         return Err(TxDecodeError::InvalidEncoding(transaction));
     };
 
+    let sig_str = tx.get_signature().to_string();
+    // let start_idx = block.last_idx.saturating_sub(0);
+    let tx_idx = block
+        .block
+        .signatures
+        .as_ref()
+        .ok_or(TxDecodeError::MissingSignatures)?
+        .iter()
+        // NOTE: currently there's an ordering bug in gSFA, that will be resolved in 1.18
+        // .skip(start_idx as usize) // in case we try to parse the same tx second time
+        .position(|sig| sig == &sig_str)
+        .ok_or(TxDecodeError::MissingTxInBlock)? as u64;
+    // let tx_idx = start_idx + idx;
+
     let result = SolanaTransaction {
         slot,
-        parent_slot: 0,                // TODO: needs block
-        blockhash: Default::default(), // TODO: needs block
+        parent_slot: block.block.parent_slot,
+        blockhash: block.block.blockhash.clone(),
         block_time,
 
-        tx_idx: 0, // TODO: needs block
+        tx_idx,
         tx,
         loaded_addresses: meta
             .loaded_addresses
@@ -78,6 +100,8 @@ pub fn decode_ui_transaction(
             .ok_or(TxDecodeError::MissingCUnits)?,
         fee: meta.fee,
     };
+
+    block.last_idx = result.tx_idx;
     Ok(result)
 }
 

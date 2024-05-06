@@ -6,6 +6,7 @@ use common::solana_sdk::signature::Signature;
 use solana_api::solana_api::SolanaApi;
 use solana_api::traverse::TraverseLedger;
 use solana_client::rpc_client::SerializableTransaction;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(about)]
@@ -43,7 +44,10 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .init();
     let opts = Cli::try_parse()?;
 
     let api = SolanaApi::new(opts.url);
