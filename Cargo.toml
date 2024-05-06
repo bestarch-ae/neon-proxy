@@ -5,5 +5,5 @@ members = [
     "common",
     "parse",
     "sol2neon",
-    "ledgerwalk"
+    "solana-api"
 ]

@@ -3,8 +3,8 @@ use clap::Parser;
 
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
-use ledgerwalk::solana_api::SolanaApi;
-use ledgerwalk::traverse::TraverseLedger;
+use solana_api::solana_api::SolanaApi;
+use solana_api::traverse::TraverseLedger;
 use solana_client::rpc_client::SerializableTransaction;
 
 #[derive(Parser)]
