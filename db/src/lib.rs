@@ -15,6 +15,81 @@ impl TransactionRepo {
     }
 
     pub async fn insert(&self, tx: &NeonTxInfo) -> Result<(), sqlx::Error> {
+        let block_slot = tx.sol_slot as i64;
+        let tx_hash = format!("0x{}", tx.neon_signature);
+        let tx_idx = tx.sol_tx_idx as i32;
+        let sol_sig = &tx.sol_signature.to_string();
+        let sol_idx = tx.sol_ix_idx as i32;
+        let sol_inner_idx = tx.sol_ix_inner_idx as i32;
+
+        let mut txn = self.pool.begin().await?;
+        for log in &tx.events {
+            let topic1 = log
+                .topic_list
+                .get(0)
+                .map(|t| format!("{:#0x}", t))
+                .unwrap_or_default();
+            let topic2 = log
+                .topic_list
+                .get(1)
+                .map(|t| format!("{:#0x}", t))
+                .unwrap_or_default();
+            let topic3 = log
+                .topic_list
+                .get(2)
+                .map(|t| format!("{:#0x}", t))
+                .unwrap_or_default();
+            let topic4 = log
+                .topic_list
+                .get(3)
+                .map(|t| format!("{:#0x}", t))
+                .unwrap_or_default();
+
+            sqlx::query!(
+                r#"
+            INSERT INTO neon_transaction_logs
+            (
+                address,
+                block_slot,
+                tx_hash,
+                tx_idx,
+                tx_log_idx,
+                log_idx,
+                event_level,
+                event_order,
+                sol_sig,
+                idx,
+                inner_idx,
+                log_topic1,
+                log_topic2,
+                log_topic3,
+                log_topic4,
+                log_topic_cnt,
+                log_data
+            ) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+            "#,
+                log.address.map(|a| a.to_string()).unwrap_or_default(),
+                block_slot,
+                tx_hash,
+                tx_idx,
+                0, /* tx_log_idx ?? */
+                log.log_idx as i64,
+                log.level as i64,
+                log.order as i64,
+                &sol_sig,
+                sol_idx,
+                sol_inner_idx,
+                topic1,
+                topic2,
+                topic3,
+                topic4,
+                log.topic_list.len() as i32,
+                hex::encode(&log.data)
+            )
+            .execute(&mut *txn)
+            .await?;
+        }
+
         sqlx::query!(
             r#"
             INSERT INTO neon_transactions
@@ -47,13 +122,13 @@ impl TransactionRepo {
                    $13, $14, $15, $16, $17, $18,
                    $19, $20, $21, $22, $23, $24)
             "#,
-            format!("0x{}", tx.neon_signature),
+            tx_hash,
             tx.tx_type as i32,
             tx.from.to_string(),
-            tx.sol_signature,
+            sol_sig,
             tx.sol_ix_idx as i64,
             tx.sol_ix_inner_idx as i64,
-            tx.sol_slot as i64,
+            block_slot,
             tx.sol_tx_idx as i64,
             format!("{:#0x}", tx.transaction.nonce()),
             format!("{:#0x}", tx.transaction.gas_price()),
@@ -75,8 +150,9 @@ impl TransactionRepo {
             format!("0x{}", hex::encode(tx.transaction.call_data())),
             &[] /* logs */
         )
-        .execute(&self.pool)
+        .execute(&mut *txn)
         .await?;
+        txn.commit().await?;
         Ok(())
     }
 }
