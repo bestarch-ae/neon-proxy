@@ -2,7 +2,9 @@
 
 resolver = "2"
 members = [
-    "common", "db", "indexer",
+    "common",
+    "db",
+    "indexer",
     "parse",
     "sol2neon",
     "solana-api"
