@@ -67,10 +67,10 @@ impl CachedBlock {
         let Some(signatures) = self.block.signatures.as_ref() else {
             return Some(Err(TxDecodeError::MissingSignatures));
         };
-        let iter = signatures.iter().skip(self.last_idx as usize).enumerate();
+        let iter = signatures.iter().enumerate().skip(self.last_idx as usize);
         for (idx, sign) in iter {
             if self.txs.remove(sign.as_str()) {
-                self.last_idx += idx as u64;
+                self.last_idx = idx as u64;
                 return Some(Ok(sign.clone()));
             }
         }
@@ -148,7 +148,7 @@ impl TraverseLedger {
             let fst = self.pop_candidate().await;
             let slot = fst.slot;
             txs.insert(fst.signature);
-            loop {
+            while !self.buffer.is_empty() {
                 // TODO: NowOrNever so we don't wait for new blocks?
                 let candidate = self.pop_candidate().await;
                 if candidate.slot != slot {
