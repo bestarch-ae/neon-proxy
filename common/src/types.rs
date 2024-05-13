@@ -7,6 +7,14 @@ use solana_sdk::slot_history::Slot;
 use solana_sdk::transaction::{Result as TransactionResult, VersionedTransaction};
 use solana_transaction_status::InnerInstructions;
 
+#[derive(Debug, Clone)]
+pub struct SolanaBlock {
+    pub slot: Slot,
+    pub parent_slot: Slot,
+    pub hash: String,
+    pub time: Option<UnixTimestamp>,
+}
+
 /// Solana transaction with block info.
 #[derive(Debug, Clone)]
 pub struct SolanaTransaction {
@@ -24,6 +32,17 @@ pub struct SolanaTransaction {
     pub inner_instructions: Vec<InnerInstructions>, // Do we really need this
     pub compute_units_consumed: u64,
     pub fee: u64,
+}
+
+impl SolanaTransaction {
+    pub fn extract_block_info(&self) -> SolanaBlock {
+        SolanaBlock {
+            slot: self.slot,
+            parent_slot: self.parent_slot,
+            hash: self.blockhash.clone(),
+            time: self.block_time,
+        }
+    }
 }
 
 /// Represents instruction with NEON invocation inside. Inserted into `solana_neon_transations`.

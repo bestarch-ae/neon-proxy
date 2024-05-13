@@ -38,7 +38,9 @@ async fn main() -> Result<()> {
     let mut traverse = TraverseLedger::new(api, opts.target, opts.from);
     let mut adb = accountsdb::DummyAdb::new(opts.target);
     let pool = db::connect(&opts.pg_url).await?;
-    let tx_repo = db::TransactionRepo::new(pool);
+    let tx_repo = db::TransactionRepo::new(pool.clone());
+    let block_repo = db::BlockRepo::new(pool);
+    let mut last_written_slot = None;
     tracing::info!("connected");
 
     while let Some(result) = traverse.next().await {
@@ -50,6 +52,16 @@ async fn main() -> Result<()> {
                 continue;
             }
         };
+        if last_written_slot.map_or(true, |slot| tx.slot != slot) {
+            let block = tx.extract_block_info();
+            if let Err(err) = block_repo.insert(&block).await {
+                tracing::warn!(?err, slot = block.slot, "failed to save solana block");
+            } else {
+                tracing::info!(slot = block.slot, "saved solana block");
+                last_written_slot.replace(block.slot);
+            }
+        }
+
         let txs = match neon_parse::parse(tx, &mut adb) {
             Ok(txs) => txs,
             Err(err) => {
