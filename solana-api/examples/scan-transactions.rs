@@ -40,6 +40,10 @@ struct Cli {
     #[arg(short, long)]
     /// Print transaction data
     verbose: bool,
+
+    #[arg(long)]
+    /// Ignore failed transactions
+    no_fail: bool,
 }
 
 #[tokio::main]
@@ -52,6 +56,9 @@ async fn main() -> Result<()> {
 
     let api = SolanaApi::new(opts.url);
     let mut traverse = TraverseLedger::new(api, opts.target, opts.from);
+    if opts.no_fail {
+        traverse.set_only_success(true)
+    }
 
     while let Some(result) = traverse.next().await {
         let tx = result?;

@@ -96,6 +96,7 @@ pub struct TraverseLedger {
     buffer: VecDeque<Candidate>,
     cached_block: Option<CachedBlock>,
     next_request: Instant,
+    only_success: bool,
 }
 
 impl TraverseLedger {
@@ -107,7 +108,12 @@ impl TraverseLedger {
             buffer: VecDeque::new(),
             cached_block: None,
             next_request: Instant::now(),
+            only_success: false,
         }
+    }
+
+    pub fn set_only_success(&mut self, only_success: bool) {
+        self.only_success = only_success
     }
 
     pub async fn next(&mut self) -> Option<Result<SolanaTransaction, TraverseError>> {
@@ -272,10 +278,17 @@ impl TraverseLedger {
                 //     "could not parse signature"
                 // );
                 let RpcConfirmedTransactionStatusWithSignature {
-                    signature, slot, ..
+                    signature,
+                    slot,
+                    err,
+                    ..
                 } = item;
-                let sign = Candidate { signature, slot };
-                new_signatures.push_front(sign);
+                if self.only_success && err.is_some() {
+                    tracing::debug!(?err, %signature, slot,"skipped failed transaction");
+                } else {
+                    let sign = Candidate { signature, slot };
+                    new_signatures.push_front(sign);
+                }
             }
 
             // Means we reached last_observed
