@@ -1,7 +1,7 @@
 use common::solana_sdk::transaction::VersionedTransaction;
 use thiserror::Error;
 
-use common::evm_loader::types::{Address, Transaction};
+use common::evm_loader::types::Transaction;
 use common::solana_sdk::account_info::AccountInfo;
 use common::solana_sdk::message::v0::LoadedAddresses;
 use common::solana_sdk::message::AccountKeys;
@@ -114,8 +114,8 @@ fn merge_logs_transactions(
         let tx_info = NeonTxInfo {
             tx_type: 0,                                                        // TODO
             neon_signature: log_info.sig.map(hex::encode).unwrap_or_default(), // TODO
-            from: Address::default(),                                          // TODO
-            contract: tx.target(),                                             // TODO
+            from: tx.recover_caller_address().unwrap_or_default(),
+            contract: tx.target(), // TODO
             transaction: tx,
             events: log_info.event_list.clone(), // TODO
             gas_used: log_info

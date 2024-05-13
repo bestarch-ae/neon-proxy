@@ -319,6 +319,7 @@ pub fn parse(lines: impl IntoIterator<Item = impl AsRef<str>>) -> Result<NeonLog
     let mut neon_tx_ix = None;
     let mut neon_tx_return = None;
     let mut event_list = Vec::new();
+    let mut log_idx = 0;
 
     for line in lines {
         let line = line.as_ref();
@@ -353,15 +354,27 @@ pub fn parse(lines: impl IntoIterator<Item = impl AsRef<str>>) -> Result<NeonLog
                     neon_tx_return = Some(Mnemonic::decode_tx_return(neon_tx_ix.as_ref(), rest)?);
                 }
                 Mnemonic::Log(n) => {
-                    let event = Mnemonic::decode_tx_event(n, rest)?;
+                    let mut event = Mnemonic::decode_tx_event(n, rest)?;
+                    if !event.is_hidden {
+                        event.log_idx = log_idx;
+                        log_idx += 1;
+                    }
                     event_list.push(event);
                 }
                 Mnemonic::Enter => {
-                    let event = Mnemonic::decode_tx_enter(rest)?;
+                    let mut event = Mnemonic::decode_tx_enter(rest)?;
+                    if !event.is_hidden {
+                        event.log_idx = log_idx;
+                        log_idx += 1;
+                    }
                     event_list.push(event);
                 }
                 Mnemonic::Exit => {
-                    let event = Mnemonic::decode_tx_exit(rest)?;
+                    let mut event = Mnemonic::decode_tx_exit(rest)?;
+                    if !event.is_hidden {
+                        event.log_idx = log_idx;
+                        log_idx += 1;
+                    }
                     event_list.push(event);
                 }
                 Mnemonic::Gas => {

@@ -23,7 +23,15 @@ impl TransactionRepo {
         let sol_inner_idx = tx.sol_ix_inner_idx as i32;
 
         let mut txn = self.pool.begin().await?;
+
+        let mut tx_log_idx = 0;
+
         for log in &tx.events {
+            /* not a real eth event */
+            if log.is_hidden || log.topic_list.is_empty() {
+                continue;
+            }
+
             let topic1 = log
                 .topic_list
                 .get(0)
@@ -72,7 +80,7 @@ impl TransactionRepo {
                 block_slot,
                 tx_hash,
                 tx_idx,
-                0, /* tx_log_idx ?? */
+                tx_log_idx,
                 log.log_idx as i64,
                 log.level as i64,
                 log.order as i64,
@@ -88,6 +96,8 @@ impl TransactionRepo {
             )
             .execute(&mut *txn)
             .await?;
+
+            tx_log_idx += 1;
         }
 
         sqlx::query!(
