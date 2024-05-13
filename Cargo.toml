@@ -9,3 +9,5 @@ members = [
     "sol2neon",
     "solana-api"
 ]
+
+exclude = ["proxy"]
