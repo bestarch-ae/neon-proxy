@@ -1,4 +1,4 @@
-use common::types::NeonTxInfo;
+use common::types::{NeonTxInfo, SolanaBlock};
 use sqlx::PgPool;
 
 pub async fn connect(url: &str) -> Result<PgPool, sqlx::Error> {
@@ -149,6 +149,40 @@ impl TransactionRepo {
             format!("{:#0x}", tx.transaction.s()),
             format!("0x{}", hex::encode(tx.transaction.call_data())),
             &[] /* logs */
+        )
+        .execute(&mut *txn)
+        .await?;
+        txn.commit().await?;
+        Ok(())
+    }
+}
+
+pub struct BlockRepo {
+    pool: sqlx::PgPool,
+}
+
+impl BlockRepo {
+    pub fn new(pool: sqlx::PgPool) -> Self {
+        Self { pool }
+    }
+
+    pub async fn insert(&self, block: &SolanaBlock) -> Result<(), sqlx::Error> {
+        let mut txn = self.pool.begin().await?;
+        sqlx::query!(
+            r#"INSERT INTO solana_blocks (
+                block_slot,
+                block_hash,
+                block_time,
+                parent_block_slot,
+                is_finalized,
+                is_active
+            ) VALUES ($1, $2, $3, $4, $5, $6)"#,
+            block.slot as i64,
+            block.hash,
+            block.time.unwrap_or(0),
+            block.parent_slot as i64,
+            true,
+            true,
         )
         .execute(&mut *txn)
         .await?;
