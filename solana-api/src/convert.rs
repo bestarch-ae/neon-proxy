@@ -1,3 +1,5 @@
+use thiserror::Error;
+
 use common::solana_sdk::message::v0::LoadedAddresses;
 use common::solana_sdk::pubkey::{ParsePubkeyError, Pubkey};
 use common::solana_transaction_status::option_serializer::OptionSerializer;
@@ -5,7 +7,6 @@ use common::solana_transaction_status::EncodedConfirmedTransactionWithStatusMeta
 use common::solana_transaction_status::UiLoadedAddresses;
 use common::solana_transaction_status::{EncodedTransaction, EncodedTransactionWithStatusMeta};
 use common::types::SolanaTransaction;
-use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum TxDecodeError {
@@ -17,6 +18,10 @@ pub enum TxDecodeError {
     MissingCUnits,
     #[error("absent transaction loaded addresses")]
     MissingLoadedAddr,
+    #[error("absent signatures in block")]
+    MissingSignatures,
+    #[error("transaction cannot be found in block")]
+    MissingTxInBlock,
     #[error("invalide loaded addresses: {0}")]
     InvalidLoadedAddr(ParsePubkeyError),
     #[error("invalid transaction encoding ({0:?})")]
@@ -57,11 +62,11 @@ pub fn decode_ui_transaction(
 
     let result = SolanaTransaction {
         slot,
-        parent_slot: 0,                // TODO: needs block
-        blockhash: Default::default(), // TODO: needs block
+        parent_slot: 0,
+        blockhash: String::new(),
         block_time,
 
-        tx_idx: 0, // TODO: needs block
+        tx_idx: 0,
         tx,
         loaded_addresses: meta
             .loaded_addresses
@@ -78,6 +83,7 @@ pub fn decode_ui_transaction(
             .ok_or(TxDecodeError::MissingCUnits)?,
         fee: meta.fee,
     };
+
     Ok(result)
 }
 

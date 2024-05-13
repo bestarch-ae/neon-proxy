@@ -1,6 +1,16 @@
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
+use dashmap::DashMap;
+use serde_json::Value;
+use solana_client::client_error::ClientError;
+use solana_client::rpc_config::{RpcBlockConfig, RpcSignaturesForAddressConfig};
+use solana_client::rpc_config::{RpcEncodingConfigWrapper, RpcTransactionConfig};
+use solana_client::rpc_request::RpcRequest;
+use solana_client::rpc_response::RpcConfirmedTransactionStatusWithSignature as RpcTxStatus;
+use solana_client::rpc_sender::{RpcSender, RpcTransportStats};
+use tracing_subscriber::EnvFilter;
+
 use common::solana_sdk::hash::Hash;
 use common::solana_sdk::instruction::{AccountMeta, Instruction};
 use common::solana_sdk::message::v0::LoadedAddresses;
@@ -13,20 +23,13 @@ use common::solana_transaction_status::ConfirmedTransactionWithStatusMeta;
 use common::solana_transaction_status::VersionedTransactionWithStatusMeta;
 use common::solana_transaction_status::{Rewards, TransactionStatusMeta};
 use common::solana_transaction_status::{TransactionWithStatusMeta, UiTransactionEncoding};
-use dashmap::DashMap;
-use serde_json::Value;
-use solana_client::client_error::ClientError;
-use solana_client::rpc_config::RpcSignaturesForAddressConfig;
-use solana_client::rpc_config::{RpcEncodingConfigWrapper, RpcTransactionConfig};
-use solana_client::rpc_request::RpcRequest;
-use solana_client::rpc_response::RpcConfirmedTransactionStatusWithSignature as RpcTxStatus;
-use solana_client::rpc_sender::{RpcSender, RpcTransportStats};
 
 use super::*;
 
 struct TransactionDB {
     statuses: Arc<RwLock<Vec<RpcTxStatus>>>,
     txs: Arc<DashMap<Signature, ConfirmedTransactionWithStatusMeta>>,
+    blocks: Arc<DashMap<u64, UiConfirmedBlock>>,
     address: Pubkey,
 }
 
@@ -112,12 +115,17 @@ impl RpcSender for TransactionDB {
                     .convert_to_current()
                     .encoding
                     .unwrap_or(UiTransactionEncoding::Json);
-                println!("{:?}", encoding);
                 let encoded = transaction.encode(encoding, None).unwrap();
                 let transaction =
                     serde_json::to_value(&encoded).expect("cannot serialize transaction");
-                println!("tx: {:?}", transaction);
                 Ok(transaction)
+            }
+            RpcRequest::GetBlock => {
+                let (slot, _config): (u64, RpcBlockConfig) =
+                    serde_json::from_value(params).expect("could not parse transaction request");
+                let block = self.blocks.get(&slot).unwrap();
+                let block = serde_json::to_value(block.value()).expect("cannot serialize block");
+                Ok(block)
             }
             request => panic!("unsupported request: {} - {}", request, params),
         }
@@ -193,26 +201,83 @@ fn dummy_confirmed_tx_with_meta(slot: Slot) -> (Signature, ConfirmedTransactionW
     )
 }
 
+fn create_block() -> UiConfirmedBlock {
+    let signatures = std::iter::repeat_with(Signature::new_unique)
+        .take(100)
+        .map(|s| s.to_string())
+        .collect();
+
+    UiConfirmedBlock {
+        previous_blockhash: String::new(),
+        blockhash: String::new(),
+        parent_slot: 0,
+        transactions: None,
+        signatures: Some(signatures),
+        rewards: None,
+        block_time: None,
+        block_height: None,
+    }
+}
+
+fn insert_txs_in_block(block: &mut UiConfirmedBlock, txs: &[Signature]) {
+    use rand::Rng;
+
+    let mut rng = rand::thread_rng();
+    let mut prev_idx = 0;
+    for sign in txs {
+        prev_idx = rng.gen_range(prev_idx..block.signatures.as_ref().unwrap().len()) + 1;
+        block
+            .signatures
+            .as_mut()
+            .unwrap()
+            .insert(prev_idx, sign.to_string());
+    }
+}
+
 #[tokio::test]
 async fn correct_order() {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .init();
     let address = Pubkey::new_unique();
 
-    let txs = (1..3568_u64)
-        .map(dummy_confirmed_tx_with_meta)
-        .collect::<DashMap<_, _>>();
-    let (sign_map, mut signatures): (DashMap<_, _>, VecDeque<_>) = txs
-        .iter()
-        .map(|ref_| *ref_.key())
-        .enumerate()
-        .map(|(idx, sign)| ((sign, idx + 1), sign))
+    const TXS_PER_SLOT_1: u64 = 3;
+    let idx_to_slot = |per_slot, idx| (idx - 1) / per_slot;
+    let (txs, mut signatures): (DashMap<_, _>, VecDeque<_>) = (1..3568_u64)
+        .map(|idx| dummy_confirmed_tx_with_meta(idx_to_slot(TXS_PER_SLOT_1, idx)))
+        .map(|(sign, tx)| ((sign, tx), sign))
         .unzip();
+    let sign_map: DashMap<_, _> = signatures
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(idx, sign)| (sign, idx + 1))
+        .collect();
     let signatures2 = signatures
         .iter()
         .enumerate()
         .map(|(idx, &sign)| (idx as u64 + 1, sign))
         .collect::<DashMap<_, _>>();
+
+    let txs = Arc::new(txs);
+    let blocks = Arc::new(DashMap::new());
+    let populate_blocks = |per_slot, signatures: &[Signature]| {
+        for signs in signatures.chunks(per_slot) {
+            let slot = txs.get(signs.first().unwrap()).unwrap().value().slot;
+            assert!(signs
+                .iter()
+                .all(|sign| { txs.get(sign).unwrap().value().slot == slot }));
+            insert_txs_in_block(
+                blocks.entry(slot).or_insert_with(create_block).value_mut(),
+                signs,
+            )
+        }
+    };
+    populate_blocks(TXS_PER_SLOT_1 as usize, signatures.make_contiguous());
+
     let sign_map = sign_map;
-    let sign_to_num = |sign| *sign_map.get(sign).unwrap();
+    let sign_to_num = |sign: &'_ Signature| *sign_map.get(sign).unwrap();
     let num_to_sign = |idx| *signatures2.get(&idx).unwrap().value();
 
     let statuses = signatures
@@ -220,7 +285,7 @@ async fn correct_order() {
         .enumerate()
         .map(|(idx, sign)| RpcTxStatus {
             signature: sign.to_string(),
-            slot: idx as u64,
+            slot: idx as u64 / TXS_PER_SLOT_1,
             err: None,
             memo: None,
             block_time: None,
@@ -228,29 +293,33 @@ async fn correct_order() {
         })
         .collect::<Vec<_>>();
     let statuses = Arc::new(RwLock::new(statuses));
-    let txs = Arc::new(txs);
     let tx_db = TransactionDB {
         statuses: statuses.clone(),
         txs: txs.clone(),
+        blocks: blocks.clone(),
         address,
     };
     let api = SolanaApi::with_sender(tx_db);
     let mut traverse = TraverseLedger::new(api, address, None);
 
+    const TXS_PER_SLOT_2: u64 = 2;
     const ADD_NEW_AT: usize = 1337;
     let mut counter = 0;
 
     while !signatures.is_empty() {
         if counter == ADD_NEW_AT {
+            let mut new_signatures = Vec::new();
             let mut statuses = statuses.write().unwrap();
             for (idx, (sign, tx)) in
-                (5000..15995).map(|idx| (idx, dummy_confirmed_tx_with_meta(idx)))
+                (5000..15995).map(|idx| (idx, dummy_confirmed_tx_with_meta(idx / TXS_PER_SLOT_2)))
             {
+                new_signatures.push(sign);
                 signatures.push_back(sign);
                 signatures2.insert(idx, sign);
+                sign_map.insert(sign, idx as usize);
                 statuses.push(RpcTxStatus {
                     signature: num_to_sign(idx).to_string(),
-                    slot: idx,
+                    slot: idx / TXS_PER_SLOT_2,
                     err: None,
                     memo: None,
                     block_time: None,
@@ -258,10 +327,13 @@ async fn correct_order() {
                 });
                 txs.insert(sign, tx);
             }
+            populate_blocks(TXS_PER_SLOT_2 as usize, &new_signatures);
         }
         counter += 1;
 
         let sign = signatures.pop_front().unwrap();
+        let num = sign_to_num(&sign);
+        println!("waiting for {sign}, idx: {num},  len: {}", signatures.len());
         let tx = traverse.next().await.unwrap().unwrap();
         assert_eq!(
             *tx.tx.signatures.first().unwrap(),

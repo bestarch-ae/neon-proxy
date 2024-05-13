@@ -2,17 +2,20 @@
 mod mock;
 
 use async_trait::async_trait;
-use common::solana_sdk::commitment_config::CommitmentLevel;
+use common::solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use common::solana_sdk::hash::Hash;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
+use common::solana_sdk::slot_history::Slot;
 use common::solana_sdk::transaction::Transaction;
-use common::solana_transaction_status::EncodedConfirmedTransactionWithStatusMeta;
+use common::solana_transaction_status::{
+    EncodedConfirmedTransactionWithStatusMeta, TransactionDetails, UiConfirmedBlock,
+};
 use common::solana_transaction_status::{TransactionStatus, UiTransactionEncoding};
 use solana_client::client_error::Result as ClientResult;
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_client::rpc_client::{GetConfirmedSignaturesForAddress2Config, RpcClientConfig};
-use solana_client::rpc_config::{RpcSendTransactionConfig, RpcTransactionConfig};
+use solana_client::rpc_config::{RpcBlockConfig, RpcSendTransactionConfig, RpcTransactionConfig};
 use solana_client::rpc_response::RpcConfirmedTransactionStatusWithSignature;
 use solana_client::rpc_sender::RpcSender;
 use solana_rpc_client::http_sender::HttpSender;
@@ -86,6 +89,21 @@ impl SolanaApi {
                 RpcTransactionConfig {
                     encoding: Some(UiTransactionEncoding::Base64),
                     commitment: None,
+                    max_supported_transaction_version: Some(0),
+                },
+            )
+            .await
+    }
+
+    pub async fn get_block(&self, slot: Slot) -> ClientResult<UiConfirmedBlock> {
+        self.client
+            .get_block_with_config(
+                slot,
+                RpcBlockConfig {
+                    encoding: None,
+                    transaction_details: Some(TransactionDetails::Signatures),
+                    rewards: Some(false),
+                    commitment: Some(CommitmentConfig::default()),
                     max_supported_transaction_version: Some(0),
                 },
             )
