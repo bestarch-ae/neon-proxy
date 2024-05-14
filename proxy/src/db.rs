@@ -39,8 +39,8 @@ struct NeonTransactionRow {
     gas_used: String,
     sum_gas_used: String,
 
-    to_addr: String,
-    contract: String,
+    to_addr: Option<String>,
+    contract: Option<String>,
 
     status: String,
     is_canceled: bool,
@@ -52,6 +52,7 @@ struct NeonTransactionRow {
 
     calldata: String,
     logs: Vec<u8>,
+    block_hash: Option<String>,
 }
 
 struct TransactionWithLogs {
@@ -92,8 +93,8 @@ impl From<TransactionWithLogs> for TransactionReceipt<AnyReceiptEnvelope<Log>> {
             blob_gas_used: None,
             blob_gas_price: None,
             from: Address::from_str(&row.from_addr).unwrap(),
-            to: Some(Address::from_str(&row.to_addr).unwrap()),
-            contract_address: Address::from_str(&row.contract).ok(),
+            to: row.to_addr.as_ref().and_then(|s| Address::from_str(s).ok()),
+            contract_address: row.contract.as_ref().and_then(|s| Address::from_str(s).ok()),
             state_root: None,
         }
     }
@@ -104,11 +105,15 @@ impl From<NeonTransactionRow> for Transaction {
         Transaction {
             hash: B256::from_str(&row.neon_sig).unwrap(),
             nonce: u64::from_str_radix(row.nonce.strip_prefix("0x").unwrap(), 16).unwrap(),
-            block_hash: None,                          /* TODO */
+            block_hash: row.block_hash.and_then(|bh| {
+                let mut buf = [0u8; 32];
+                bs58::decode(bh).onto(&mut buf).ok()?;
+                Some(buf.into())
+            }),
             block_number: Some(row.block_slot as u64), /* TODO: not sure if correct */
             transaction_index: Some(row.tx_idx as u64),
             from: Address::from_str(&row.from_addr).unwrap(),
-            to: Some(Address::from_str(&row.to_addr).unwrap()),
+            to: row.to_addr.as_ref().and_then(|s| Address::from_str(s).ok()),
             value: U256::from_str(&row.value).unwrap(),
             gas_price: Some(
                 u128::from_str_radix(row.gas_price.strip_prefix("0x").unwrap(), 16).unwrap(),
@@ -218,14 +223,17 @@ impl TransactionRepo {
         let row = sqlx::query_as!(NeonTransactionRow,
              r#"SELECT
                  neon_sig as "neon_sig!", tx_type as "tx_type!", from_addr as "from_addr!",
-                 sol_sig as "sol_sig!", sol_ix_idx as "sol_ix_idx!", sol_ix_inner_idx as "sol_ix_inner_idx!", block_slot as "block_slot!", tx_idx as "tx_idx!",
+                 sol_sig as "sol_sig!", sol_ix_idx as "sol_ix_idx!", sol_ix_inner_idx as "sol_ix_inner_idx!", T.block_slot as "block_slot!", tx_idx as "tx_idx!",
                  nonce as "nonce!", gas_price as "gas_price!", gas_limit as "gas_limit!", value as "value!", gas_used as "gas_used!", sum_gas_used as "sum_gas_used!",
-                 to_addr as "to_addr!", contract as "contract!",
+                 to_addr as "to_addr?", contract as "contract?",
                  status "status!", is_canceled as "is_canceled!", is_completed as "is_completed!", 
                  v "v!", r as "r!", s as "s!", 
                  calldata as "calldata!",
-                 logs as "logs!"
-               FROM neon_transactions WHERE neon_sig = $1"#, hash).fetch_optional(&self.pool).await?;
+                 logs as "logs!",
+                 B.block_hash
+               FROM neon_transactions T
+               LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
+               WHERE neon_sig = $1"#, hash).fetch_optional(&self.pool).await?;
         Ok(row)
     }
 
