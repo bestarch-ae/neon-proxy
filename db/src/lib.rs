@@ -154,7 +154,7 @@ impl TransactionRepo {
             format!("{:#0x}", tx.status),
             tx.is_cancelled,
             tx.is_completed,
-            "", /* v */
+            format!("{:#0x}", tx.transaction.recovery_id()),
             format!("{:#0x}", tx.transaction.r()),
             format!("{:#0x}", tx.transaction.s()),
             format!("0x{}", hex::encode(tx.transaction.call_data())),
