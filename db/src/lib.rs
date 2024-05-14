@@ -150,7 +150,7 @@ impl TransactionRepo {
                 .target()
                 .map(|x| x.to_string())
                 .unwrap_or_default(),
-            tx.contract.map(|c| format!("0x{}", c)),
+            tx.contract.map(|c| c.to_string()),
             format!("{:#0x}", tx.status),
             tx.is_cancelled,
             tx.is_completed,
