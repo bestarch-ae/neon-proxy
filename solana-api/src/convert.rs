@@ -45,9 +45,7 @@ pub fn decode_ui_transaction(
     tx: EncodedConfirmedTransactionWithStatusMeta,
 ) -> Result<SolanaTransaction, TxDecodeError> {
     let EncodedConfirmedTransactionWithStatusMeta {
-        slot,
-        transaction,
-        block_time,
+        slot, transaction, ..
     } = tx;
     let EncodedTransactionWithStatusMeta {
         transaction,
@@ -62,9 +60,6 @@ pub fn decode_ui_transaction(
 
     let result = SolanaTransaction {
         slot,
-        parent_slot: 0,
-        blockhash: String::new(),
-        block_time,
 
         tx_idx: 0,
         tx,

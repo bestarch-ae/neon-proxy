@@ -3,8 +3,9 @@ use clap::Parser;
 
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
+use common::types::SolanaBlock;
 use solana_api::solana_api::SolanaApi;
-use solana_api::traverse::TraverseLedger;
+use solana_api::traverse::{LedgerItem, TraverseLedger};
 use solana_client::rpc_client::SerializableTransaction;
 use tracing_subscriber::EnvFilter;
 
@@ -61,37 +62,49 @@ async fn main() -> Result<()> {
     }
 
     while let Some(result) = traverse.next().await {
-        let tx = result?;
-
-        if opts.short {
-            println!("{} - {}", tx.slot, tx.tx.get_signature());
-        } else {
-            println!("=======");
-            println!("{}", tx.tx.get_signature());
-            println!("-----");
-            println!("Slot: {}, Idx: {}", tx.slot, tx.tx_idx);
-            println!(
-                "Blockhash: {}, Block Time {:?}",
-                tx.blockhash, tx.block_time
-            );
-            println!();
-            println!("Version: {:?}", tx.tx.version());
-            println!(
-                "Fee: {}, Compute Units Consumed: {}",
-                tx.fee, tx.compute_units_consumed
-            );
-            println!("Status: {:?}", tx.status);
-            println!("Loaded Addresses: {:?}", tx.loaded_addresses);
-            println!();
-            if opts.logs {
-                println!("Logs:");
-                tx.log_messages.iter().for_each(|log| println!("    {log}"));
+        match result? {
+            LedgerItem::Transaction(tx) => {
+                if opts.short {
+                    println!("{} - {}", tx.slot, tx.tx.get_signature());
+                } else {
+                    println!("=======");
+                    println!("{}", tx.tx.get_signature());
+                    println!("-----");
+                    println!("Slot: {}, Idx: {}", tx.slot, tx.tx_idx);
+                    println!();
+                    println!("Version: {:?}", tx.tx.version());
+                    println!(
+                        "Fee: {}, Compute Units Consumed: {}",
+                        tx.fee, tx.compute_units_consumed
+                    );
+                    println!("Status: {:?}", tx.status);
+                    println!("Loaded Addresses: {:?}", tx.loaded_addresses);
+                    println!();
+                    if opts.logs {
+                        println!("Logs:");
+                        tx.log_messages.iter().for_each(|log| println!("    {log}"));
+                    }
+                    if opts.verbose {
+                        println!("Message: \n{:#?}", tx.tx);
+                    }
+                    println!("-----");
+                    println!();
+                }
             }
-            if opts.verbose {
-                println!("Message: \n{:#?}", tx.tx);
+            LedgerItem::Block(block) => {
+                let SolanaBlock {
+                    slot,
+                    hash,
+                    parent_slot,
+                    parent_hash,
+                    time,
+                } = block;
+                println!("===== End of Block =====");
+                println!("Slot: {slot}, Hash: {hash}");
+                println!("Parent Slot: {parent_slot}, Parent Hash: {parent_hash}");
+                println!("Time: {time:?}");
+                println!();
             }
-            println!("-----");
-            println!();
         }
     }
     Ok(())

@@ -14,7 +14,7 @@ use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::{ParseSignatureError, Signature};
 use common::solana_sdk::slot_history::Slot;
 use common::solana_transaction_status::UiConfirmedBlock;
-use common::types::SolanaTransaction;
+use common::types::{SolanaBlock, SolanaTransaction};
 
 use crate::convert::{decode_ui_transaction, TxDecodeError};
 use crate::solana_api::{SolanaApi, SIGNATURES_LIMIT};
@@ -41,29 +41,24 @@ struct Candidate {
 
 #[derive(Debug)]
 pub(crate) struct CachedBlock {
+    pub slot: Slot,
     pub block: UiConfirmedBlock,
     pub txs: HashSet<String>,
     /// Index of last processed transaction
     pub last_idx: u64,
 }
 
-struct BlockInfo {
-    block_time: Option<i64>,
-    tx_idx: u64,
-    blockhash: String,
-    parent_slot: Slot,
-}
-
 impl CachedBlock {
-    fn new(block: UiConfirmedBlock, txs: HashSet<String>) -> Self {
+    fn new(slot: Slot, block: UiConfirmedBlock, txs: HashSet<String>) -> Self {
         Self {
+            slot,
             block,
             txs,
             last_idx: 0,
         }
     }
 
-    fn next_transaction(&mut self) -> Option<Result<String, TxDecodeError>> {
+    fn next_transaction(&mut self) -> Option<Result<(u64, String), TxDecodeError>> {
         let Some(signatures) = self.block.signatures.as_ref() else {
             return Some(Err(TxDecodeError::MissingSignatures));
         };
@@ -71,20 +66,33 @@ impl CachedBlock {
         for (idx, sign) in iter {
             if self.txs.remove(sign.as_str()) {
                 self.last_idx = idx as u64;
-                return Some(Ok(sign.clone()));
+                return Some(Ok((idx as u64, sign.clone())));
             }
         }
         None
     }
 
-    fn get_info(&self) -> BlockInfo {
-        BlockInfo {
-            block_time: self.block.block_time,
-            tx_idx: self.last_idx,
-            blockhash: self.block.blockhash.clone(),
+    fn into_info(self) -> SolanaBlock {
+        debug_assert!(self.txs.is_empty());
+        if !self.txs.is_empty() {
+            tracing::error!(block = ?self, "removing cached block with remaining txs");
+        }
+
+        SolanaBlock {
+            slot: self.slot,
+            hash: self.block.blockhash,
             parent_slot: self.block.parent_slot,
+            parent_hash: self.block.previous_blockhash,
+            time: self.block.block_time,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+pub enum LedgerItem {
+    Transaction(SolanaTransaction),
+    Block(SolanaBlock),
 }
 
 pub struct TraverseLedger {
@@ -116,16 +124,24 @@ impl TraverseLedger {
         self.only_success = only_success
     }
 
-    pub async fn next(&mut self) -> Option<Result<SolanaTransaction, TraverseError>> {
+    pub async fn next(&mut self) -> Option<Result<LedgerItem, TraverseError>> {
         Some(self.try_next().await)
     }
 
-    async fn try_next(&mut self) -> Result<SolanaTransaction, TraverseError> {
-        let (block, signature) = loop {
+    async fn try_next(&mut self) -> Result<LedgerItem, TraverseError> {
+        let (idx, signature) = {
             let block = self.get_block().await?;
             if let Some(result) = block.next_transaction() {
-                let sign: Signature = result?.parse()?;
-                break (block.get_info(), sign);
+                let (idx, sign) = result?;
+                let sign: Signature = sign.parse()?;
+                (idx, sign)
+            } else {
+                let block = self
+                    .cached_block
+                    .take()
+                    .expect("`get_block` always returns cached block")
+                    .into_info();
+                return Ok(LedgerItem::Block(block));
             }
         };
 
@@ -135,21 +151,13 @@ impl TraverseLedger {
 
         let mut tx = decode_ui_transaction(tx)
             .inspect_err(|err| tracing::error!(%err, %signature, "could not decode transaction"))?;
+        tx.tx_idx = idx;
 
-        tx.block_time = block.block_time;
-        tx.tx_idx = block.tx_idx;
-        tx.blockhash = block.blockhash;
-        tx.parent_slot = block.parent_slot;
-
-        Ok(tx)
+        Ok(LedgerItem::Transaction(tx))
     }
 
     async fn get_block(&mut self) -> Result<&mut CachedBlock, ClientError> {
-        if self
-            .cached_block
-            .as_ref()
-            .map_or(true, |cached| cached.txs.is_empty())
-        {
+        if self.cached_block.is_none() {
             let mut txs = HashSet::new();
             let fst = self.pop_candidate().await;
             let slot = fst.slot;
@@ -165,7 +173,7 @@ impl TraverseLedger {
                 }
             }
             let block = self.api.get_block(slot).await?;
-            self.cached_block = Some(CachedBlock::new(block, txs));
+            self.cached_block = Some(CachedBlock::new(slot, block, txs));
         }
 
         Ok(self.cached_block.as_mut().expect("just replaced the block"))

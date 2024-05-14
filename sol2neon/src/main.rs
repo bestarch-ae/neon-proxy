@@ -220,9 +220,6 @@ impl From<EncodedTransactionWithStatusMeta> for Wrapped<SolanaTransaction> {
         };
         Wrapped(SolanaTransaction {
             slot: 0,
-            parent_slot: 0,
-            blockhash: "".to_string(),
-            block_time: None,
             tx_idx: 0,
             tx: value.transaction.decode().unwrap(),
             loaded_addresses,

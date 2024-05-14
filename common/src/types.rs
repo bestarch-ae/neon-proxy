@@ -10,8 +10,9 @@ use solana_transaction_status::InnerInstructions;
 #[derive(Debug, Clone)]
 pub struct SolanaBlock {
     pub slot: Slot,
-    pub parent_slot: Slot,
     pub hash: String,
+    pub parent_slot: Slot,
+    pub parent_hash: String,
     pub time: Option<UnixTimestamp>,
 }
 
@@ -19,11 +20,6 @@ pub struct SolanaBlock {
 #[derive(Debug, Clone)]
 pub struct SolanaTransaction {
     pub slot: Slot,
-    pub parent_slot: Slot,
-    pub blockhash: String,
-    pub block_time: Option<UnixTimestamp>,
-
-    /// Position of this transaction inside the block
     pub tx_idx: u64,
     pub tx: VersionedTransaction,
     pub loaded_addresses: LoadedAddresses,
@@ -32,17 +28,6 @@ pub struct SolanaTransaction {
     pub inner_instructions: Vec<InnerInstructions>, // Do we really need this
     pub compute_units_consumed: u64,
     pub fee: u64,
-}
-
-impl SolanaTransaction {
-    pub fn extract_block_info(&self) -> SolanaBlock {
-        SolanaBlock {
-            slot: self.slot,
-            parent_slot: self.parent_slot,
-            hash: self.blockhash.clone(),
-            time: self.block_time,
-        }
-    }
 }
 
 /// Represents instruction with NEON invocation inside. Inserted into `solana_neon_transations`.
