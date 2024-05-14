@@ -60,10 +60,11 @@
     CREATE UNIQUE INDEX IF NOT EXISTS idx_gas_less_usages_neon_sig ON gas_less_usages(neon_sig);
 
     CREATE TABLE IF NOT EXISTS solana_blocks (
-        block_slot BIGINT,
+        block_slot BIGINT, -- TODO: Primary key
         block_hash TEXT,
         block_time BIGINT,
         parent_block_slot BIGINT,
+        parent_block_hash TEXT,
         is_finalized BOOL,
         is_active BOOL
     );
@@ -73,7 +74,7 @@
 
     CREATE TABLE IF NOT EXISTS neon_transaction_logs (
         address TEXT,
-        block_slot BIGINT,
+        block_slot BIGINT, -- TODO: Reference solana_blocks. Need `solana_api::traverse` block/tx order change to work.
 
         tx_hash TEXT,
         tx_idx INT,
