@@ -334,7 +334,12 @@ async fn correct_order() {
         let sign = signatures.pop_front().unwrap();
         let num = sign_to_num(&sign);
         println!("waiting for {sign}, idx: {num},  len: {}", signatures.len());
-        let tx = traverse.next().await.unwrap().unwrap();
+        let tx = loop {
+            match traverse.next().await.unwrap().unwrap() {
+                LedgerItem::Transaction(tx) => break tx,
+                LedgerItem::Block(_) => continue, // Skip blocks for now
+            }
+        };
         assert_eq!(
             *tx.tx.signatures.first().unwrap(),
             sign,

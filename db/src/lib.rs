@@ -34,7 +34,7 @@ impl TransactionRepo {
 
             let topic1 = log
                 .topic_list
-                .get(0)
+                .first()
                 .map(|t| format!("{:#0x}", t))
                 .unwrap_or_default();
             let topic2 = log
@@ -184,13 +184,15 @@ impl BlockRepo {
                 block_hash,
                 block_time,
                 parent_block_slot,
+                parent_block_hash,
                 is_finalized,
                 is_active
-            ) VALUES ($1, $2, $3, $4, $5, $6)"#,
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
             block.slot as i64,
             block.hash,
             block.time.unwrap_or(0),
             block.parent_slot as i64,
+            block.parent_hash,
             true,
             true,
         )
