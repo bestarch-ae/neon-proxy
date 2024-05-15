@@ -7,7 +7,11 @@ members = [
     "indexer",
     "parse",
     "sol2neon",
-    "solana-api"
+    "solana-api",
+    "proxy"
 ]
 
-exclude = ["proxy"]
+[patch.crates-io]
+# Hack to resolve `zeroize` version conflict between solana-* and reth. 
+curve25519-dalek = { git = "https://github.com/00nktk/curve25519-dalek.git", rev = "2e37898" }
+aes-gcm-siv = { git = "https://github.com/00nktk/AEADs.git", package = "aes-gcm-siv", rev = "88417e8" }
