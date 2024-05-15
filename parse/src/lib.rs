@@ -153,6 +153,7 @@ fn merge_logs_transactions(
     tx_infos
 }
 
+#[tracing::instrument(skip_all)]
 pub fn parse(
     transaction: SolanaTransaction,
     accountsdb: &mut impl AccountsDb,

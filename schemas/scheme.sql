@@ -196,6 +196,7 @@
 
     CREATE TABLE IF NOT EXISTS solana_transaction_signatures (
         block_slot  BIGINT,
+        tx_idx      INT,
         signature   TEXT
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_solana_transaction_signatures_sig ON solana_transaction_signatures(block_slot);

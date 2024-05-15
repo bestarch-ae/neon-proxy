@@ -34,12 +34,20 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let opts = Args::try_parse()?;
 
-    let api = SolanaApi::new(opts.url);
-    let mut traverse = TraverseLedger::new(api, opts.target, opts.from);
-    let mut adb = accountsdb::DummyAdb::new(opts.target);
     let pool = db::connect(&opts.pg_url).await?;
     let tx_repo = db::TransactionRepo::new(pool.clone());
+    let sig_repo = db::SolanaSignaturesRepo::new(pool.clone());
     let block_repo = db::BlockRepo::new(pool);
+
+    let last_signature = sig_repo.get_latest().await?;
+    let from = opts.from.or(last_signature);
+
+    tracing::info!("starting traversal from {:?}", from);
+
+    let api = SolanaApi::new(opts.url);
+    let mut traverse = TraverseLedger::new(api, opts.target, from);
+    let mut adb = accountsdb::DummyAdb::new(opts.target);
+
     let mut last_written_slot = None;
     tracing::info!("connected");
 
@@ -47,6 +55,13 @@ async fn main() -> Result<()> {
         tracing::debug!(?result, "retrieved transaction");
         match result {
             Ok(LedgerItem::Transaction(tx)) => {
+                let signature = tx.tx.signatures[0];
+                let tx_idx = tx.tx_idx;
+                let slot = tx.slot;
+
+                let _span =
+                    tracing::info_span!("solana transaction", signature = %signature).entered();
+
                 let txs = match neon_parse::parse(tx, &mut adb) {
                     Ok(txs) => txs,
                     Err(err) => {
@@ -61,6 +76,9 @@ async fn main() -> Result<()> {
                     } else {
                         tracing::info!(signature = tx.neon_signature, "saved transaction");
                     }
+                }
+                if let Err(err) = sig_repo.insert(slot, tx_idx, signature).await {
+                    tracing::warn!(?err, "failed to save solana transaction");
                 }
             }
             Ok(LedgerItem::Block(block)) => {
