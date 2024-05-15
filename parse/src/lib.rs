@@ -101,7 +101,7 @@ fn merge_logs_transactions(
     txs: Vec<(usize, Transaction)>,
     log_info: NeonLogInfo,
     slot: u64,
-    tx_idx: u64,
+    _tx_idx: u64,
 ) -> Vec<NeonTxInfo> {
     let mut tx_infos = Vec::new();
     for (idx, tx) in txs {
@@ -141,9 +141,9 @@ fn merge_logs_transactions(
                 .unwrap_or_default(), // TODO: unclear what this is
             sol_signature: String::default(),    // TODO: should be in input?
             sol_slot: slot,
-            sol_tx_idx: tx_idx,
-            sol_ix_idx: idx as u64,
-            sol_ix_inner_idx: 0, // TODO: what is this?
+            sol_tx_idx: idx as u64, /* actually just tx idx */
+            sol_ix_idx: idx as u64, /* TODO: what is this */
+            sol_ix_inner_idx: 0,    // TODO: what is this?
             status: log_info.ret.as_ref().map(|r| r.status).unwrap_or_default(), // TODO
             is_cancelled: canceled,
             is_completed: !canceled, // TODO: ???
