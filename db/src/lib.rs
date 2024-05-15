@@ -150,11 +150,11 @@ impl TransactionRepo {
                 .target()
                 .map(|x| x.to_string())
                 .unwrap_or_default(),
-            tx.contract.map(|c| format!("0x{}", c)),
+            tx.contract.map(|c| c.to_string()),
             format!("{:#0x}", tx.status),
             tx.is_cancelled,
             tx.is_completed,
-            "", /* v */
+            format!("{:#0x}", tx.transaction.recovery_id()),
             format!("{:#0x}", tx.transaction.r()),
             format!("{:#0x}", tx.transaction.s()),
             format!("0x{}", hex::encode(tx.transaction.call_data())),

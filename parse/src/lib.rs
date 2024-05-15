@@ -1,7 +1,7 @@
 use common::solana_sdk::transaction::VersionedTransaction;
 use thiserror::Error;
 
-use common::evm_loader::types::Transaction;
+use common::evm_loader::types::{Address, Transaction};
 use common::solana_sdk::account_info::AccountInfo;
 use common::solana_sdk::message::v0::LoadedAddresses;
 use common::solana_sdk::message::AccountKeys;
@@ -101,7 +101,7 @@ fn merge_logs_transactions(
     txs: Vec<(usize, Transaction)>,
     log_info: NeonLogInfo,
     slot: u64,
-    tx_idx: u64,
+    _tx_idx: u64,
 ) -> Vec<NeonTxInfo> {
     let mut tx_infos = Vec::new();
     for (idx, tx) in txs {
@@ -111,11 +111,22 @@ fn merge_logs_transactions(
             .map(|r| r.is_canceled)
             .unwrap_or_default(); // TODO
 
+        // if `to` address is absent, it means we are
+        // creating new contract
+        let contract = if tx.target().is_none() {
+            let sender = tx.recover_caller_address().unwrap();
+            let nonce = tx.nonce();
+
+            Some(Address::from_create(&sender, nonce))
+        } else {
+            None
+        };
+
         let tx_info = NeonTxInfo {
             tx_type: 0,                                                        // TODO
             neon_signature: log_info.sig.map(hex::encode).unwrap_or_default(), // TODO
             from: tx.recover_caller_address().unwrap_or_default(),
-            contract: tx.target(), // TODO
+            contract,
             transaction: tx,
             events: log_info.event_list.clone(), // TODO
             gas_used: log_info
@@ -130,9 +141,9 @@ fn merge_logs_transactions(
                 .unwrap_or_default(), // TODO: unclear what this is
             sol_signature: String::default(),    // TODO: should be in input?
             sol_slot: slot,
-            sol_tx_idx: tx_idx,
-            sol_ix_idx: idx as u64,
-            sol_ix_inner_idx: 0, // TODO: what is this?
+            sol_tx_idx: idx as u64, /* actually just tx idx */
+            sol_ix_idx: idx as u64, /* TODO: what is this */
+            sol_ix_inner_idx: 0,    // TODO: what is this?
             status: log_info.ret.as_ref().map(|r| r.status).unwrap_or_default(), // TODO
             is_cancelled: canceled,
             is_completed: !canceled, // TODO: ???
