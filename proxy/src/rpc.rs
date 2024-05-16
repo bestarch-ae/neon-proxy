@@ -1,9 +1,8 @@
- use jsonrpsee::core::async_trait;
+use jsonrpsee::core::async_trait;
 use jsonrpsee::core::RpcResult;
-use reth_primitives::{
-    serde_helper::JsonStorageKey, Address, BlockId, BlockNumberOrTag, Bytes, B256, B64, U256, U64,
-};
+use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, B256, B64, U256, U64};
 use rpc_api::servers::EthApiServer;
+use rpc_api_types::serde_helpers::JsonStorageKey;
 use rpc_api_types::{
     state::StateOverride, AccessListWithGasUsed, AnyTransactionReceipt, BlockOverrides, Bundle,
     EIP1186AccountProofResponse, EthCallResponse, FeeHistory, Header, Index, RichBlock,
@@ -383,4 +382,4 @@ impl EthApiServer for EthApiImpl {
     ) -> RpcResult<EIP1186AccountProofResponse> {
         todo!()
     }
-} 
+}
