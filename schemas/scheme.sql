@@ -199,7 +199,7 @@
         tx_idx      INT,
         signature   TEXT
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_solana_transaction_signatures_sig ON solana_transaction_signatures(block_slot);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_solana_transaction_signatures_sig ON solana_transaction_signatures(block_slot, tx_idx);
 
     CREATE TABLE IF NOT EXISTS stuck_neon_holders (
         block_slot BIGINT,
