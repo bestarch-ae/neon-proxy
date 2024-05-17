@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use futures_util::{ Stream,  TryStreamExt};
+use futures_util::{Stream, TryStreamExt};
 use reth_primitives::revm_primitives::LogData;
 use reth_primitives::{Address, Bytes, Log as PrimitiveLog, B256, U256};
 use rpc_api_types::{AnyReceiptEnvelope, AnyTransactionReceipt, Log, Receipt, TransactionReceipt};
@@ -269,8 +269,10 @@ impl TransactionRepo {
         Ok(Some(WithOtherFields::new(receipt)))
     }
 
-    fn fetch_for_block_inner(&self, slot: u64) -> impl Stream<Item= Result<NeonTransactionRow>> + '_{
-        
+    fn fetch_for_block_inner(
+        &self,
+        slot: u64,
+    ) -> impl Stream<Item = Result<NeonTransactionRow>> + '_ {
         sqlx::query_as!(NeonTransactionRow,
              r#"SELECT
                  neon_sig as "neon_sig!", tx_type as "tx_type!", from_addr as "from_addr!",
@@ -286,9 +288,12 @@ impl TransactionRepo {
                LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
                WHERE T.block_slot = $1"#, slot as i64).fetch(&self.pool)
     }
-    
-    pub async fn fetch_transactions_with_receipts_for_block(&self, slot: u64) -> Result<Vec<(Transaction, AnyTransactionReceipt)>> {
-        let mut log_stream = 
+
+    pub async fn fetch_transactions_with_receipts_for_block(
+        &self,
+        slot: u64,
+    ) -> Result<Vec<(Transaction, AnyTransactionReceipt)>> {
+        let mut log_stream =
         sqlx::query_as!(NeonTransactionLogRow,
             r#"SELECT
                 address as "address!", block_slot as "block_slot!", tx_hash as "tx_hash!", tx_idx as "tx_idx!", tx_log_idx as "tx_log_idx!", log_idx as "log_idx!",
@@ -299,20 +304,23 @@ impl TransactionRepo {
               FROM neon_transaction_logs T
               WHERE T.block_slot = $1"#, slot as i64).fetch(&self.pool);
         let mut logs = HashMap::<String, Vec<_>>::new();
-      
+
         while let Some(log) = log_stream.try_next().await? {
             logs.entry(log.tx_hash.clone()).or_default().push(log);
         }
 
-        self.fetch_for_block_inner(slot).map_ok(|row| (
-            Transaction::from(row.clone()), 
-            TransactionWithLogs { 
-                logs: logs
-                    .remove(&row.neon_sig)
-                    .unwrap_or_else(Vec::new), 
-                tx: row, 
-            }.into_any_transaction_receipt()
-        )).try_collect().await
-
+        self.fetch_for_block_inner(slot)
+            .map_ok(|row| {
+                (
+                    Transaction::from(row.clone()),
+                    TransactionWithLogs {
+                        logs: logs.remove(&row.neon_sig).unwrap_or_else(Vec::new),
+                        tx: row,
+                    }
+                    .into_any_transaction_receipt(),
+                )
+            })
+            .try_collect()
+            .await
     }
 }

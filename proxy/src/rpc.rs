@@ -63,8 +63,22 @@ impl EthApiServer for EthApiImpl {
     }
 
     /// Returns information about a block by hash.
-    async fn block_by_hash(&self, _hash: B256, _full: bool) -> RpcResult<Option<RichBlock>> {
-        todo!()
+    async fn block_by_hash(&self, hash: B256, full: bool) -> RpcResult<Option<RichBlock>> {
+        use common::solana_sdk::hash::Hash;
+
+        let hash = Hash::new_from_array(hash.0).to_string();
+        let Some(block) = self.blocks.fetch_by_hash(&hash).await.unwrap() else {
+            return Ok(None);
+        };
+        let slot = block.slot;
+        let (txs, receipts) = self
+            .transactions
+            .fetch_transactions_with_receipts_for_block(slot)
+            .await
+            .unwrap()
+            .into_iter()
+            .unzip();
+        Ok(Some(build_block(block, receipts, txs, full).into()))
     }
 
     /// Returns information about a block by number.
