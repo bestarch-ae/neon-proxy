@@ -1,0 +1,4 @@
+include:
+  - project: 'shared/tasks'
+    ref: "${XCI_INCLUDE_REF_BRANCH}"
+    file: 'project-ci/neon-proxy.yml'
