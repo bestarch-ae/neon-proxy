@@ -1,6 +1,7 @@
 use clap::Parser;
 use rpc_api::EthApiServer;
 
+mod convert;
 mod db;
 mod rpc;
 
@@ -12,7 +13,12 @@ struct Args {
     /// Postgres url
     pg_url: String,
 
-    #[arg(short, long, default_value = "127.0.0.1:8888", value_name = "LISTEN_ADDR")]
+    #[arg(
+        short,
+        long,
+        default_value = "127.0.0.1:8888",
+        value_name = "LISTEN_ADDR"
+    )]
     listen: String,
 }
 
@@ -22,12 +28,9 @@ async fn main() {
 
     let opts = Args::parse();
 
-    let pool = db::connect(&opts.pg_url)
-        .await
-        .unwrap();
+    let pool = db::connect(&opts.pg_url).await.unwrap();
 
-    let transactions = db::TransactionRepo::new(pool);
-    let eth = EthApiImpl::new(transactions);
+    let eth = EthApiImpl::new(pool);
     let server = jsonrpsee::server::Server::builder()
         .build(&opts.listen)
         .await

@@ -221,6 +221,7 @@ impl SolanaSignaturesRepo {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct BlockRepo {
     pool: sqlx::PgPool,
 }

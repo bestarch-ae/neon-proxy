@@ -8,17 +8,25 @@ use rpc_api_types::{
     EIP1186AccountProofResponse, EthCallResponse, FeeHistory, Header, Index, RichBlock,
     StateContext, SyncStatus, Transaction, TransactionRequest, Work,
 };
+use sqlx::PgPool;
 
+use crate::convert::build_block;
 use crate::db;
 
 #[derive(Clone)]
 pub struct EthApiImpl {
     transactions: db::TransactionRepo,
+    blocks: ::db::BlockRepo,
 }
 
 impl EthApiImpl {
-    pub fn new(transactions: db::TransactionRepo) -> Self {
-        Self { transactions }
+    pub fn new(pool: PgPool) -> Self {
+        let transactions = db::TransactionRepo::new(pool.clone());
+        let blocks = ::db::BlockRepo::new(pool);
+        Self {
+            transactions,
+            blocks,
+        }
     }
 }
 
@@ -62,10 +70,23 @@ impl EthApiServer for EthApiImpl {
     /// Returns information about a block by number.
     async fn block_by_number(
         &self,
-        _number: BlockNumberOrTag,
-        _full: bool,
+        number: BlockNumberOrTag,
+        full: bool,
     ) -> RpcResult<Option<RichBlock>> {
-        todo!()
+        let BlockNumberOrTag::Number(slot) = number else {
+            todo!()
+        };
+        let Some(block) = self.blocks.fetch_by_slot(slot).await.unwrap() else {
+            return Ok(None);
+        };
+        let (txs, receipts) = self
+            .transactions
+            .fetch_transactions_with_receipts_for_block(slot)
+            .await
+            .unwrap()
+            .into_iter()
+            .unzip();
+        Ok(Some(build_block(block, receipts, txs, full).into()))
     }
 
     /// Returns the number of transactions in a block from a block matching the given block hash.
