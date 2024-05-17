@@ -173,6 +173,12 @@ impl TraverseLedger {
                 }
             }
             let block = self.api.get_block(slot).await?;
+            tracing::debug!(
+                slot,
+                hash = block.blockhash,
+                num_txs = txs.len(),
+                "cached new block"
+            );
             self.cached_block = Some(CachedBlock::new(slot, block, txs));
         }
 
@@ -257,6 +263,10 @@ impl TraverseLedger {
         let mut new_signatures = VecDeque::new();
 
         loop {
+            tracing::debug!(
+                ?earliest, ?self.last_observed, target = %self.target_key,
+                "requesting signatures for address"
+            );
             let txs = self
                 .api
                 .get_signatures_for_address(&self.target_key, self.last_observed, earliest)
@@ -292,7 +302,7 @@ impl TraverseLedger {
                     ..
                 } = item;
                 if self.only_success && err.is_some() {
-                    tracing::debug!(?err, %signature, slot,"skipped failed transaction");
+                    tracing::debug!(?err, %signature, slot, "skipped failed transaction");
                 } else {
                     let sign = Candidate { signature, slot };
                     new_signatures.push_front(sign);
@@ -308,6 +318,11 @@ impl TraverseLedger {
         if last_observed.is_some() {
             self.last_observed = last_observed
         };
+        tracing::debug!(
+            len = new_signatures.len(),
+            first = ?new_signatures.front(), last = ?new_signatures.back(),
+            "found new signatures"
+        );
 
         self.buffer.extend(new_signatures);
     }
