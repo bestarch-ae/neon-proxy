@@ -125,7 +125,9 @@ fn parse_transactions(
                 );
             }
             ParseResult::TransactionCancel(hash) => {
-                transactions.get_mut(&hash).map(|tx| tx.is_cancelled = true);
+                if let Some(tx) = transactions.get_mut(&hash) {
+                    tx.is_cancelled = true;
+                }
             }
             res => {
                 tracing::debug!("unhandled parse result: {:?}", res);
