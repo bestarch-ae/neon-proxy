@@ -1,5 +1,7 @@
 use jsonrpsee::core::async_trait;
 use jsonrpsee::core::RpcResult;
+use jsonrpsee::types::ErrorCode;
+use jsonrpsee::types::ErrorObjectOwned;
 use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, B256, B64, U256, U64};
 use rpc_api::servers::EthApiServer;
 use rpc_api_types::serde_helpers::JsonStorageKey;
@@ -8,18 +10,34 @@ use rpc_api_types::{
     EIP1186AccountProofResponse, EthCallResponse, FeeHistory, Header, Index, RichBlock,
     StateContext, SyncStatus, Transaction, TransactionRequest, Work,
 };
+use sqlx::PgPool;
 
+use crate::convert::build_block;
 use crate::db;
 
 #[derive(Clone)]
 pub struct EthApiImpl {
     transactions: db::TransactionRepo,
+    blocks: ::db::BlockRepo,
 }
 
 impl EthApiImpl {
-    pub fn new(transactions: db::TransactionRepo) -> Self {
-        Self { transactions }
+    pub fn new(pool: PgPool) -> Self {
+        let transactions = db::TransactionRepo::new(pool.clone());
+        let blocks = ::db::BlockRepo::new(pool);
+        Self {
+            transactions,
+            blocks,
+        }
     }
+}
+
+fn unimplemented<T>() -> RpcResult<T> {
+    Err(ErrorObjectOwned::borrowed(
+        ErrorCode::MethodNotFound.code(),
+        "method not implemented",
+        None,
+    ))
 }
 
 #[async_trait]
@@ -55,17 +73,44 @@ impl EthApiServer for EthApiImpl {
     }
 
     /// Returns information about a block by hash.
-    async fn block_by_hash(&self, _hash: B256, _full: bool) -> RpcResult<Option<RichBlock>> {
-        todo!()
+    async fn block_by_hash(&self, hash: B256, full: bool) -> RpcResult<Option<RichBlock>> {
+        use common::solana_sdk::hash::Hash;
+
+        let hash = Hash::new_from_array(hash.0).to_string();
+        let Some(block) = self.blocks.fetch_by_hash(&hash).await.unwrap() else {
+            return Ok(None);
+        };
+        let slot = block.slot;
+        let (txs, receipts) = self
+            .transactions
+            .fetch_transactions_with_receipts_for_block(slot)
+            .await
+            .unwrap()
+            .into_iter()
+            .unzip();
+        Ok(Some(build_block(block, receipts, txs, full).into()))
     }
 
     /// Returns information about a block by number.
     async fn block_by_number(
         &self,
-        _number: BlockNumberOrTag,
-        _full: bool,
+        number: BlockNumberOrTag,
+        full: bool,
     ) -> RpcResult<Option<RichBlock>> {
-        todo!()
+        let BlockNumberOrTag::Number(slot) = number else {
+            return unimplemented();
+        };
+        let Some(block) = self.blocks.fetch_by_slot(slot).await.unwrap() else {
+            return Ok(None);
+        };
+        let (txs, receipts) = self
+            .transactions
+            .fetch_transactions_with_receipts_for_block(slot)
+            .await
+            .unwrap()
+            .into_iter()
+            .unzip();
+        Ok(Some(build_block(block, receipts, txs, full).into()))
     }
 
     /// Returns the number of transactions in a block from a block matching the given block hash.

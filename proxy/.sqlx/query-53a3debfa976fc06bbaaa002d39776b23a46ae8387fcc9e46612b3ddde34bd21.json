@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO solana_blocks (\n                block_slot,\n                block_hash,\n                block_time,\n                parent_block_slot,\n                parent_block_hash,\n                is_finalized,\n                is_active\n            ) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Int8",
+        "Int8",
+        "Text",
+        "Bool",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "53a3debfa976fc06bbaaa002d39776b23a46ae8387fcc9e46612b3ddde34bd21"
+}

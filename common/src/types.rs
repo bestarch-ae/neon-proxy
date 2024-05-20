@@ -7,6 +7,7 @@ use solana_sdk::slot_history::Slot;
 use solana_sdk::transaction::{Result as TransactionResult, VersionedTransaction};
 use solana_transaction_status::InnerInstructions;
 
+/// Solana block info.
 #[derive(Debug, Clone)]
 pub struct SolanaBlock {
     pub slot: Slot,
@@ -16,7 +17,7 @@ pub struct SolanaBlock {
     pub time: Option<UnixTimestamp>,
 }
 
-/// Solana transaction with block info.
+/// Solana transaction.
 #[derive(Debug, Clone)]
 pub struct SolanaTransaction {
     pub slot: Slot,

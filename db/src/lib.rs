@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use common::solana_sdk::clock::Slot;
 use common::solana_sdk::signature::Signature;
 use common::types::{NeonTxInfo, SolanaBlock};
 use sqlx::PgPool;
@@ -220,6 +221,7 @@ impl SolanaSignaturesRepo {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct BlockRepo {
     pool: sqlx::PgPool,
 }
@@ -253,5 +255,70 @@ impl BlockRepo {
         .await?;
         txn.commit().await?;
         Ok(())
+    }
+
+    pub async fn fetch_by_slot(&self, slot: Slot) -> Result<Option<SolanaBlock>, sqlx::Error> {
+        sqlx::query_as!(
+            BlockRow,
+            r#"SELECT
+                block_slot as "block_slot!",
+                block_hash as "block_hash!",
+                block_time as "block_time!",
+                parent_block_slot as "parent_block_slot!",
+                parent_block_hash as "parent_block_hash!"
+               FROM solana_blocks
+               WHERE block_slot = $1
+            "#,
+            slot as i64
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map(|opt| opt.map(Into::into))
+    }
+
+    pub async fn fetch_by_hash(&self, hash: &str) -> Result<Option<SolanaBlock>, sqlx::Error> {
+        sqlx::query_as!(
+            BlockRow,
+            r#"SELECT
+                block_slot as "block_slot!",
+                block_hash as "block_hash!",
+                block_time as "block_time!",
+                parent_block_slot as "parent_block_slot!",
+                parent_block_hash as "parent_block_hash!"
+               FROM solana_blocks
+               WHERE block_hash = $1
+            "#,
+            hash
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map(|opt| opt.map(Into::into))
+    }
+}
+
+struct BlockRow {
+    block_slot: i64,
+    block_hash: String,
+    block_time: i64,
+    parent_block_slot: i64,
+    parent_block_hash: String,
+}
+
+impl From<BlockRow> for SolanaBlock {
+    fn from(value: BlockRow) -> Self {
+        let BlockRow {
+            block_slot,
+            block_hash,
+            block_time,
+            parent_block_slot,
+            parent_block_hash,
+        } = value;
+        SolanaBlock {
+            slot: block_slot as u64,
+            hash: block_hash,
+            parent_slot: parent_block_slot as u64,
+            parent_hash: parent_block_hash,
+            time: Some(block_time),
+        }
     }
 }
