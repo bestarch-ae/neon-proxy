@@ -30,6 +30,21 @@ impl EthApiImpl {
             blocks,
         }
     }
+
+    async fn get_block(&self, by: ::db::BlockBy<'_>, full: bool) -> RpcResult<Option<RichBlock>> {
+        let Some(block) = self.blocks.fetch_by(by).await.unwrap() else {
+            return Ok(None);
+        };
+        let slot = block.slot;
+        let (txs, receipts) = self
+            .transactions
+            .fetch_transactions_with_receipts_for_block(slot)
+            .await
+            .unwrap()
+            .into_iter()
+            .unzip();
+        Ok(Some(build_block(block, receipts, txs, full).into()))
+    }
 }
 
 fn unimplemented<T>() -> RpcResult<T> {
@@ -77,18 +92,8 @@ impl EthApiServer for EthApiImpl {
         use common::solana_sdk::hash::Hash;
 
         let hash = Hash::new_from_array(hash.0).to_string();
-        let Some(block) = self.blocks.fetch_by_hash(&hash).await.unwrap() else {
-            return Ok(None);
-        };
-        let slot = block.slot;
-        let (txs, receipts) = self
-            .transactions
-            .fetch_transactions_with_receipts_for_block(slot)
+        self.get_block(::db::BlockBy::Hash(hash.as_str()), full)
             .await
-            .unwrap()
-            .into_iter()
-            .unzip();
-        Ok(Some(build_block(block, receipts, txs, full).into()))
     }
 
     /// Returns information about a block by number.
@@ -100,17 +105,7 @@ impl EthApiServer for EthApiImpl {
         let BlockNumberOrTag::Number(slot) = number else {
             return unimplemented();
         };
-        let Some(block) = self.blocks.fetch_by_slot(slot).await.unwrap() else {
-            return Ok(None);
-        };
-        let (txs, receipts) = self
-            .transactions
-            .fetch_transactions_with_receipts_for_block(slot)
-            .await
-            .unwrap()
-            .into_iter()
-            .unzip();
-        Ok(Some(build_block(block, receipts, txs, full).into()))
+        self.get_block(::db::BlockBy::Slot(slot), full).await
     }
 
     /// Returns the number of transactions in a block from a block matching the given block hash.

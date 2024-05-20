@@ -226,6 +226,12 @@ pub struct BlockRepo {
     pool: sqlx::PgPool,
 }
 
+#[derive(Debug)]
+pub enum BlockBy<'a> {
+    Slot(u64),
+    Hash(&'a str),
+}
+
 impl BlockRepo {
     pub fn new(pool: sqlx::PgPool) -> Self {
         Self { pool }
@@ -257,7 +263,11 @@ impl BlockRepo {
         Ok(())
     }
 
-    pub async fn fetch_by_slot(&self, slot: Slot) -> Result<Option<SolanaBlock>, sqlx::Error> {
+    pub async fn fetch_by(&self, by: BlockBy<'_>) -> Result<Option<SolanaBlock>, sqlx::Error> {
+        let (slot, hash) = match by {
+            BlockBy::Slot(num) => (Some(num as i64), None),
+            BlockBy::Hash(hash) => (None, Some(hash)),
+        };
         sqlx::query_as!(
             BlockRow,
             r#"SELECT
@@ -267,32 +277,16 @@ impl BlockRepo {
                 parent_block_slot as "parent_block_slot!",
                 parent_block_hash as "parent_block_hash!"
                FROM solana_blocks
-               WHERE block_slot = $1
+               WHERE (block_slot = $1 OR $2) AND (block_hash = $3 OR $4)
             "#,
-            slot as i64
+            slot.unwrap_or(0),
+            slot.is_none(),
+            hash.unwrap_or(""),
+            hash.is_none(),
         )
+        .map(Into::into)
         .fetch_optional(&self.pool)
         .await
-        .map(|opt| opt.map(Into::into))
-    }
-
-    pub async fn fetch_by_hash(&self, hash: &str) -> Result<Option<SolanaBlock>, sqlx::Error> {
-        sqlx::query_as!(
-            BlockRow,
-            r#"SELECT
-                block_slot as "block_slot!",
-                block_hash as "block_hash!",
-                block_time as "block_time!",
-                parent_block_slot as "parent_block_slot!",
-                parent_block_hash as "parent_block_hash!"
-               FROM solana_blocks
-               WHERE block_hash = $1
-            "#,
-            hash
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .map(|opt| opt.map(Into::into))
     }
 }
 
