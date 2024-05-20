@@ -1,4 +1,5 @@
-use common::solana_sdk::transaction::VersionedTransaction;
+use std::collections::HashMap;
+
 use thiserror::Error;
 
 use common::evm_loader::types::{Address, Transaction};
@@ -7,6 +8,7 @@ use common::solana_sdk::message::v0::LoadedAddresses;
 use common::solana_sdk::message::AccountKeys;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
+use common::solana_sdk::transaction::VersionedTransaction;
 use common::types::{NeonTxInfo, SolanaTransaction};
 
 use self::log::NeonLogInfo;
@@ -59,12 +61,20 @@ struct SolTxMetaInfo {
     pub ident: SolTxSigSlotInfo,
 }
 
+struct TransactionMeta {
+    neon_transaction: Transaction,
+    sol_ix_idx: usize,
+    is_cancelled: bool,
+    is_completed: bool,
+}
+
 fn parse_transactions(
     tx: VersionedTransaction,
     accountsdb: &mut impl AccountsDb,
     loaded: &LoadedAddresses,
-) -> Result<Vec<(usize, Transaction)>, Error> {
-    let mut txs = Vec::new();
+) -> Result<Vec<TransactionMeta>, Error> {
+    use transaction::ParseResult;
+
     tracing::debug!("parsing tx {:?} with loaded addresses: {:?}", tx, loaded);
     tracing::debug!(
         alt = ?tx.message.address_table_lookups(),
@@ -75,8 +85,9 @@ fn parse_transactions(
     let neon_idx = pubkeys.iter().position(|x| is_neon_pubkey(*x));
     let Some(neon_idx) = neon_idx else {
         tracing::warn!("not a neon transaction");
-        return Ok(txs);
+        return Ok(Vec::new());
     };
+    let mut transactions = HashMap::new();
     for (idx, ix) in tx.message.instructions().iter().enumerate() {
         tracing::debug!("instruction {:?}", ix);
         if ix.program_id_index != neon_idx as u8 {
@@ -88,28 +99,59 @@ fn parse_transactions(
         for acc_idx in &ix.accounts {
             pubkeys_for_ix.push(pubkeys[*acc_idx as usize]);
         }
-        let neon_tx = transaction::parse(&ix.data, &pubkeys_for_ix, accountsdb, neon_pubkey)?;
-        tracing::debug!("neon tx {:?}", neon_tx);
-        if let Some(neon_tx) = neon_tx {
-            txs.push((idx, neon_tx));
+        let res = transaction::parse(&ix.data, &pubkeys_for_ix, accountsdb, neon_pubkey)?;
+        tracing::debug!("parse result: {:?}", res);
+        match res {
+            ParseResult::TransactionExecuted(neon_tx) => {
+                transactions.insert(
+                    neon_tx.hash(),
+                    TransactionMeta {
+                        neon_transaction: neon_tx,
+                        sol_ix_idx: idx,
+                        is_cancelled: false,
+                        is_completed: true,
+                    },
+                );
+            }
+            ParseResult::TransactionStep(neon_tx) => {
+                transactions.insert(
+                    neon_tx.hash(),
+                    TransactionMeta {
+                        neon_transaction: neon_tx,
+                        sol_ix_idx: idx,
+                        is_cancelled: false,
+                        is_completed: false,
+                    },
+                );
+            }
+            ParseResult::TransactionCancel(hash) => {
+                transactions.get_mut(&hash).map(|tx| tx.is_cancelled = true);
+            }
+            res => {
+                tracing::debug!("unhandled parse result: {:?}", res);
+            }
         }
     }
+    let mut txs = transactions.into_values().collect::<Vec<_>>();
+    txs.sort_by_key(|tx| tx.sol_ix_idx);
     Ok(txs)
 }
 
 fn merge_logs_transactions(
-    txs: Vec<(usize, Transaction)>,
+    txs: Vec<TransactionMeta>,
     log_info: NeonLogInfo,
     slot: u64,
-    _tx_idx: u64,
+    _sol_tx_idx: u64,
 ) -> Vec<NeonTxInfo> {
     let mut tx_infos = Vec::new();
-    for (idx, tx) in txs {
-        let canceled = log_info
-            .ret
-            .as_ref()
-            .map(|r| r.is_canceled)
-            .unwrap_or_default(); // TODO
+    for (idx, meta) in txs.into_iter().enumerate() {
+        let TransactionMeta {
+            neon_transaction: tx,
+            sol_ix_idx,
+            is_cancelled,
+            is_completed,
+        } = meta;
+        let neon_sig = tx.hash();
 
         // if `to` address is absent, it means we are
         // creating new contract
@@ -123,8 +165,8 @@ fn merge_logs_transactions(
         };
 
         let tx_info = NeonTxInfo {
-            tx_type: 0,                                                        // TODO
-            neon_signature: log_info.sig.map(hex::encode).unwrap_or_default(), // TODO
+            tx_type: 0, // TODO
+            neon_signature: hex::encode(neon_sig),
             from: tx.recover_caller_address().unwrap_or_default(),
             contract,
             transaction: tx,
@@ -142,11 +184,11 @@ fn merge_logs_transactions(
             sol_signature: String::default(),    // TODO: should be in input?
             sol_slot: slot,
             sol_tx_idx: idx as u64, /* actually just tx idx */
-            sol_ix_idx: idx as u64, /* TODO: what is this */
-            sol_ix_inner_idx: 0,    // TODO: what is this?
+            sol_ix_idx: sol_ix_idx as u64,
+            sol_ix_inner_idx: 0, // TODO: what is this?
             status: log_info.ret.as_ref().map(|r| r.status).unwrap_or_default(), // TODO
-            is_cancelled: canceled,
-            is_completed: !canceled, // TODO: ???
+            is_cancelled,
+            is_completed: is_completed || !is_cancelled, /* TODO */
         };
         tx_infos.push(tx_info);
     }
@@ -486,6 +528,10 @@ mod tests {
             // fails for unknown reason
             //assert_eq!(refr.status, format!("{:#0x}", info.status));
             assert_eq!(refr.is_canceled, info.is_cancelled);
+            println!(
+                "{} is_completed: {}, {}",
+                neon_sig, refr.is_completed, info.is_completed
+            );
             assert_eq!(refr.is_completed, info.is_completed);
 
             // TODO: we don't have v,r,s fields for some reason?
