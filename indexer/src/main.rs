@@ -148,7 +148,7 @@ mod accountsdb {
         }
 
         fn init_account(&mut self, pubkey: Pubkey) {
-            tracing::debug!(%pubkey, "init account");
+            tracing::info!(%pubkey, "init account");
             self.map.entry(pubkey).or_insert_with(|| Data {
                 data: vec![0; 1024 * 1024],
                 lamports: 0,
