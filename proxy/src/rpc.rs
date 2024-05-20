@@ -1,3 +1,4 @@
+use futures_util::TryStreamExt;
 use jsonrpsee::core::async_trait;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::types::ErrorCode;
@@ -13,17 +14,18 @@ use rpc_api_types::{
 use sqlx::PgPool;
 
 use crate::convert::build_block;
-use crate::db;
+use crate::convert::neon_to_eth;
+use crate::convert::neon_to_eth_receipt;
 
 #[derive(Clone)]
 pub struct EthApiImpl {
-    transactions: db::TransactionRepo,
+    transactions: ::db::TransactionRepo,
     blocks: ::db::BlockRepo,
 }
 
 impl EthApiImpl {
     pub fn new(pool: PgPool) -> Self {
-        let transactions = db::TransactionRepo::new(pool.clone());
+        let transactions = ::db::TransactionRepo::new(pool.clone());
         let blocks = ::db::BlockRepo::new(pool);
         Self {
             transactions,
@@ -36,14 +38,14 @@ impl EthApiImpl {
             return Ok(None);
         };
         let slot = block.slot;
-        let (txs, receipts) = self
+        let txs = self
             .transactions
-            .fetch_transactions_with_receipts_for_block(slot)
+            .fetch_without_events(::db::TransactionBy::Slot(slot))
+            .map_ok(|tx| tx.inner)
+            .try_collect()
             .await
-            .unwrap()
-            .into_iter()
-            .unzip();
-        Ok(Some(build_block(block, receipts, txs, full).into()))
+            .unwrap();
+        Ok(Some(build_block(block, txs, full).into()))
     }
 }
 
@@ -169,7 +171,14 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns the information about a transaction requested by transaction hash.
     async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction>> {
-        let tx = self.transactions.get_by_hash(hash).await.unwrap();
+        let tx = self
+            .transactions
+            .fetch(::db::TransactionBy::Hash(hash.0))
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .map(|tx| neon_to_eth(tx.inner, tx.blockhash.as_deref()));
         Ok(tx)
     }
 
@@ -212,7 +221,14 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns the receipt of a transaction by transaction hash.
     async fn transaction_receipt(&self, hash: B256) -> RpcResult<Option<AnyTransactionReceipt>> {
-        let receipt = self.transactions.receipt_by_hash(hash).await.unwrap();
+        let receipt = self
+            .transactions
+            .fetch(::db::TransactionBy::Hash(hash.0))
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .map(|tx| neon_to_eth_receipt(tx.inner, tx.blockhash.as_deref()));
         Ok(receipt)
     }
 

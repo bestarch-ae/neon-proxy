@@ -2,7 +2,6 @@ use clap::Parser;
 use rpc_api::EthApiServer;
 
 mod convert;
-mod db;
 mod rpc;
 
 use rpc::EthApiImpl;

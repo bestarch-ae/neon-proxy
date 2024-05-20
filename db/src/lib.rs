@@ -7,7 +7,7 @@ use common::solana_sdk::signature::Signature;
 use sqlx::PgPool;
 
 pub use block::{BlockBy, BlockRepo};
-pub use transaction::TransactionRepo;
+pub use transaction::{TransactionBy, TransactionRepo};
 
 pub async fn connect(url: &str) -> Result<PgPool, sqlx::Error> {
     PgPool::connect(url).await
