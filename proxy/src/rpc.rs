@@ -1,5 +1,7 @@
 use jsonrpsee::core::async_trait;
 use jsonrpsee::core::RpcResult;
+use jsonrpsee::types::ErrorCode;
+use jsonrpsee::types::ErrorObjectOwned;
 use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, B256, B64, U256, U64};
 use rpc_api::servers::EthApiServer;
 use rpc_api_types::serde_helpers::JsonStorageKey;
@@ -28,6 +30,14 @@ impl EthApiImpl {
             blocks,
         }
     }
+}
+
+fn unimplemented<T>() -> RpcResult<T> {
+    Err(ErrorObjectOwned::borrowed(
+        ErrorCode::MethodNotFound.code(),
+        "method not implemented",
+        None,
+    ))
 }
 
 #[async_trait]
@@ -88,7 +98,7 @@ impl EthApiServer for EthApiImpl {
         full: bool,
     ) -> RpcResult<Option<RichBlock>> {
         let BlockNumberOrTag::Number(slot) = number else {
-            todo!()
+            return unimplemented();
         };
         let Some(block) = self.blocks.fetch_by_slot(slot).await.unwrap() else {
             return Ok(None);
