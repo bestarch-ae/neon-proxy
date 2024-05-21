@@ -69,6 +69,13 @@ impl TransactionWithLogs {
 impl From<TransactionWithLogs> for TransactionReceipt<AnyReceiptEnvelope<Log>> {
     fn from(tx_with_logs: TransactionWithLogs) -> Self {
         let TransactionWithLogs { tx: row, logs } = tx_with_logs;
+
+        let block_hash = row.block_hash.and_then(|bh| {
+            let mut buf = [0u8; 32];
+            bs58::decode(bh).onto(&mut buf).ok()?;
+            Some(buf.into())
+        });
+
         let receipt = Receipt {
             status: u8::from_str_radix(row.status.strip_prefix("0x").unwrap(), 16).unwrap() > 0,
             cumulative_gas_used: u128::from_str_radix(
@@ -76,7 +83,14 @@ impl From<TransactionWithLogs> for TransactionReceipt<AnyReceiptEnvelope<Log>> {
                 16,
             )
             .unwrap(),
-            logs: logs.into_iter().map(Into::into).collect(),
+            logs: logs
+                .into_iter()
+                .map(Into::into)
+                .map(|mut log: Log| {
+                    log.block_hash = block_hash;
+                    log
+                })
+                .collect(),
         };
         let receipt = ReceiptWithBloom::new(receipt, Default::default() /* TODO: fix this */);
         let envelope = AnyReceiptEnvelope {
@@ -88,7 +102,7 @@ impl From<TransactionWithLogs> for TransactionReceipt<AnyReceiptEnvelope<Log>> {
             inner: envelope,
             transaction_hash: B256::from_str(&row.neon_sig).unwrap(),
             transaction_index: Some(row.tx_idx as u64),
-            block_hash: None,
+            block_hash,
             block_number: Some(row.block_slot as u64),
             gas_used: u128::from_str_radix(row.gas_used.strip_prefix("0x").unwrap(), 16).unwrap(),
             effective_gas_price: u128::from_str_radix(
