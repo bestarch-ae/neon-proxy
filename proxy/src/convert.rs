@@ -20,10 +20,7 @@ pub fn neon_to_eth(tx: NeonTxInfo, blockhash: Option<&str>) -> Transaction {
     Transaction {
         hash: B256::from_str(&tx.neon_signature).unwrap(),
         nonce: tx.transaction.nonce(),
-        block_hash: blockhash.map(|bh| {
-            let hash = Hash::from_str(bh).unwrap();
-            hash.to_bytes().into()
-        }),
+        block_hash: blockhash.map(sol_blockhash_into_hex),
         block_number: Some(tx.sol_slot), /* TODO: not sure if correct */
         transaction_index: Some(tx.sol_tx_idx),
         from: tx.from.0.into(),
@@ -46,7 +43,7 @@ pub fn neon_to_eth(tx: NeonTxInfo, blockhash: Option<&str>) -> Transaction {
 
 pub fn neon_to_eth_receipt(tx: NeonTxInfo, blockhash: Option<&str>) -> AnyTransactionReceipt {
     let receipt = Receipt {
-        status: true,
+        status: tx.status > 0x0,
         cumulative_gas_used: tx.sum_gas_used.as_u128(),
         logs: tx
             .events
@@ -74,10 +71,7 @@ pub fn neon_to_eth_receipt(tx: NeonTxInfo, blockhash: Option<&str>) -> AnyTransa
         inner: envelope,
         transaction_hash: B256::from_str(&tx.neon_signature).unwrap(),
         transaction_index: Some(tx.sol_tx_idx),
-        block_hash: blockhash.map(|bh| {
-            let hash = Hash::from_str(bh).unwrap();
-            hash.to_bytes().into()
-        }),
+        block_hash: blockhash.map(sol_blockhash_into_hex),
         block_number: Some(tx.sol_slot),
         gas_used: tx.gas_used.as_u128(),
         effective_gas_price: tx.transaction.gas_price().as_u128(),
@@ -179,4 +173,9 @@ pub fn build_block(block: SolanaBlock, txs: Vec<NeonTxInfo>, full: bool) -> Bloc
         size: Some(U256::from(1)),
         ..Default::default()
     }
+}
+
+fn sol_blockhash_into_hex(hash: impl AsRef<str>) -> B256 {
+    let hash = Hash::from_str(hash.as_ref()).unwrap();
+    hash.to_bytes().into()
 }
