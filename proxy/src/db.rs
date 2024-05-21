@@ -70,7 +70,7 @@ impl From<TransactionWithLogs> for TransactionReceipt<AnyReceiptEnvelope<Log>> {
     fn from(tx_with_logs: TransactionWithLogs) -> Self {
         let TransactionWithLogs { tx: row, logs } = tx_with_logs;
         let receipt = Receipt {
-            status: true,
+            status: u8::from_str_radix(row.status.strip_prefix("0x").unwrap(), 16).unwrap() > 0,
             cumulative_gas_used: u128::from_str_radix(
                 row.sum_gas_used.strip_prefix("0x").unwrap(),
                 16,
@@ -202,8 +202,11 @@ impl From<NeonTransactionLogRow> for Log {
         .iter()
         .take(value.log_topic_cnt as usize)
         {
-            let topic = B256::from_str(topic).unwrap();
-            topics.push(topic);
+            if let Ok(topic) = B256::from_str(topic) {
+                topics.push(topic);
+            } else {
+                tracing::warn!(%topic, "bad topic name");
+            }
         }
         let data = LogData::new(topics, Bytes::from_str(&value.log_data).unwrap()).unwrap();
         Log {
