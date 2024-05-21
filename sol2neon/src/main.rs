@@ -254,7 +254,7 @@ fn main() -> Result<(), Error> {
 
         for tx_info in tx_infos {
             let tx_info: DbRow = tx_info.into();
-            println!("{}", serde_json::to_string(&tx_info).unwrap());
+            println!("{}", serde_json::to_string_pretty(&tx_info).unwrap());
         }
     }
 
