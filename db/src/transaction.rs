@@ -204,7 +204,6 @@ impl TransactionRepo {
                  status "status!", is_canceled as "is_canceled!", is_completed as "is_completed!", 
                  v "v!", r as "r!", s as "s!", 
                  calldata as "calldata!",
-                 logs as "logs!",
                  B.block_hash
                FROM neon_transactions T
                LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
@@ -228,10 +227,9 @@ impl TransactionRepo {
         sqlx::query_as!(
             NeonTransactionLogRow,
             r#"SELECT
-                address as "address!", block_slot as "block_slot!", tx_hash as "tx_hash!",
-                tx_idx as "tx_idx!", tx_log_idx as "tx_log_idx!", log_idx as "log_idx!",
+                address as "address!", tx_hash as "tx_hash!",
+                log_idx as "log_idx!",
                 event_level as "event_level!", event_order as "event_order!",
-                sol_sig as "sol_sig!", idx as "idx!", inner_idx as "inner_idx!",
                 log_topic1 as "log_topic1!", log_topic2 as "log_topic2!",
                 log_topic3 as "log_topic3!", log_topic4 as "log_topic4!",
                 log_topic_cnt as "log_topic_cnt!", log_data as "log_data!"
@@ -299,7 +297,6 @@ struct NeonTransactionRow {
     s: String,
 
     calldata: String,
-    logs: Vec<u8>,
     block_hash: Option<String>,
 }
 
@@ -410,18 +407,11 @@ impl NeonTransactionRow {
 
 struct NeonTransactionLogRow {
     address: String,
-    block_slot: i64,
     tx_hash: String,
-    tx_idx: i32,
-    tx_log_idx: i32,
     log_idx: i32,
 
     event_level: i32,
     event_order: i32,
-
-    sol_sig: String,
-    idx: i32,
-    inner_idx: i32,
 
     log_topic1: String,
     log_topic2: String,
@@ -463,9 +453,4 @@ impl From<NeonTransactionLogRow> for EventLog {
             order: value.event_order as u64,
         }
     }
-}
-
-struct TransactionWithLogs {
-    tx: NeonTransactionRow,
-    logs: Vec<NeonTransactionLogRow>,
 }
