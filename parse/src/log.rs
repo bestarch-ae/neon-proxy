@@ -261,6 +261,8 @@ impl Mnemonic {
         let len = BASE64.decode_slice(input, &mut buf)?;
         assert_eq!(len, 1); // TODO: unclear how long should it be
         let exit_status = buf[0];
+        let exit_status = if exit_status < 0xd0 { 0x1 } else { 0x0 };
+
         let gas_used = ix.map(|ix| ix.total_gas_used).ok_or(Error::InvalidEvent)?;
 
         Ok(NeonLogTxReturn {
