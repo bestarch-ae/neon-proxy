@@ -1,4 +1,8 @@
+use anyhow::Context;
 use common::types::SolanaBlock;
+use futures_util::FutureExt;
+
+use super::Error;
 
 #[derive(Debug, Clone)]
 pub struct BlockRepo {
@@ -42,7 +46,7 @@ impl BlockRepo {
         Ok(())
     }
 
-    pub async fn fetch_by(&self, by: BlockBy<'_>) -> Result<Option<SolanaBlock>, sqlx::Error> {
+    pub async fn fetch_by(&self, by: BlockBy<'_>) -> Result<Option<SolanaBlock>, Error> {
         let (slot, hash) = match by {
             BlockBy::Slot(num) => (Some(num as i64), None),
             BlockBy::Hash(hash) => (None, Some(hash)),
@@ -63,8 +67,9 @@ impl BlockRepo {
             hash.unwrap_or(""),
             hash.is_none(),
         )
-        .map(Into::into)
+        .map(TryInto::try_into)
         .fetch_optional(&self.pool)
+        .map(|res| Ok(res.map(Option::transpose)??))
         .await
     }
 }
@@ -77,8 +82,10 @@ struct BlockRow {
     parent_block_hash: String,
 }
 
-impl From<BlockRow> for SolanaBlock {
-    fn from(value: BlockRow) -> Self {
+impl TryFrom<BlockRow> for SolanaBlock {
+    type Error = anyhow::Error;
+
+    fn try_from(value: BlockRow) -> Result<Self, anyhow::Error> {
         let BlockRow {
             block_slot,
             block_hash,
@@ -86,12 +93,12 @@ impl From<BlockRow> for SolanaBlock {
             parent_block_slot,
             parent_block_hash,
         } = value;
-        SolanaBlock {
-            slot: block_slot as u64,
+        Ok(SolanaBlock {
+            slot: block_slot.try_into().context("slot")?,
             hash: block_hash,
-            parent_slot: parent_block_slot as u64,
+            parent_slot: parent_block_slot.try_into().context("parent_slot")?,
             parent_hash: parent_block_hash,
             time: Some(block_time),
-        }
+        })
     }
 }

@@ -1,7 +1,10 @@
+use anyhow::{bail, Context};
 use common::ethnum::U256;
 use common::evm_loader::types::{AccessListTx, Address, LegacyTx, Transaction, TransactionPayload};
 use common::types::{EventKind, EventLog, NeonTxInfo};
-use futures_util::{Stream, TryStreamExt};
+use futures_util::{Stream, StreamExt, TryStreamExt};
+
+use super::Error;
 
 #[derive(Debug, Clone, Copy)]
 pub enum TransactionBy {
@@ -190,7 +193,7 @@ impl TransactionRepo {
     pub fn fetch_without_events(
         &self,
         by: TransactionBy,
-    ) -> impl Stream<Item = sqlx::Result<WithBlockhash<NeonTxInfo>>> + '_ {
+    ) -> impl Stream<Item = Result<WithBlockhash<NeonTxInfo>, Error>> + '_ {
         let (slot, hash) = by.slot_hash();
         sqlx::query_as!(
             NeonTransactionRow,
@@ -217,12 +220,13 @@ impl TransactionRepo {
         )
         .map(|row| row.neon_tx_info_with_empty_logs())
         .fetch(&self.pool)
+        .map(|res| Ok(res??))
     }
 
     fn fetch_logs(
         &self,
         by: TransactionBy,
-    ) -> impl Stream<Item = sqlx::Result<(String, EventLog)>> + '_ {
+    ) -> impl Stream<Item = Result<(String, EventLog), Error>> + '_ {
         let (slot, hash) = by.slot_hash();
         sqlx::query_as!(
             NeonTransactionLogRow,
@@ -242,11 +246,15 @@ impl TransactionRepo {
             slot.unwrap_or(0) as i64,
             slot.is_none(),
         )
-        .map(|row| (row.tx_hash.clone(), row.into()))
+        .map(|row| {
+            let hash = row.tx_hash.clone();
+            row.try_into().map(|log| (hash, log))
+        })
         .fetch(&self.pool)
+        .map(|res| Ok(res??))
     }
 
-    pub async fn fetch(&self, by: TransactionBy) -> sqlx::Result<Vec<WithBlockhash<NeonTxInfo>>> {
+    pub async fn fetch(&self, by: TransactionBy) -> Result<Vec<WithBlockhash<NeonTxInfo>>, Error> {
         let mut transactions: Vec<_> = self.fetch_without_events(by).try_collect().await?;
         if transactions.is_empty() {
             return Ok(transactions);
@@ -301,7 +309,7 @@ struct NeonTransactionRow {
 }
 
 impl NeonTransactionRow {
-    fn transaction(&self) -> Transaction {
+    fn transaction(&self) -> anyhow::Result<Transaction> {
         #[derive(Debug)]
         enum TxKind {
             Legacy,
@@ -313,20 +321,27 @@ impl NeonTransactionRow {
             0x00 => TxKind::Legacy,
             0x01 => TxKind::AccessList,
             0x02 => TxKind::DynamicFee,
-            byte => panic!("Unsupported EIP-2718 Transaction type | First byte: {byte}"),
+            byte => bail!("Unsupported EIP-2718 Transaction type | First byte: {byte}"),
         };
 
-        let nonce = u64::from_str_radix(self.nonce.strip_prefix("0x").unwrap(), 16).unwrap();
-        let recovery_id = u8::from_str_radix(self.v.strip_prefix("0x").unwrap(), 16).unwrap();
-        let gas_price = U256::from_str_hex(&self.gas_price).unwrap();
-        let gas_limit = U256::from_str_hex(&self.gas_limit).unwrap();
-        let value = U256::from_str_hex(&self.value).unwrap();
-        let v = U256::from_str_hex(&self.v).unwrap();
-        let r = U256::from_str_hex(&self.r).unwrap();
-        let s = U256::from_str_hex(&self.s).unwrap();
+        let nonce = u64::from_str_radix(self.nonce.strip_prefix("0x").context("nonce")?, 16)
+            .context("nonce")?;
+        let recovery_id = u8::from_str_radix(self.v.strip_prefix("0x").context("recovery_id")?, 16)
+            .context("recovery_id")?;
+        let gas_price = U256::from_str_hex(&self.gas_price).context("gas_price")?;
+        let gas_limit = U256::from_str_hex(&self.gas_limit).context("gas_limit")?;
+        let value = U256::from_str_hex(&self.value).context("value")?;
+        let v = U256::from_str_hex(&self.v).context("v")?;
+        let r = U256::from_str_hex(&self.r).context("r")?;
+        let s = U256::from_str_hex(&self.s).context("s")?;
 
-        let target = self.to_addr.as_ref().map(|s| Address::from_hex(s).unwrap());
-        let call_data = hex::decode(self.calldata.strip_prefix("0x").unwrap()).unwrap();
+        let target = self
+            .to_addr
+            .as_ref()
+            .map(|s| Address::from_hex(s).context("target"))
+            .transpose()?;
+        let call_data = hex::decode(self.calldata.strip_prefix("0x").context("calldata")?)
+            .context("calldata")?;
 
         let payload = match tx_kind {
             TxKind::Legacy => TransactionPayload::Legacy(LegacyTx {
@@ -355,10 +370,10 @@ impl NeonTransactionRow {
                 recovery_id,
                 access_list: Vec::new(), // TODO
             }),
-            kind => unimplemented!("unsupported tx kind: {kind:?}"),
+            kind => bail!("unsupported tx kind: {kind:?}"),
         };
 
-        Transaction {
+        Ok(Transaction {
             transaction: payload,
             hash: [0; 32], // TODO
             byte_len: 0,   // TODO
@@ -366,11 +381,11 @@ impl NeonTransactionRow {
                 .unwrap()
                 .try_into()
                 .unwrap(),
-        }
+        })
     }
 
-    fn neon_tx_info_with_empty_logs(self) -> WithBlockhash<NeonTxInfo> {
-        let transaction = self.transaction();
+    fn neon_tx_info_with_empty_logs(self) -> anyhow::Result<WithBlockhash<NeonTxInfo>> {
+        let transaction = self.transaction()?;
         let tx_type = match transaction.transaction {
             TransactionPayload::Legacy(..) => 0x00,
             TransactionPayload::AccessList(..) => 0x01,
@@ -379,29 +394,35 @@ impl NeonTransactionRow {
         let tx = NeonTxInfo {
             tx_type,
             neon_signature: self.neon_sig,
-            from: Address::from_hex(&self.from_addr).unwrap(),
+            from: Address::from_hex(&self.from_addr).context("from")?,
             contract: self
                 .contract
                 .as_ref()
-                .map(|s| Address::from_hex(s).unwrap()),
+                .map(|s| Address::from_hex(s))
+                .transpose()
+                .context("contract")?,
             transaction,
             events: Vec::new(),
-            gas_used: U256::from_str_hex(&self.gas_used).unwrap(),
-            sum_gas_used: U256::from_str_hex(&self.sum_gas_used).unwrap(),
+            gas_used: U256::from_str_hex(&self.gas_used).context("gas_used")?,
+            sum_gas_used: U256::from_str_hex(&self.sum_gas_used).context("sum_gas_used")?,
             sol_signature: self.sol_sig,
-            sol_slot: self.block_slot as u64,
-            sol_tx_idx: self.tx_idx as u64,
-            sol_ix_idx: self.sol_ix_idx as u64,
-            sol_ix_inner_idx: self.sol_ix_inner_idx as u64,
-            status: u8::from_str_radix(self.status.strip_prefix("0x").unwrap(), 16).unwrap(),
+            sol_slot: self.block_slot.try_into().context("sol_slot")?,
+            sol_tx_idx: self.tx_idx.try_into().context("sol_tx_idx")?,
+            sol_ix_idx: self.sol_ix_idx.try_into().context("sol_ix_idx")?,
+            sol_ix_inner_idx: self
+                .sol_ix_inner_idx
+                .try_into()
+                .context("sol_ix_inner_idx")?,
+            status: u8::from_str_radix(self.status.strip_prefix("0x").context("status")?, 16)
+                .context("status")?,
             is_completed: self.is_completed,
             is_cancelled: self.is_canceled,
         };
 
-        WithBlockhash {
+        Ok(WithBlockhash {
             inner: tx,
             blockhash: self.block_hash,
-        }
+        })
     }
 }
 
@@ -422,35 +443,40 @@ struct NeonTransactionLogRow {
     log_data: String,
 }
 
-impl From<NeonTransactionLogRow> for EventLog {
-    fn from(value: NeonTransactionLogRow) -> Self {
-        let address = if value.address.is_empty() {
-            None // TODO: Insert null
-        } else {
-            Some(Address::from_hex(&value.address).unwrap())
-        };
-        let mut topics = Vec::new();
-        for topic in [
-            &value.log_topic1,
-            &value.log_topic2,
-            &value.log_topic3,
-            &value.log_topic4,
-        ]
-        .iter()
-        .take(value.log_topic_cnt as usize)
+impl TryFrom<NeonTransactionLogRow> for EventLog {
+    type Error = anyhow::Error;
+
+    fn try_from(value: NeonTransactionLogRow) -> Result<Self, Self::Error> {
         {
-            let topic = U256::from_str_hex(topic).unwrap();
-            topics.push(topic);
+            let address = if value.address.is_empty() {
+                None // TODO: Insert null
+            } else {
+                Some(Address::from_hex(&value.address).context("address")?)
+            };
+            let mut topics = Vec::new();
+            for topic in [
+                &value.log_topic1,
+                &value.log_topic2,
+                &value.log_topic3,
+                &value.log_topic4,
+            ]
+            .iter()
+            .take(value.log_topic_cnt as usize)
+            {
+                let topic = U256::from_str_hex(topic).context("topic")?;
+                topics.push(topic);
+            }
+            Result::<_, Self::Error>::Ok(EventLog {
+                event_type: EventKind::Log, // TODO: insert to DB
+                is_hidden: false,
+                address,
+                topic_list: topics,
+                data: hex::decode(value.log_data).context("data")?,
+                log_idx: value.log_idx.try_into().context("log_idx")?,
+                level: value.event_level.try_into().context("event_level")?,
+                order: value.event_order.try_into().context("event_order")?,
+            })
         }
-        EventLog {
-            event_type: EventKind::Log, // TODO: insert to DB
-            is_hidden: false,
-            address,
-            topic_list: topics,
-            data: hex::decode(value.log_data).unwrap(),
-            log_idx: value.log_idx as u64,
-            level: value.event_level as u64,
-            order: value.event_order as u64,
-        }
+        .context("event log")
     }
 }

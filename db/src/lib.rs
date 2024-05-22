@@ -3,14 +3,24 @@ mod transaction;
 
 use std::str::FromStr;
 
+use anyhow::Context;
 use common::solana_sdk::signature::Signature;
 use sqlx::PgPool;
+use thiserror::Error;
 
 pub use block::{BlockBy, BlockRepo};
 pub use transaction::{TransactionBy, TransactionRepo};
 
 pub async fn connect(url: &str) -> Result<PgPool, sqlx::Error> {
     PgPool::connect(url).await
+}
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("sqlx error: {0}")]
+    Sqlx(#[from] sqlx::Error),
+    #[error("parsing error: {0}")]
+    Parse(#[from] anyhow::Error),
 }
 
 pub struct SolanaSignaturesRepo {
@@ -46,7 +56,7 @@ impl SolanaSignaturesRepo {
         Ok(())
     }
 
-    pub async fn get_latest(&self) -> Result<Option<Signature>, sqlx::Error> {
+    pub async fn get_latest(&self) -> Result<Option<Signature>, Error> {
         let row = sqlx::query!(
             r#"
             SELECT signature as "signature!" FROM solana_transaction_signatures
@@ -57,7 +67,9 @@ impl SolanaSignaturesRepo {
         .fetch_optional(&self.pool)
         .await?;
         match row {
-            Some(row) => Ok(Some(Signature::from_str(&row.signature).unwrap())),
+            Some(row) => Ok(Some(
+                Signature::from_str(&row.signature).context("signature")?,
+            )),
             None => Ok(None),
         }
     }
