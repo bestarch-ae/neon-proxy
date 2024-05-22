@@ -10,6 +10,9 @@ members = [
     "proxy"
 ]
 
+[workspace.dependencies]
+anyhow = "1.0.86"
+
 [patch.crates-io]
 # Hack to resolve `zeroize` version conflict between solana-* and reth. 
 curve25519-dalek = { git = "https://github.com/00nktk/curve25519-dalek.git", rev = "2e37898" }

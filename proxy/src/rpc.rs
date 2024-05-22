@@ -1,3 +1,5 @@
+use common::types::NeonTxInfo;
+use db::WithBlockhash;
 use futures_util::TryStreamExt;
 use jsonrpsee::core::async_trait;
 use jsonrpsee::core::RpcResult;
@@ -13,9 +15,8 @@ use rpc_api_types::{
 };
 use sqlx::PgPool;
 
-use crate::convert::build_block;
-use crate::convert::neon_to_eth;
-use crate::convert::neon_to_eth_receipt;
+use crate::convert::{build_block, neon_to_eth, neon_to_eth_receipt};
+use crate::Error;
 
 #[derive(Clone)]
 pub struct EthApiImpl {
@@ -33,8 +34,8 @@ impl EthApiImpl {
         }
     }
 
-    async fn get_block(&self, by: ::db::BlockBy<'_>, full: bool) -> RpcResult<Option<RichBlock>> {
-        let Some(block) = self.blocks.fetch_by(by).await.unwrap() else {
+    async fn get_block(&self, by: db::BlockBy<'_>, full: bool) -> Result<Option<RichBlock>, Error> {
+        let Some(block) = self.blocks.fetch_by(by).await? else {
             return Ok(None);
         };
         let slot = block.slot;
@@ -43,9 +44,16 @@ impl EthApiImpl {
             .fetch_without_events(::db::TransactionBy::Slot(slot))
             .map_ok(|tx| tx.inner)
             .try_collect()
-            .await
-            .unwrap();
-        Ok(Some(build_block(block, txs, full).into()))
+            .await?;
+        Ok(Some(build_block(block, txs, full)?.into()))
+    }
+
+    async fn get_transaction(
+        &self,
+        by: db::TransactionBy,
+    ) -> Result<Option<WithBlockhash<NeonTxInfo>>, Error> {
+        let tx = self.transactions.fetch(by).await?.into_iter().next();
+        Ok(tx)
     }
 }
 
@@ -94,8 +102,9 @@ impl EthApiServer for EthApiImpl {
         use common::solana_sdk::hash::Hash;
 
         let hash = Hash::new_from_array(hash.0).to_string();
-        self.get_block(::db::BlockBy::Hash(hash.as_str()), full)
+        self.get_block(db::BlockBy::Hash(hash.as_str()), full)
             .await
+            .map_err(Into::into)
     }
 
     /// Returns information about a block by number.
@@ -107,7 +116,9 @@ impl EthApiServer for EthApiImpl {
         let BlockNumberOrTag::Number(slot) = number else {
             return unimplemented();
         };
-        self.get_block(::db::BlockBy::Slot(slot), full).await
+        self.get_block(db::BlockBy::Slot(slot), full)
+            .await
+            .map_err(Into::into)
     }
 
     /// Returns the number of transactions in a block from a block matching the given block hash.
@@ -172,13 +183,10 @@ impl EthApiServer for EthApiImpl {
     /// Returns the information about a transaction requested by transaction hash.
     async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction>> {
         let tx = self
-            .transactions
-            .fetch(::db::TransactionBy::Hash(hash.0))
-            .await
-            .unwrap()
-            .into_iter()
-            .next()
-            .map(|tx| neon_to_eth(tx.inner, tx.blockhash.as_deref()));
+            .get_transaction(db::TransactionBy::Hash(hash.0))
+            .await?
+            .map(|tx| neon_to_eth(tx.inner, tx.blockhash.as_deref()).map_err(Error::from))
+            .transpose()?;
         Ok(tx)
     }
 
@@ -222,13 +230,10 @@ impl EthApiServer for EthApiImpl {
     /// Returns the receipt of a transaction by transaction hash.
     async fn transaction_receipt(&self, hash: B256) -> RpcResult<Option<AnyTransactionReceipt>> {
         let receipt = self
-            .transactions
-            .fetch(::db::TransactionBy::Hash(hash.0))
-            .await
-            .unwrap()
-            .into_iter()
-            .next()
-            .map(|tx| neon_to_eth_receipt(tx.inner, tx.blockhash.as_deref()));
+            .get_transaction(db::TransactionBy::Hash(hash.0))
+            .await?
+            .map(|tx| neon_to_eth_receipt(tx.inner, tx.blockhash.as_deref()).map_err(Error::from))
+            .transpose()?;
         Ok(receipt)
     }
 

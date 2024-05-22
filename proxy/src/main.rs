@@ -1,10 +1,28 @@
 use clap::Parser;
+use jsonrpsee::types::ErrorCode;
 use rpc_api::EthApiServer;
+use thiserror::Error;
 
 mod convert;
 mod rpc;
 
 use rpc::EthApiImpl;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("database error: {0}")]
+    DB(#[from] db::Error),
+    #[error("parse error: {0}")]
+    Parse(#[from] anyhow::Error),
+}
+
+impl From<Error> for jsonrpsee::types::ErrorObjectOwned {
+    fn from(value: Error) -> Self {
+        match value {
+            Error::DB(..) | Error::Parse(..) => ErrorCode::InternalError.into(),
+        }
+    }
+}
 
 #[derive(Parser)]
 struct Args {
