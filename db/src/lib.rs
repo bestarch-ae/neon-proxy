@@ -4,6 +4,7 @@ mod transaction;
 use std::str::FromStr;
 
 use anyhow::Context;
+use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
 use sqlx::PgPool;
 use thiserror::Error;
@@ -72,5 +73,93 @@ impl SolanaSignaturesRepo {
             )),
             None => Ok(None),
         }
+    }
+}
+
+pub struct HolderRepo {
+    pool: sqlx::PgPool,
+}
+
+#[allow(dead_code)]
+struct HolderRow {
+    block_slot: i64,
+    start_block_slot: Option<i64>,
+    last_block_slot: Option<i64>,
+    is_stuck: bool,
+    neon_sig: Option<String>,
+    pubkey: String,
+    data_offset: Option<i64>,
+    data: Option<Vec<u8>>,
+}
+
+impl HolderRepo {
+    pub fn new(pool: sqlx::PgPool) -> Self {
+        Self { pool }
+    }
+
+    pub async fn get_by_pubkey(&self, pubkey: &Pubkey) -> Result<Option<Vec<u8>>, sqlx::Error> {
+        let rows = sqlx::query_as!(
+            HolderRow,
+            "SELECT
+                 block_slot, start_block_slot, last_block_slot,
+                 is_stuck, neon_sig, pubkey, data_offset,
+                 data
+             FROM neon_holder_log
+             WHERE pubkey = $1",
+            pubkey.to_string()
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        let mut holder_data = Vec::new();
+        for row in rows {
+            if let (Some(offset), Some(data)) = (row.data_offset, row.data) {
+                let offset = offset as usize;
+                if offset + data.len() > holder_data.len() {
+                    holder_data.resize(offset + data.len(), 0);
+                }
+                holder_data[offset..offset + data.len()].copy_from_slice(&data);
+            } else {
+                holder_data.clear();
+            }
+        }
+        Ok(None)
+    }
+
+    pub async fn insert(
+        &self,
+        slot: u64,
+        is_stuck: bool,
+        neon_sig: Option<&str>,
+        pubkey: &Pubkey,
+        offset: Option<u64>,
+        data: Option<&[u8]>,
+    ) -> Result<(), sqlx::Error> {
+        let mut txn = self.pool.begin().await?;
+        sqlx::query!(
+            r#"
+            INSERT INTO neon_holder_log
+            (
+                block_slot,
+                neon_sig,
+                pubkey,
+                is_stuck,
+                data_offset,
+                data
+            ) VALUES ($1, $2, $3, $4, $5, $6)
+            "#,
+            slot as i64,
+            neon_sig,
+            pubkey.to_string(),
+            is_stuck,
+            offset.map(|o| o as i64),
+            data
+        )
+        .execute(&mut *txn)
+        .await?;
+        txn.commit().await?;
+        Ok(())
     }
 }

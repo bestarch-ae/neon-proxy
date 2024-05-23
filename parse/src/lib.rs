@@ -16,6 +16,8 @@ use self::log::NeonLogInfo;
 mod log;
 mod transaction;
 
+pub use transaction::HolderOperation;
+
 pub trait AccountsDb {
     fn init_account(&mut self, _pubkey: Pubkey) {}
     fn get_by_key<'a>(&'a mut self, _pubkey: &'a Pubkey) -> Option<AccountInfo<'a>> {
@@ -72,7 +74,7 @@ fn parse_transactions(
     tx: VersionedTransaction,
     accountsdb: &mut impl AccountsDb,
     loaded: &LoadedAddresses,
-) -> Result<Vec<TransactionMeta>, Error> {
+) -> Result<(Vec<TransactionMeta>, Vec<HolderOperation>), Error> {
     use transaction::ParseResult;
 
     tracing::debug!("parsing tx {:?} with loaded addresses: {:?}", tx, loaded);
@@ -85,9 +87,10 @@ fn parse_transactions(
     let neon_idx = pubkeys.iter().position(|x| is_neon_pubkey(*x));
     let Some(neon_idx) = neon_idx else {
         tracing::warn!("not a neon transaction");
-        return Ok(Vec::new());
+        return Ok(Default::default());
     };
     let mut transactions = HashMap::new();
+    let mut holder_ops = Vec::new();
     for (idx, ix) in tx.message.instructions().iter().enumerate() {
         tracing::debug!("instruction {:?}", ix);
         if ix.program_id_index != neon_idx as u8 {
@@ -129,6 +132,7 @@ fn parse_transactions(
                     tx.is_cancelled = true;
                 }
             }
+            ParseResult::HolderOperation(op) => holder_ops.push(op),
             res => {
                 tracing::debug!("unhandled parse result: {:?}", res);
             }
@@ -136,7 +140,7 @@ fn parse_transactions(
     }
     let mut txs = transactions.into_values().collect::<Vec<_>>();
     txs.sort_by_key(|tx| tx.sol_ix_idx);
-    Ok(txs)
+    Ok((txs, holder_ops))
 }
 
 fn merge_logs_transactions(
@@ -201,7 +205,7 @@ fn merge_logs_transactions(
 pub fn parse(
     transaction: SolanaTransaction,
     accountsdb: &mut impl AccountsDb,
-) -> Result<Vec<NeonTxInfo>, Error> {
+) -> Result<(Vec<NeonTxInfo>, Vec<HolderOperation>), Error> {
     let SolanaTransaction {
         slot, tx, tx_idx, ..
     } = transaction;
@@ -213,14 +217,14 @@ pub fn parse(
         ident: sig_slot_info,
     };
     let loaded = &transaction.loaded_addresses;
-    let neon_txs = parse_transactions(tx, accountsdb, loaded)?;
+    let (neon_txs, holder_ops) = parse_transactions(tx, accountsdb, loaded)?;
 
     let log_info = match log::parse(transaction.log_messages) {
         Ok(log) => log,
         Err(err) => panic!("log parsing error {:?}", err),
     };
     let tx_infos = merge_logs_transactions(neon_txs, log_info, slot, tx_idx);
-    Ok(tx_infos)
+    Ok((tx_infos, holder_ops))
 }
 
 #[cfg(test)]

@@ -249,7 +249,7 @@ fn main() -> Result<(), Error> {
         let transaction: Wrapped<SolanaTransaction> = encoded.into();
         let transaction = transaction.0;
         let signature = transaction.tx.signatures[0];
-        let tx_infos = parse(transaction, &mut accounts_db)
+        let (tx_infos, _) = parse(transaction, &mut accounts_db)
             .with_context(|| format!("parsing transaction {}", signature))?;
 
         for tx_info in tx_infos {

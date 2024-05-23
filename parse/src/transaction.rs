@@ -46,11 +46,33 @@ pub enum Error {
 }
 
 #[derive(Debug)]
+pub enum HolderOperation {
+    Create(Pubkey),
+    Delete(Pubkey),
+    Write {
+        pubkey: Pubkey,
+        tx_hash: [u8; 32],
+        offset: usize,
+        data: Vec<u8>,
+    },
+}
+
+impl HolderOperation {
+    pub fn pubkey(&self) -> Pubkey {
+        match self {
+            Self::Create(pubkey) => *pubkey,
+            Self::Delete(pubkey) => *pubkey,
+            Self::Write { pubkey, .. } => *pubkey,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum ParseResult {
     TransactionExecuted(Transaction),
     TransactionStep(Transaction),
     TransactionCancel(TxHash),
-    HolderOperation,
+    HolderOperation(HolderOperation),
     Deposit,
 }
 
@@ -93,18 +115,18 @@ pub fn parse(
         }
         tag::HOLDER_CREATE => {
             tracing::info!("found holder create instruction");
-            decode_holder_create(&bytes[1..], accounts, adb, neon_pubkey)?;
-            ParseResult::HolderOperation
+            let op = decode_holder_create(&bytes[1..], accounts, adb, neon_pubkey)?;
+            ParseResult::HolderOperation(op)
         }
         tag::HOLDER_DELETE => {
             tracing::info!("found holder delete instruction");
-            decode_holder_delete(&bytes[1..], accounts, adb, neon_pubkey)?;
-            ParseResult::HolderOperation
+            let op = decode_holder_delete(&bytes[1..], accounts, adb, neon_pubkey)?;
+            ParseResult::HolderOperation(op)
         }
         tag::HOLDER_WRITE => {
             tracing::info!("found holder write instruction");
-            decode_holder_write(&bytes[1..], accounts, adb, neon_pubkey)?;
-            ParseResult::HolderOperation
+            let op = decode_holder_write(&bytes[1..], accounts, adb, neon_pubkey)?;
+            ParseResult::HolderOperation(op)
         }
         /* old: currently uses the same code, but potentially may change */
         tag::DEPOSIT_DEPRECATED => {
@@ -154,7 +176,7 @@ fn decode_holder_create(
     accounts: &[Pubkey],
     adb: &mut impl AccountsDb,
     neon_pubkey: Pubkey,
-) -> Result<(), Error> {
+) -> Result<HolderOperation, Error> {
     use common::evm_loader::account::TAG_HOLDER;
 
     let holder_pubkey = accounts[0];
@@ -165,7 +187,7 @@ fn decode_holder_create(
     let mut holder = Holder::from_account(&neon_pubkey, account).unwrap();
     holder.clear();
 
-    Ok(())
+    Ok(HolderOperation::Create(holder_pubkey))
 }
 
 fn decode_holder_delete(
@@ -173,14 +195,14 @@ fn decode_holder_delete(
     accounts: &[Pubkey],
     adb: &mut impl AccountsDb,
     _neon_pubkey: Pubkey,
-) -> Result<(), Error> {
+) -> Result<HolderOperation, Error> {
     let holder_pubkey = accounts[0];
 
     if let Some(holder) = adb.get_by_key(&holder_pubkey) {
         let mut data = holder.data.borrow_mut();
         data.fill(0);
     }
-    Ok(())
+    Ok(HolderOperation::Delete(holder_pubkey))
 }
 
 fn decode_holder_write(
@@ -188,7 +210,7 @@ fn decode_holder_write(
     accounts: &[Pubkey],
     adb: &mut impl AccountsDb,
     neon_pubkey: Pubkey,
-) -> Result<(), Error> {
+) -> Result<HolderOperation, Error> {
     use common::evm_loader::account::TAG_HOLDER;
     let holder_pubkey = accounts[0];
     let transaction_hash = *array_ref![instruction, 0, 32];
@@ -214,7 +236,12 @@ fn decode_holder_write(
     holder.update_transaction_hash(transaction_hash);
     holder.write(offset, data)?;
 
-    Ok(())
+    Ok(HolderOperation::Write {
+        pubkey: holder_pubkey,
+        tx_hash: transaction_hash,
+        offset,
+        data: data.to_vec(),
+    })
 }
 
 fn decode_exec_from_account(

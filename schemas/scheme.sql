@@ -220,3 +220,15 @@
         json_data_list TEXT
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_solana_alt_infos_block ON solana_alt_infos(block_slot);
+
+    CREATE TABLE IF NOT EXISTS neon_holder_log (
+        block_slot BIGINT NOT NULL,
+        start_block_slot BIGINT,
+        last_block_slot BIGINT,
+        is_stuck BOOLEAN NOT NULL,
+        neon_sig TEXT,
+        pubkey TEXT NOT NULL,
+        data_offset BIGINT,
+        data BYTEA
+    );
+    CREATE INDEX IF NOT EXISTS pubkey_slot ON neon_holder_log(pubkey, block_slot);

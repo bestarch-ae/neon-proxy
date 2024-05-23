@@ -37,6 +37,7 @@ async fn main() -> Result<()> {
     let pool = db::connect(&opts.pg_url).await?;
     let tx_repo = db::TransactionRepo::new(pool.clone());
     let sig_repo = db::SolanaSignaturesRepo::new(pool.clone());
+    let holder_repo = db::HolderRepo::new(pool.clone());
     let block_repo = db::BlockRepo::new(pool);
 
     let last_signature = sig_repo.get_latest().await?;
@@ -62,8 +63,8 @@ async fn main() -> Result<()> {
                 let _span =
                     tracing::info_span!("solana transaction", signature = %signature).entered();
 
-                let txs = match neon_parse::parse(tx, &mut adb) {
-                    Ok(txs) => txs,
+                let (txs, holders) = match neon_parse::parse(tx, &mut adb) {
+                    Ok((txs, holders)) => (txs, holders),
                     Err(err) => {
                         tracing::warn!(?err, "failed to parse tx");
                         continue;
@@ -79,6 +80,12 @@ async fn main() -> Result<()> {
                 }
                 if let Err(err) = sig_repo.insert(slot, tx_idx, signature).await {
                     tracing::warn!(?err, "failed to save solana transaction");
+                }
+                for holder in &holders {
+                    tracing::info!(slot = %slot, pubkey = %holder.pubkey(), "saving holder");
+                    if let Err(err) = save_holder(&holder_repo, slot, holder).await {
+                        tracing::warn!(?err, "failed to save neon holder");
+                    }
                 }
             }
             Ok(LedgerItem::Block(block)) => {
@@ -96,6 +103,39 @@ async fn main() -> Result<()> {
         };
     }
 
+    Ok(())
+}
+
+async fn save_holder(
+    repo: &db::HolderRepo,
+    slot: u64,
+    op: &neon_parse::HolderOperation,
+) -> Result<(), anyhow::Error> {
+    use neon_parse::HolderOperation;
+    match op {
+        HolderOperation::Create(pubkey) => {
+            repo.insert(slot, false, None, pubkey, None, None).await?
+        }
+        HolderOperation::Write {
+            pubkey,
+            tx_hash,
+            offset,
+            data,
+        } => {
+            repo.insert(
+                slot,
+                false,
+                Some(&hex::encode(tx_hash)),
+                pubkey,
+                Some(*offset as u64),
+                Some(data),
+            )
+            .await?
+        }
+        HolderOperation::Delete(pubkey) => {
+            repo.insert(slot, false, None, pubkey, None, None).await?
+        }
+    }
     Ok(())
 }
 
