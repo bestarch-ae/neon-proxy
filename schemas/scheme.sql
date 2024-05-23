@@ -98,6 +98,7 @@
     );
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_neon_transaction_logs_block_tx_log ON neon_transaction_logs(block_slot, tx_hash, tx_log_idx);
+    -- TODO: CREATE INDEX IF NOT EXISTS idx_neon_transaction_logs_block_tx_idx_log ON neon_transaction_logs(block_slot, tx_idx, tx_log_idx);
     CREATE INDEX IF NOT EXISTS idx_neon_transaction_logs_address ON neon_transaction_logs(address);
     CREATE INDEX IF NOT EXISTS idx_neon_transaction_logs_block_slot ON neon_transaction_logs(block_slot);
     CREATE INDEX IF NOT EXISTS idx_neon_transaction_logs_topic1 ON neon_transaction_logs(log_topic1);
