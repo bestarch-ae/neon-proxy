@@ -474,7 +474,7 @@ mod tests {
 
         let pubkeys = tx.message.static_account_keys();
         tracing::info!(?pubkeys);
-        let neon_txs = parse_transactions(tx, adb, &loaded).unwrap();
+        let (neon_txs, _) = parse_transactions(tx, adb, &loaded).unwrap();
         let logs = match meta.log_messages {
             common::solana_transaction_status::option_serializer::OptionSerializer::Some(logs) => {
                 logs
