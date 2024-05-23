@@ -238,7 +238,7 @@ impl TransactionRepo {
                 log_topic3 as "log_topic3!", log_topic4 as "log_topic4!",
                 log_topic_cnt as "log_topic_cnt!", log_data as "log_data!"
                FROM neon_transaction_logs
-               WHERE (tx_hash = $1 OR $2) AND (block_slot = $3 AND $4)
+               WHERE (tx_hash = $1 OR $2) AND (block_slot = $3 OR $4)
                ORDER BY (block_slot, tx_idx, tx_log_idx) ASC
             "#,
             hash.as_ref().map_or("", String::as_str),
