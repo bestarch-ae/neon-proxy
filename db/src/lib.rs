@@ -36,7 +36,7 @@ impl SolanaSignaturesRepo {
     pub async fn insert(
         &self,
         slot: u64,
-        tx_idx: u64,
+        tx_idx: u32,
         signature: Signature,
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(
@@ -76,6 +76,7 @@ impl SolanaSignaturesRepo {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct HolderRepo {
     pool: sqlx::PgPool,
 }
@@ -97,7 +98,12 @@ impl HolderRepo {
         Self { pool }
     }
 
-    pub async fn get_by_pubkey(&self, pubkey: &Pubkey) -> Result<Option<Vec<u8>>, sqlx::Error> {
+    pub async fn get_by_pubkey(
+        &self,
+        pubkey: &Pubkey,
+        before_slot: u64,
+        tx_idx: u32,
+    ) -> Result<Option<Vec<u8>>, sqlx::Error> {
         let rows = sqlx::query_as!(
             HolderRow,
             "SELECT
@@ -105,8 +111,13 @@ impl HolderRepo {
                  is_stuck, neon_sig, pubkey, data_offset,
                  data
              FROM neon_holder_log
-             WHERE pubkey = $1",
-            pubkey.to_string()
+             WHERE
+              pubkey = $1 AND
+              block_slot <= $2 AND
+              tx_idx <= $3",
+            pubkey.to_string(),
+            before_slot as i64,
+            tx_idx as i32
         )
         .fetch_all(&self.pool)
         .await?;
@@ -131,6 +142,7 @@ impl HolderRepo {
     pub async fn insert(
         &self,
         slot: u64,
+        tx_idx: u32,
         is_stuck: bool,
         neon_sig: Option<&str>,
         pubkey: &Pubkey,
@@ -143,14 +155,16 @@ impl HolderRepo {
             INSERT INTO neon_holder_log
             (
                 block_slot,
+                tx_idx,
                 neon_sig,
                 pubkey,
                 is_stuck,
                 data_offset,
                 data
-            ) VALUES ($1, $2, $3, $4, $5, $6)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
             "#,
             slot as i64,
+            tx_idx as i32,
             neon_sig,
             pubkey.to_string(),
             is_stuck,

@@ -223,6 +223,7 @@
 
     CREATE TABLE IF NOT EXISTS neon_holder_log (
         block_slot BIGINT NOT NULL,
+        tx_idx INT NOT NULL,
         start_block_slot BIGINT,
         last_block_slot BIGINT,
         is_stuck BOOLEAN NOT NULL,
@@ -231,4 +232,4 @@
         data_offset BIGINT,
         data BYTEA
     );
-    CREATE INDEX IF NOT EXISTS pubkey_slot ON neon_holder_log(pubkey, block_slot);
+    CREATE INDEX IF NOT EXISTS pubkey_slot ON neon_holder_log(pubkey, block_slot, tx_idx);
