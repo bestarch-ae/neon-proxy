@@ -1,0 +1,66 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n                 block_slot, start_block_slot, last_block_slot,\n                 is_stuck, neon_sig, pubkey, data_offset,\n                 data\n             FROM neon_holder_log\n             WHERE\n              pubkey = $1 AND\n              block_slot <= $2 AND\n              tx_idx <= $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "block_slot",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "start_block_slot",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "last_block_slot",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "is_stuck",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "neon_sig",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "pubkey",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "data_offset",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "data",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "45ec3784a116982f580a24473a1d6e03a5c29abb9388fad6db7d22fac6b8ad1b"
+}

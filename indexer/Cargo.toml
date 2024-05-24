@@ -16,3 +16,4 @@ tokio = { version = "1.37.0", features = ["full"] }
 common = { path = "../common", package = "neon-proxy-common" }
 solana = { path = "../solana-api", package = "solana-api" }
 db = { path = "../db" }
+hex = "0.4.3"

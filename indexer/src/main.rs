@@ -37,6 +37,7 @@ async fn main() -> Result<()> {
     let pool = db::connect(&opts.pg_url).await?;
     let tx_repo = db::TransactionRepo::new(pool.clone());
     let sig_repo = db::SolanaSignaturesRepo::new(pool.clone());
+    let holder_repo = db::HolderRepo::new(pool.clone());
     let block_repo = db::BlockRepo::new(pool);
 
     let last_signature = sig_repo.get_latest().await?;
@@ -46,7 +47,7 @@ async fn main() -> Result<()> {
 
     let api = SolanaApi::new(opts.url);
     let mut traverse = TraverseLedger::new(api, opts.target, from);
-    let mut adb = accountsdb::DummyAdb::new(opts.target);
+    let mut adb = accountsdb::DummyAdb::new(opts.target, holder_repo.clone());
 
     let mut last_written_slot = None;
     tracing::info!("connected");
@@ -56,14 +57,16 @@ async fn main() -> Result<()> {
         match result {
             Ok(LedgerItem::Transaction(tx)) => {
                 let signature = tx.tx.signatures[0];
-                let tx_idx = tx.tx_idx;
+                let tx_idx = tx.tx_idx as u32;
                 let slot = tx.slot;
 
                 let _span =
                     tracing::info_span!("solana transaction", signature = %signature).entered();
 
-                let txs = match neon_parse::parse(tx, &mut adb) {
-                    Ok(txs) => txs,
+                adb.set_slot_idx(slot, tx_idx);
+
+                let (txs, holders) = match neon_parse::parse(tx, &mut adb) {
+                    Ok((txs, holders)) => (txs, holders),
                     Err(err) => {
                         tracing::warn!(?err, "failed to parse tx");
                         continue;
@@ -79,6 +82,12 @@ async fn main() -> Result<()> {
                 }
                 if let Err(err) = sig_repo.insert(slot, tx_idx, signature).await {
                     tracing::warn!(?err, "failed to save solana transaction");
+                }
+                for holder in &holders {
+                    tracing::info!(slot = %slot, pubkey = %holder.pubkey(), "saving holder");
+                    if let Err(err) = save_holder(&holder_repo, slot, tx_idx, holder).await {
+                        tracing::warn!(?err, "failed to save neon holder");
+                    }
                 }
             }
             Ok(LedgerItem::Block(block)) => {
@@ -99,6 +108,43 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+async fn save_holder(
+    repo: &db::HolderRepo,
+    slot: u64,
+    tx_idx: u32,
+    op: &neon_parse::HolderOperation,
+) -> Result<(), anyhow::Error> {
+    use neon_parse::HolderOperation;
+    match op {
+        HolderOperation::Create(pubkey) => {
+            repo.insert(slot, tx_idx, false, None, pubkey, None, None)
+                .await?
+        }
+        HolderOperation::Write {
+            pubkey,
+            tx_hash,
+            offset,
+            data,
+        } => {
+            repo.insert(
+                slot,
+                tx_idx,
+                false,
+                Some(&hex::encode(tx_hash)),
+                pubkey,
+                Some(*offset as u64),
+                Some(data),
+            )
+            .await?
+        }
+        HolderOperation::Delete(pubkey) => {
+            repo.insert(slot, tx_idx, false, None, pubkey, None, None)
+                .await?
+        }
+    }
+    Ok(())
+}
+
 mod accountsdb {
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -106,7 +152,9 @@ mod accountsdb {
 
     use common::solana_sdk::account_info::AccountInfo;
     use common::solana_sdk::pubkey::Pubkey;
+    use db::HolderRepo;
     use neon_parse::AccountsDb;
+    use tokio::runtime::Handle;
 
     #[derive(Clone, Debug)]
     struct Data {
@@ -118,13 +166,51 @@ mod accountsdb {
     pub struct DummyAdb {
         map: HashMap<Pubkey, Data>,
         neon_pubkey: Pubkey,
+        db: HolderRepo,
+        slot: u64,
+        tx_idx: u32,
     }
 
     impl DummyAdb {
-        pub fn new(neon: Pubkey) -> Self {
+        pub fn new(neon: Pubkey, db: HolderRepo) -> Self {
             DummyAdb {
                 map: Default::default(),
                 neon_pubkey: neon,
+                db,
+                slot: 0,
+                tx_idx: 0,
+            }
+        }
+
+        pub fn set_slot_idx(&mut self, slot: u64, tx_idx: u32) {
+            self.slot = slot;
+            self.tx_idx = tx_idx;
+        }
+
+        pub fn get_from_db(
+            db: HolderRepo,
+            pubkey: &Pubkey,
+            slot: u64,
+            tx_idx: u32,
+        ) -> Option<Vec<u8>> {
+            let data = tokio::task::block_in_place(move || {
+                Handle::current()
+                    .block_on(async move { db.get_by_pubkey(&pubkey, slot, tx_idx).await })
+            });
+
+            match data {
+                Ok(Some(data)) => {
+                    tracing::info!(%pubkey, "holder data found");
+                    Some(data)
+                }
+                Ok(None) => {
+                    tracing::info!(%pubkey, "holder not found in db");
+                    None
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "db error");
+                    None
+                }
             }
         }
     }
@@ -132,6 +218,7 @@ mod accountsdb {
     impl AccountsDb for DummyAdb {
         fn get_by_key<'a>(&'a mut self, pubkey: &'a Pubkey) -> Option<AccountInfo<'a>> {
             tracing::debug!(%pubkey, "getting data for account");
+            self.init_account(*pubkey);
             let data = self.map.get_mut(pubkey)?;
 
             let account_info = AccountInfo {
@@ -149,9 +236,18 @@ mod accountsdb {
 
         fn init_account(&mut self, pubkey: Pubkey) {
             tracing::info!(%pubkey, "init account");
-            self.map.entry(pubkey).or_insert_with(|| Data {
-                data: vec![0; 1024 * 1024],
-                lamports: 0,
+            let db = self.db.clone();
+            let slot = self.slot;
+            let tx_idx = self.tx_idx;
+
+            self.map.entry(pubkey).or_insert_with(move || {
+                use common::evm_loader::account::TAG_HOLDER;
+
+                let data = Self::get_from_db(db, &pubkey, slot, tx_idx);
+                let mut data = data.unwrap_or_else(|| vec![0; 1024 * 1024]);
+                data[0] = TAG_HOLDER;
+
+                Data { data, lamports: 0 }
             });
         }
     }

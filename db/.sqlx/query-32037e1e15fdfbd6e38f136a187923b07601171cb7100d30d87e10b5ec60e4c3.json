@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO neon_holder_log\n            (\n                block_slot,\n                tx_idx,\n                neon_sig,\n                pubkey,\n                is_stuck,\n                data_offset,\n                data\n            ) VALUES ($1, $2, $3, $4, $5, $6, $7)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4",
+        "Text",
+        "Text",
+        "Bool",
+        "Int8",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "32037e1e15fdfbd6e38f136a187923b07601171cb7100d30d87e10b5ec60e4c3"
+}
