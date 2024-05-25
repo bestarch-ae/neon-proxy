@@ -5,10 +5,10 @@ use std::collections::{HashSet, VecDeque};
 use std::str::FromStr;
 use std::time::Duration;
 
-use solana_client::client_error::ClientError;
+use solana_client::client_error::{ClientError, ClientErrorKind};
 use solana_client::rpc_response::RpcConfirmedTransactionStatusWithSignature;
 use thiserror::Error;
-use tokio::time::{sleep_until, Instant};
+use tokio::time::{sleep, sleep_until, Instant};
 
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::{ParseSignatureError, Signature};
@@ -105,6 +105,7 @@ pub struct TraverseLedger {
     cached_block: Option<CachedBlock>,
     next_request: Instant,
     only_success: bool,
+    rps_limit_sleep: Option<Duration>,
 }
 
 impl TraverseLedger {
@@ -117,11 +118,16 @@ impl TraverseLedger {
             cached_block: None,
             next_request: Instant::now(),
             only_success: false,
+            rps_limit_sleep: None,
         }
     }
 
     pub fn set_only_success(&mut self, only_success: bool) {
         self.only_success = only_success
+    }
+
+    pub fn set_rps_limit_sleep(&mut self, rps_limit_sleep: Option<Duration>) {
+        self.rps_limit_sleep = rps_limit_sleep
     }
 
     pub async fn next(&mut self) -> Option<Result<LedgerItem, TraverseError>> {
@@ -267,10 +273,26 @@ impl TraverseLedger {
                 ?earliest, ?self.last_observed, target = %self.target_key,
                 "requesting signatures for address"
             );
-            let txs = self
-                .api
-                .get_signatures_for_address(&self.target_key, self.last_observed, earliest)
-                .await;
+            let txs = loop {
+                let res = self
+                    .api
+                    .get_signatures_for_address(&self.target_key, self.last_observed, earliest)
+                    .await;
+
+                if let Some(sleep_duration) = self.rps_limit_sleep {
+                    if matches!(
+                        res,
+                        Err(ClientError {
+                            kind: ClientErrorKind::Reqwest(ref err),
+                            ..
+                        }) if err.status().map_or(false, |code| code == 429),
+                    ) {
+                        sleep(sleep_duration).await;
+                        continue;
+                    }
+                }
+                break res;
+            };
             // Sorted from the most recent to the oldest
             let txs = ward!([error] txs, "could not request signatures");
 

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::Result;
 use clap::Parser;
 use solana::solana_api::SolanaApi;
@@ -27,6 +29,10 @@ struct Args {
 
     #[arg(short, long, default_value = None, value_name = "POSTGRES_URL")]
     pg_url: String,
+
+    #[arg(long, default_value = None, value_name = "SECS")]
+    /// Seconds to sleep between RPS limit rejected gSFA
+    rps_limit_sleep: Option<u64>,
 }
 
 #[tokio::main]
@@ -47,6 +53,7 @@ async fn main() -> Result<()> {
 
     let api = SolanaApi::new(opts.url);
     let mut traverse = TraverseLedger::new(api, opts.target, from);
+    traverse.set_rps_limit_sleep(opts.rps_limit_sleep.map(Duration::from_secs));
     let mut adb = accountsdb::DummyAdb::new(opts.target, holder_repo.clone());
 
     let mut last_written_slot = None;
@@ -195,7 +202,7 @@ mod accountsdb {
         ) -> Option<Vec<u8>> {
             let data = tokio::task::block_in_place(move || {
                 Handle::current()
-                    .block_on(async move { db.get_by_pubkey(&pubkey, slot, tx_idx).await })
+                    .block_on(async move { db.get_by_pubkey(pubkey, slot, tx_idx).await })
             });
 
             match data {
