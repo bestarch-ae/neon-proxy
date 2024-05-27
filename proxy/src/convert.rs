@@ -14,23 +14,23 @@ use rpc_api_types::{
 use common::solana_sdk::hash::Hash;
 use common::types::{EventLog, NeonTxInfo, SolanaBlock};
 
-fn neon_extra_fields(tx: &NeonTxInfo) -> OtherFields {
+fn neon_extra_fields(tx: &NeonTxInfo) -> Result<OtherFields, Error> {
     let mut neon_fields = std::collections::BTreeMap::new();
 
     // TODO: implement proper recovery id calculation (EIP-155)
     neon_fields.insert(
         "v".to_string(),
-        serde_json::to_value(U256::from(tx.transaction.recovery_id())).unwrap(),
+        serde_json::to_value(U256::from(tx.transaction.recovery_id())).context("extra fields")?,
     );
 
     neon_fields.insert(
         "r".to_string(),
-        serde_json::to_value(tx.transaction.r()).unwrap(),
+        serde_json::to_value(tx.transaction.r()).context("extra fields")?,
     );
 
     neon_fields.insert(
         "s".to_string(),
-        serde_json::to_value(tx.transaction.s()).unwrap(),
+        serde_json::to_value(tx.transaction.s()).context("extra fields")?,
     );
 
     // TODO: get chainId from somewhere if None
@@ -41,11 +41,11 @@ fn neon_extra_fields(tx: &NeonTxInfo) -> OtherFields {
         serde_json::to_value(chain_id).unwrap(),
     );
 
-    OtherFields::new(neon_fields)
+    Ok(OtherFields::new(neon_fields))
 }
 
 pub fn neon_to_eth(tx: NeonTxInfo, blockhash: Option<&str>) -> Result<Transaction, Error> {
-    let other = neon_extra_fields(&tx);
+    let other = neon_extra_fields(&tx)?;
 
     Ok(Transaction {
         hash: B256::from_str(&tx.neon_signature).context("hash")?,
