@@ -18,6 +18,7 @@ pub enum Error {
 
 impl From<Error> for jsonrpsee::types::ErrorObjectOwned {
     fn from(value: Error) -> Self {
+        tracing::error!("error: {}", value);
         match value {
             Error::DB(..) | Error::Parse(..) => ErrorCode::InternalError.into(),
         }

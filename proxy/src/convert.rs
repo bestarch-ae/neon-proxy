@@ -5,6 +5,7 @@ use hex_literal::hex;
 use reth_primitives::revm_primitives::LogData;
 use reth_primitives::trie::EMPTY_ROOT_HASH;
 use reth_primitives::{Address, Bloom, Bytes, Log as PrimitiveLog, B256, U256};
+use rpc_api_types::other::OtherFields;
 use rpc_api_types::{
     AnyReceiptEnvelope, AnyTransactionReceipt, Block, BlockTransactions, Header, Log, Receipt,
     ReceiptWithBloom, Transaction, TransactionReceipt, WithOtherFields,
@@ -13,7 +14,39 @@ use rpc_api_types::{
 use common::solana_sdk::hash::Hash;
 use common::types::{EventLog, NeonTxInfo, SolanaBlock};
 
+fn neon_extra_fields(tx: &NeonTxInfo) -> Result<OtherFields, Error> {
+    let mut neon_fields = std::collections::BTreeMap::new();
+
+    // TODO: implement proper recovery id calculation (EIP-155)
+    neon_fields.insert(
+        "v".to_string(),
+        serde_json::to_value(U256::from(tx.transaction.recovery_id())).context("extra fields")?,
+    );
+
+    neon_fields.insert(
+        "r".to_string(),
+        serde_json::to_value(tx.transaction.r()).context("extra fields")?,
+    );
+
+    neon_fields.insert(
+        "s".to_string(),
+        serde_json::to_value(tx.transaction.s()).context("extra fields")?,
+    );
+
+    // TODO: get chainId from somewhere if None
+    let chain_id = tx.transaction.chain_id();
+
+    neon_fields.insert(
+        "chainID".to_string(),
+        serde_json::to_value(chain_id).unwrap(),
+    );
+
+    Ok(OtherFields::new(neon_fields))
+}
+
 pub fn neon_to_eth(tx: NeonTxInfo, blockhash: Option<&str>) -> Result<Transaction, Error> {
+    let other = neon_extra_fields(&tx)?;
+
     Ok(Transaction {
         hash: B256::from_str(&tx.neon_signature).context("hash")?,
         nonce: tx.transaction.nonce(),
@@ -30,11 +63,11 @@ pub fn neon_to_eth(tx: NeonTxInfo, blockhash: Option<&str>) -> Result<Transactio
         max_fee_per_blob_gas: None,
         input: Bytes::copy_from_slice(tx.transaction.call_data()),
         signature: None, /* TODO: what this */
-        chain_id: None,  /* TODO: fill in */
+        chain_id: tx.transaction.chain_id(),
         blob_versioned_hashes: None,
         access_list: None,
         transaction_type: Some(tx.tx_type),
-        other: Default::default(), // TODO: add v r s
+        other,
     })
 }
 
