@@ -139,6 +139,7 @@ impl HolderRepo {
         Ok(None)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert(
         &self,
         slot: u64,
