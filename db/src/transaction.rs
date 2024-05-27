@@ -169,10 +169,7 @@ impl TransactionRepo {
             format!("{:#0x}", tx.transaction.value()),
             format!("{:#0x}", tx.gas_used),
             format!("{:#0x}", tx.sum_gas_used),
-            tx.transaction
-                .target()
-                .map(|x| x.to_string())
-                .unwrap_or_default(),
+            tx.transaction.target().map(|x| x.to_string()),
             tx.contract.map(|c| c.to_string()),
             format!("{:#0x}", tx.status),
             tx.is_cancelled,
@@ -227,6 +224,7 @@ impl TransactionRepo {
         &self,
         by: TransactionBy,
     ) -> impl Stream<Item = Result<(String, EventLog), Error>> + '_ {
+        tracing::info!(?by, "fetching logs");
         let (slot, hash) = by.slot_hash();
         sqlx::query_as!(
             NeonTransactionLogRow,
@@ -255,6 +253,7 @@ impl TransactionRepo {
     }
 
     pub async fn fetch(&self, by: TransactionBy) -> Result<Vec<WithBlockhash<NeonTxInfo>>, Error> {
+        tracing::info!(?by, "fetching transactions");
         let mut transactions: Vec<_> = self.fetch_without_events(by).try_collect().await?;
         if transactions.is_empty() {
             return Ok(transactions);
@@ -262,7 +261,9 @@ impl TransactionRepo {
         let mut tx_iter = transactions.iter_mut();
         let mut current_tx = tx_iter.next().expect("checked not empty");
 
-        while let Some((tx_hash, log)) = self.fetch_logs(by).try_next().await? {
+        let mut logs = self.fetch_logs(by);
+
+        while let Some((tx_hash, log)) = logs.try_next().await? {
             while current_tx.inner.neon_signature != tx_hash {
                 current_tx = tx_iter.next().expect("inconsistent log and tx order");
             }
