@@ -4,7 +4,7 @@ use anyhow::{Context, Error};
 use hex_literal::hex;
 use reth_primitives::revm_primitives::LogData;
 use reth_primitives::trie::EMPTY_ROOT_HASH;
-use reth_primitives::{Address, Bloom, Bytes, Log as PrimitiveLog, B256, U256};
+use reth_primitives::{Address, Bloom, Bytes, Log as PrimitiveLog, B256, B64, U256};
 use rpc_api_types::other::OtherFields;
 use rpc_api_types::{
     AnyReceiptEnvelope, AnyTransactionReceipt, Block, BlockTransactions, Header, Log, Receipt,
@@ -38,7 +38,7 @@ fn neon_extra_fields(tx: &NeonTxInfo) -> Result<OtherFields, Error> {
 
     neon_fields.insert(
         "chainID".to_string(),
-        serde_json::to_value(chain_id).unwrap(),
+        serde_json::to_value(chain_id).context("chainID")?,
     );
 
     Ok(OtherFields::new(neon_fields))
@@ -183,6 +183,8 @@ fn build_block_header(block: SolanaBlock, txs: &[NeonTxInfo]) -> Result<Header, 
         gas_used,
         gas_limit: MAX_BPF_CYCLES.max(gas_used),
         logs_bloom,
+        nonce: Some(B64::ZERO),
+        total_difficulty: Some(U256::ZERO),
         ..Default::default()
     })
 }
