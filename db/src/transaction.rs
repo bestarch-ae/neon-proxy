@@ -154,32 +154,42 @@ impl TransactionRepo {
                    $7, $8, $9, $10, $11, $12,
                    $13, $14, $15, $16, $17, $18,
                    $19, $20, $21, $22, $23, $24)
+            ON CONFLICT (neon_sig)
+            DO UPDATE SET
+               block_slot = $7,
+               /* sum_gas_used = EXCLUDED.sum_gas_used + $13, TODO */
+               is_completed = $19,
+               is_canceled = $18,
+               status = $17,
+               tx_idx = $8,
+               sol_ix_idx = $5,
+               sol_ix_inner_idx = $6
             "#,
-            tx_hash,
-            tx.tx_type as i32,
-            tx.from.to_string(),
-            sol_sig,
-            tx.sol_ix_idx as i64,
-            tx.sol_ix_inner_idx as i64,
-            block_slot,
-            tx.sol_tx_idx as i64,
-            format!("{:#0x}", tx.transaction.nonce()),
-            format!("{:#0x}", tx.transaction.gas_price()),
-            format!("{:#0x}", tx.transaction.gas_limit()),
-            format!("{:#0x}", tx.transaction.value()),
-            format!("{:#0x}", tx.gas_used),
-            format!("{:#0x}", tx.sum_gas_used),
-            tx.transaction.target().map(|x| x.to_string()),
-            tx.contract.map(|c| c.to_string()),
-            format!("{:#0x}", tx.status),
-            tx.is_cancelled,
-            tx.is_completed,
+            tx_hash,                                        // 1
+            tx.tx_type as i32,                              // 2
+            tx.from.to_string(),                            // 3
+            sol_sig,                                        // 4
+            tx.sol_ix_idx as i64,                           // 5
+            tx.sol_ix_inner_idx as i64,                     // 6
+            block_slot,                                     // 7
+            tx.sol_tx_idx as i64,                           // 8
+            format!("{:#0x}", tx.transaction.nonce()),      // 9
+            format!("{:#0x}", tx.transaction.gas_price()),  // 10
+            format!("{:#0x}", tx.transaction.gas_limit()),  // 11
+            format!("{:#0x}", tx.transaction.value()),      // 12
+            format!("{:#0x}", tx.gas_used),                 // 13
+            format!("{:#0x}", tx.sum_gas_used),             // 14
+            tx.transaction.target().map(|x| x.to_string()), // 15
+            tx.contract.map(|c| c.to_string()),             // 16
+            format!("{:#0x}", tx.status),                   // 17
+            tx.is_cancelled,                                // 18
+            tx.is_completed,                                // 19
             // TODO: Fix this for legacy
-            format!("{:#0x}", tx.transaction.recovery_id()),
-            format!("{:#0x}", tx.transaction.r()),
-            format!("{:#0x}", tx.transaction.s()),
-            format!("0x{}", hex::encode(tx.transaction.call_data())),
-            &[] /* logs */
+            format!("{:#0x}", tx.transaction.recovery_id()), // 20
+            format!("{:#0x}", tx.transaction.r()),           // 21
+            format!("{:#0x}", tx.transaction.s()),           // 22
+            format!("0x{}", hex::encode(tx.transaction.call_data())), // 23
+            &[]                                              /* 24 logs */
         )
         .execute(&mut *txn)
         .await?;

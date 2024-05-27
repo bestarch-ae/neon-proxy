@@ -120,7 +120,7 @@ impl Mnemonic {
             .map(|part| {
                 let mut buf = [0u8; 32];
                 let _ = BASE64.decode_slice_unchecked(part, &mut buf)?;
-                Ok::<_, Error>(U256::from_le_bytes(buf))
+                Ok::<_, Error>(U256::from_be_bytes(buf))
             })
             .collect::<Result<Vec<_>, _>>()?;
         let data = BASE64.decode(parts[2 + topics_count as usize])?;

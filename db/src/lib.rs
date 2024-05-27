@@ -47,6 +47,7 @@ impl SolanaSignaturesRepo {
                 tx_idx,
                 signature
             ) VALUES($1, $2, $3)
+            ON CONFLICT DO NOTHING
             "#,
             slot as i64,
             tx_idx as i32,
