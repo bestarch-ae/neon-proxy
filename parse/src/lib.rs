@@ -172,7 +172,7 @@ fn merge_logs_transactions(
 
         let tx_info = NeonTxInfo {
             tx_type: 0, // TODO
-            neon_signature: hex::encode(neon_sig),
+            neon_signature: neon_sig,
             from: tx.recover_caller_address().unwrap_or_default(),
             contract,
             transaction: tx,
@@ -187,7 +187,7 @@ fn merge_logs_transactions(
                 .as_ref()
                 .map(|i| i.total_gas_used)
                 .unwrap_or_default(), // TODO: unclear what this is
-            sol_signature: String::default(),    // TODO: should be in input?
+            sol_signature: Signature::default(), // TODO: should be in input?
             sol_slot: slot,
             tx_idx: idx as u64, /* actually just tx idx */
             sol_ix_idx: sol_ix_idx as u64,
@@ -497,7 +497,7 @@ mod tests {
                 .collect();
         assert_eq!(neon_tx_infos.len(), references.len());
         for (info, refr) in neon_tx_infos.iter().zip(references) {
-            let neon_sig = format!("0x{}", info.neon_signature);
+            let neon_sig = format!("0x{}", hex::encode(info.neon_signature));
             assert_eq!(refr.neon_sig, neon_sig);
             assert_eq!(refr.tx_type, info.tx_type);
             // fails as we don't set from address

@@ -84,7 +84,10 @@ async fn main() -> Result<()> {
                     if let Err(err) = tx_repo.insert(tx).await {
                         tracing::warn!(?err, "failed to save neon transaction");
                     } else {
-                        tracing::info!(signature = tx.neon_signature, "saved transaction");
+                        tracing::info!(
+                            signature = hex::encode(tx.neon_signature),
+                            "saved transaction"
+                        );
                     }
                 }
                 if let Err(err) = sig_repo.insert(slot, tx_idx, signature).await {
