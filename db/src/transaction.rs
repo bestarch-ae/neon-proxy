@@ -1,10 +1,38 @@
 use anyhow::{bail, Context};
+use futures_util::{Stream, StreamExt, TryStreamExt};
+use sqlx::FromRow;
+
 use common::ethnum::U256;
 use common::evm_loader::types::{AccessListTx, Address, LegacyTx, Transaction, TransactionPayload};
 use common::types::{EventKind, EventLog, NeonTxInfo};
-use futures_util::{Stream, StreamExt, TryStreamExt};
 
 use super::Error;
+
+#[derive(Debug, Clone)]
+/// [`EventLog`] with additional block and transaction data
+pub struct RichLog {
+    pub blockhash: String,
+    pub slot: u64,
+    pub timestamp: i64,
+    pub tx_idx: u64,
+    pub tx_hash: String,
+    pub event: EventLog,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum RichLogBy {
+    Hash([u8; 32]),
+    SlotRange { from: Option<u64>, to: Option<u64> },
+}
+
+impl RichLogBy {
+    fn bounds(self) -> (Option<u64>, Option<u64>, Option<String>) {
+        match self {
+            Self::SlotRange { from, to } => (from, to, None),
+            Self::Hash(hash) => (None, None, Some(format!("0x{}", hex::encode(hash)))),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum TransactionBy {
@@ -234,7 +262,7 @@ impl TransactionRepo {
         &self,
         by: TransactionBy,
     ) -> impl Stream<Item = Result<(String, EventLog), Error>> + '_ {
-        tracing::info!(?by, "fetching logs");
+        tracing::debug!(?by, "fetching logs");
         let (slot, hash) = by.slot_hash();
         sqlx::query_as!(
             NeonTransactionLogRow,
@@ -258,6 +286,57 @@ impl TransactionRepo {
             let hash = row.tx_hash.clone();
             row.try_into().map(|log| (hash, log))
         })
+        .fetch(&self.pool)
+        .map(|res| Ok(res??))
+    }
+
+    pub fn fetch_rich_logs(
+        &self,
+        by: RichLogBy,
+        address: &[String],
+        topics: [&[String]; 4],
+    ) -> impl Stream<Item = Result<RichLog, Error>> + '_ {
+        tracing::debug!(?by, ?address, ?topics, "fetching logs");
+        let (from, to, hash) = by.bounds();
+
+        sqlx::query_as!(
+            NeonRichLogRow,
+            r#"SELECT
+                address as "address!", tx_hash as "tx_hash!",
+                log_idx as "log_idx!", L.block_slot as "block_slot!",
+                event_level as "event_level!", event_order as "event_order!",
+                log_topic1 as "log_topic1!", log_topic2 as "log_topic2!",
+                log_topic3 as "log_topic3!", log_topic4 as "log_topic4!",
+                log_topic_cnt as "log_topic_cnt!", log_data as "log_data!",
+                block_hash as "block_hash!", block_time as "block_time!",
+                tx_idx as "tx_idx!"
+               FROM neon_transaction_logs L
+               LEFT JOIN solana_blocks B ON B.block_slot = L.block_slot
+               WHERE (L.block_slot >= $1) AND (L.block_slot <= $2)
+                   AND (block_hash = $3 OR $4)
+                   AND (address = ANY($5) OR $6)
+                   AND (log_topic1 = ANY($7) OR $8)
+                   AND (log_topic2 = ANY($9) OR $10)
+                   AND (log_topic3 = ANY($11) OR $12)
+                   AND (log_topic4 = ANY($13) OR $14)
+               ORDER BY (L.block_slot, tx_idx, tx_log_idx) ASC
+            "#,
+            from.unwrap_or(0) as i64,                 // 1
+            to.map_or(i64::MAX, |to| to as i64),      // 2
+            hash.as_ref().map_or("", String::as_str), // 3
+            hash.is_none(),                           // 4
+            address,                                  // 5
+            address.is_empty(),                       // 6
+            topics[0],                                // 7
+            topics[0].is_empty(),                     // 8
+            topics[1],                                // 9
+            topics[1].is_empty(),                     // 10
+            topics[2],                                // 11
+            topics[2].is_empty(),                     // 12
+            topics[3],                                // 13
+            topics[3].is_empty(),                     // 14
+        )
+        .map(TryInto::try_into)
         .fetch(&self.pool)
         .map(|res| Ok(res??))
     }
@@ -437,6 +516,7 @@ impl NeonTransactionRow {
     }
 }
 
+#[derive(Debug, FromRow)]
 struct NeonTransactionLogRow {
     address: String,
     tx_hash: String,
@@ -489,5 +569,58 @@ impl TryFrom<NeonTransactionLogRow> for EventLog {
             })
         }
         .context("event log")
+    }
+}
+
+#[derive(Debug, FromRow)]
+struct NeonRichLogRow {
+    block_hash: String,
+    block_slot: i64,
+    block_time: i64,
+
+    // NeonTransactionLogRow
+    address: String,
+    tx_hash: String,
+    log_idx: i32,
+
+    event_level: i32,
+    event_order: i32,
+
+    log_topic1: String,
+    log_topic2: String,
+    log_topic3: String,
+    log_topic4: String,
+    log_topic_cnt: i32,
+
+    log_data: String,
+    tx_idx: i64,
+}
+
+impl TryFrom<NeonRichLogRow> for RichLog {
+    type Error = anyhow::Error;
+
+    fn try_from(value: NeonRichLogRow) -> Result<Self, Self::Error> {
+        let log = NeonTransactionLogRow {
+            address: value.address,
+            tx_hash: value.tx_hash.clone(),
+            log_idx: value.log_idx,
+            event_level: value.event_level,
+            event_order: value.event_order,
+            log_topic1: value.log_topic1,
+            log_topic2: value.log_topic2,
+            log_topic3: value.log_topic3,
+            log_topic4: value.log_topic4,
+            log_topic_cnt: value.log_topic_cnt,
+            log_data: value.log_data,
+        };
+
+        Ok(RichLog {
+            blockhash: value.block_hash,
+            slot: value.block_slot.try_into().context("block_slot")?,
+            timestamp: value.block_time,
+            tx_idx: value.tx_idx.try_into().context("tx_idx")?,
+            tx_hash: value.tx_hash,
+            event: log.try_into()?,
+        })
     }
 }

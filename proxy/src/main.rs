@@ -1,6 +1,6 @@
 use clap::Parser;
 use jsonrpsee::types::ErrorCode;
-use rpc_api::EthApiServer;
+use rpc_api::{EthApiServer, EthFilterApiServer};
 use thiserror::Error;
 
 mod convert;
@@ -49,11 +49,19 @@ async fn main() {
     let pool = db::connect(&opts.pg_url).await.unwrap();
 
     let eth = EthApiImpl::new(pool);
+    let mut module = jsonrpsee::server::RpcModule::new(());
+    module
+        .merge(<EthApiImpl as EthApiServer>::into_rpc(eth.clone()))
+        .expect("no conflicts");
+    module
+        .merge(<EthApiImpl as EthFilterApiServer>::into_rpc(eth.clone()))
+        .expect("no conflicts");
+
     let server = jsonrpsee::server::Server::builder()
         .build(&opts.listen)
         .await
         .unwrap();
     tracing::info!("Listening on {}", opts.listen);
-    let handle = server.start(eth.into_rpc());
+    let handle = server.start(module);
     handle.stopped().await;
 }

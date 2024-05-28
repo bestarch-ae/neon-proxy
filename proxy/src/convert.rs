@@ -1,14 +1,16 @@
 use std::str::FromStr;
 
-use anyhow::{Context, Error};
+use anyhow::{anyhow, Context, Error};
+use db::{RichLog, RichLogBy};
 use hex_literal::hex;
 use reth_primitives::revm_primitives::LogData;
 use reth_primitives::trie::EMPTY_ROOT_HASH;
 use reth_primitives::{Address, Bloom, Bytes, Log as PrimitiveLog, B256, B64, U256};
 use rpc_api_types::other::OtherFields;
 use rpc_api_types::{
-    AnyReceiptEnvelope, AnyTransactionReceipt, Block, BlockTransactions, Header, Log, Receipt,
-    ReceiptWithBloom, Transaction, TransactionReceipt, WithOtherFields,
+    AnyReceiptEnvelope, AnyTransactionReceipt, Block, BlockNumberOrTag, BlockTransactions, Filter,
+    FilterBlockOption, FilterSet, Header, Log, Receipt, ReceiptWithBloom, Transaction,
+    TransactionReceipt, ValueOrArray, WithOtherFields,
 };
 
 use common::solana_sdk::hash::Hash;
@@ -219,4 +221,64 @@ pub fn build_block(block: SolanaBlock, txs: Vec<NeonTxInfo>, full: bool) -> Resu
 fn sol_blockhash_into_hex(hash: impl AsRef<str>) -> Result<B256, <Hash as FromStr>::Err> {
     let hash = Hash::from_str(hash.as_ref())?;
     Ok(hash.to_bytes().into())
+}
+
+pub fn convert_rich_log(log: RichLog) -> Result<Log, Error> {
+    Ok(Log {
+        inner: neon_event_to_log(&log.event),
+        transaction_index: Some(log.tx_idx),
+        block_hash: Some(sol_blockhash_into_hex(&log.blockhash)?),
+        block_number: Some(log.slot),
+        block_timestamp: Some(log.timestamp as u64),
+        transaction_hash: Some(B256::from_str(&log.tx_hash).context("transaction hash")?),
+        log_index: Some(log.event.log_idx),
+        removed: false,
+    })
+}
+
+#[derive(Debug, Clone)]
+pub struct LogFilters {
+    pub block: RichLogBy,
+    pub address: Vec<String>,
+    pub topics: [Vec<String>; 4],
+}
+
+pub fn convert_filters(filters: Filter) -> Result<LogFilters, Error> {
+    let extract_block_number = |block| match block {
+        BlockNumberOrTag::Number(block) => Ok(block),
+        tag => Err(anyhow!("block tag {tag} not supported")),
+    };
+    let block = match filters.block_option {
+        FilterBlockOption::Range {
+            from_block,
+            to_block,
+        } => {
+            let from = from_block.map(extract_block_number).transpose()?;
+            let to = to_block.map(extract_block_number).transpose()?;
+            RichLogBy::SlotRange { from, to }
+        }
+        FilterBlockOption::AtBlockHash(hash) => RichLogBy::Hash(hash.0),
+    };
+
+    fn extract_filter_set<T>(filter_set: FilterSet<T>) -> Vec<String>
+    where
+        T: Eq + std::hash::Hash + Clone + ToString,
+    {
+        let mut vec = match filter_set.to_value_or_array() {
+            None => Vec::new(),
+            Some(ValueOrArray::Value(val)) => vec![val.to_string()],
+            Some(ValueOrArray::Array(vec)) => vec.iter().map(ToString::to_string).collect(),
+        };
+        vec.iter_mut().for_each(|str| str.make_ascii_lowercase());
+        vec
+    }
+
+    let address = extract_filter_set(filters.address);
+    let topics = filters.topics.map(extract_filter_set);
+
+    Ok(LogFilters {
+        block,
+        address,
+        topics,
+    })
 }
