@@ -72,7 +72,7 @@ pub struct NeonTxInfo {
     // TODO 2: Should probably be replaced by a ref to corresponding `NeonIxReceeipt`
     pub sol_signature: String,
     pub sol_slot: u64,
-    pub sol_tx_idx: u64,
+    pub tx_idx: u64,
     pub sol_ix_idx: u64,
     pub sol_ix_inner_idx: u64,
 

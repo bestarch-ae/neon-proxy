@@ -52,7 +52,7 @@ pub fn neon_to_eth(tx: NeonTxInfo, blockhash: Option<&str>) -> Result<Transactio
         nonce: tx.transaction.nonce(),
         block_hash: blockhash.map(sol_blockhash_into_hex).transpose()?,
         block_number: Some(tx.sol_slot), /* TODO: not sure if correct */
-        transaction_index: Some(tx.sol_tx_idx),
+        transaction_index: Some(tx.tx_idx),
         from: tx.from.0.into(),
         to: tx.transaction.target().map(|addr| addr.0.into()),
         value: U256::from_be_bytes(tx.transaction.value().to_be_bytes()),
@@ -85,7 +85,7 @@ pub fn neon_to_eth_receipt(
                 Result::<_, Error>::Ok(Log {
                     inner: neon_event_to_log(event),
                     // TODO: Do we really need all these fields
-                    transaction_index: Some(tx.sol_tx_idx),
+                    transaction_index: Some(tx.tx_idx),
                     block_hash: blockhash.map(sol_blockhash_into_hex).transpose()?,
                     block_number: Some(tx.sol_slot),
                     block_timestamp: None,
@@ -107,7 +107,7 @@ pub fn neon_to_eth_receipt(
     let receipt = TransactionReceipt {
         inner: envelope,
         transaction_hash: B256::from_str(&tx.neon_signature).context("transaction_hash")?,
-        transaction_index: Some(tx.sol_tx_idx),
+        transaction_index: Some(tx.tx_idx),
         block_hash: blockhash.map(sol_blockhash_into_hex).transpose()?,
         block_number: Some(tx.sol_slot),
         gas_used: tx.gas_used.as_u128(),
