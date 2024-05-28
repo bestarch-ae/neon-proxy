@@ -86,7 +86,7 @@ pub fn neon_to_eth_receipt(
                     inner: neon_event_to_log(event),
                     // TODO: Do we really need all these fields
                     transaction_index: Some(tx.sol_tx_idx),
-                    block_hash: None,
+                    block_hash: blockhash.map(sol_blockhash_into_hex).transpose()?,
                     block_number: Some(tx.sol_slot),
                     block_timestamp: None,
                     transaction_hash: Some(
