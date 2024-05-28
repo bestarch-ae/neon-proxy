@@ -137,7 +137,7 @@ impl TransactionRepo {
 
     pub async fn insert(&self, tx: &NeonTxInfo) -> Result<(), sqlx::Error> {
         let block_slot = tx.sol_slot as i64;
-        let tx_hash = hex::decode(tx.neon_signature.clone()).unwrap();
+        let tx_hash = tx.neon_signature;
         let tx_idx = tx.tx_idx as i32;
         let sol_sig = &tx.sol_signature;
         let sol_idx = tx.sol_ix_idx as i32;
@@ -183,7 +183,7 @@ impl TransactionRepo {
             "#,
                 log.address.map(PgAddress::from).unwrap_or_default() as PgAddress,
                 block_slot,
-                hex::decode(&tx_hash).unwrap(),
+                &tx_hash,
                 tx_idx,
                 tx_log_idx,
                 log.log_idx as i64,
@@ -247,7 +247,7 @@ impl TransactionRepo {
                sol_ix_idx = $5,
                sol_ix_inner_idx = $6
             "#,
-            tx_hash,                                                           // 1
+            &tx_hash,                                                          // 1
             tx.tx_type as i32,                                                 // 2
             PgAddress::from(tx.from) as PgAddress,                             // 3
             sol_sig.as_ref(),                                                  // 4
@@ -324,8 +324,8 @@ impl TransactionRepo {
                 address as "address?: PgAddress", tx_hash as "tx_hash!",
                 log_idx as "log_idx!",
                 event_level as "event_level!", event_order as "event_order!",
-                log_topic1 as "log_topic1!", log_topic2 as "log_topic2!",
-                log_topic3 as "log_topic3!", log_topic4 as "log_topic4!",
+                log_topic1 as "log_topic1?", log_topic2 as "log_topic2?",
+                log_topic3 as "log_topic3?", log_topic4 as "log_topic4?",
                 log_topic_cnt as "log_topic_cnt!", log_data as "log_data!"
                FROM neon_transaction_logs
                WHERE (tx_hash = $1 OR $2) AND (block_slot = $3 OR $4)

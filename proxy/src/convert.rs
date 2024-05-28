@@ -50,7 +50,7 @@ pub fn neon_to_eth(tx: NeonTxInfo, blockhash: Option<&str>) -> Result<Transactio
     let other = neon_extra_fields(&tx)?;
 
     Ok(Transaction {
-        hash: B256::from_str(&tx.neon_signature).context("hash")?,
+        hash: B256::from(&tx.neon_signature),
         nonce: tx.transaction.nonce(),
         block_hash: blockhash.map(sol_blockhash_into_hex).transpose()?,
         block_number: Some(tx.sol_slot), /* TODO: not sure if correct */
@@ -91,9 +91,7 @@ pub fn neon_to_eth_receipt(
                     block_hash: blockhash.map(sol_blockhash_into_hex).transpose()?,
                     block_number: Some(tx.sol_slot),
                     block_timestamp: None,
-                    transaction_hash: Some(
-                        B256::from_str(&tx.neon_signature).context("transaction hash")?,
-                    ),
+                    transaction_hash: Some(B256::from(&tx.neon_signature)),
                     log_index: Some(event.log_idx),
                     removed: false,
                 })
@@ -108,7 +106,7 @@ pub fn neon_to_eth_receipt(
 
     let receipt = TransactionReceipt {
         inner: envelope,
-        transaction_hash: B256::from_str(&tx.neon_signature).context("transaction_hash")?,
+        transaction_hash: B256::from(&tx.neon_signature),
         transaction_index: Some(tx.tx_idx),
         block_hash: blockhash.map(sol_blockhash_into_hex).transpose()?,
         block_number: Some(tx.sol_slot),
@@ -204,9 +202,8 @@ pub fn build_block(block: SolanaBlock, txs: Vec<NeonTxInfo>, full: bool) -> Resu
     } else {
         let txs = txs
             .into_iter()
-            .map(|tx| B256::from_str(&tx.neon_signature))
-            .collect::<Result<_, _>>()
-            .context("signatures")?;
+            .map(|tx| B256::from(&tx.neon_signature))
+            .collect();
         BlockTransactions::Hashes(txs)
     };
 
