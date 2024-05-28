@@ -1,5 +1,6 @@
 use common::types::NeonTxInfo;
 use db::WithBlockhash;
+use futures_util::StreamExt;
 use futures_util::TryStreamExt;
 use jsonrpsee::core::async_trait;
 use jsonrpsee::core::RpcResult;
@@ -7,7 +8,13 @@ use jsonrpsee::types::ErrorCode;
 use jsonrpsee::types::ErrorObjectOwned;
 use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, B256, B64, U256, U64};
 use rpc_api::servers::EthApiServer;
+use rpc_api::EthFilterApiServer;
 use rpc_api_types::serde_helpers::JsonStorageKey;
+use rpc_api_types::Filter;
+use rpc_api_types::FilterChanges;
+use rpc_api_types::FilterId;
+use rpc_api_types::Log;
+use rpc_api_types::PendingTransactionFilterKind;
 use rpc_api_types::{
     state::StateOverride, AccessListWithGasUsed, AnyTransactionReceipt, BlockOverrides, Bundle,
     EIP1186AccountProofResponse, EthCallResponse, FeeHistory, Header, Index, RichBlock,
@@ -15,6 +22,9 @@ use rpc_api_types::{
 };
 use sqlx::PgPool;
 
+use crate::convert::convert_filters;
+use crate::convert::convert_rich_log;
+use crate::convert::LogFilters;
 use crate::convert::{build_block, neon_to_eth, neon_to_eth_receipt};
 use crate::Error;
 
@@ -54,6 +64,19 @@ impl EthApiImpl {
     ) -> Result<Option<WithBlockhash<NeonTxInfo>>, Error> {
         let tx = self.transactions.fetch(by).await?.into_iter().next();
         Ok(tx)
+    }
+
+    async fn get_logs(&self, filters: LogFilters) -> Result<Vec<Log>, Error> {
+        self.transactions
+            .fetch_rich_logs(
+                filters.block,
+                &filters.address,
+                filters.topics.each_ref().map(Vec::as_slice),
+            )
+            .map_ok(convert_rich_log)
+            .map(|item| Ok(item??))
+            .try_collect::<Vec<_>>()
+            .await
     }
 }
 
@@ -442,5 +465,47 @@ impl EthApiServer for EthApiImpl {
         _block_number: Option<BlockId>,
     ) -> RpcResult<EIP1186AccountProofResponse> {
         todo!()
+    }
+}
+
+#[async_trait]
+impl EthFilterApiServer for EthApiImpl {
+    /// Returns logs matching given filter object.
+    async fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
+        let filters = convert_filters(filter).map_err(Error::from)?;
+        Ok(self.get_logs(filters).await?)
+    }
+
+    /// Creates anew filter and returns its id.
+    async fn new_filter(&self, _filter: Filter) -> RpcResult<FilterId> {
+        unimplemented()
+    }
+
+    /// Creates a new block filter and returns its id.
+    async fn new_block_filter(&self) -> RpcResult<FilterId> {
+        unimplemented()
+    }
+
+    /// Creates a pending transaction filter and returns its id.
+    async fn new_pending_transaction_filter(
+        &self,
+        _kind: Option<PendingTransactionFilterKind>,
+    ) -> RpcResult<FilterId> {
+        unimplemented()
+    }
+
+    /// Returns all filter changes since last poll.
+    async fn filter_changes(&self, _id: FilterId) -> RpcResult<FilterChanges> {
+        unimplemented()
+    }
+
+    /// Returns all logs matching given filter (in a range 'from' - 'to').
+    async fn filter_logs(&self, _id: FilterId) -> RpcResult<Vec<Log>> {
+        unimplemented()
+    }
+
+    /// Uninstalls filter.
+    async fn uninstall_filter(&self, _id: FilterId) -> RpcResult<bool> {
+        unimplemented()
     }
 }
