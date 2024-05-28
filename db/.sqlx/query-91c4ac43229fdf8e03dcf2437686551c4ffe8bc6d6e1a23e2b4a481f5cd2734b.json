@@ -5,21 +5,28 @@
     "columns": [],
     "parameters": {
       "Left": [
-        "Text",
+        {
+          "Custom": {
+            "name": "address",
+            "kind": {
+              "Domain": "Bytea"
+            }
+          }
+        },
         "Int8",
-        "Text",
+        "Bytea",
         "Int4",
         "Int4",
         "Int4",
         "Int4",
         "Int4",
-        "Text",
+        "Bytea",
         "Int4",
         "Int4",
-        "Text",
-        "Text",
-        "Text",
-        "Text",
+        "Bytea",
+        "Bytea",
+        "Bytea",
+        "Bytea",
         "Int4",
         "Text"
       ]
