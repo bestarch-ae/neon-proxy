@@ -169,7 +169,7 @@ impl From<NeonTxInfo> for DbRow {
             sol_ix_idx: val.sol_ix_idx,
             sol_ix_inner_idx: Some(val.sol_ix_inner_idx),
             block_slot: val.sol_slot,
-            tx_idx: val.sol_tx_idx,
+            tx_idx: val.tx_idx,
             nonce: format!("{:#0x}", val.transaction.nonce()),
             gas_price: format!("{:#0x}", val.transaction.gas_price()),
             gas_limit: format!("{:#0x}", val.transaction.gas_limit()),

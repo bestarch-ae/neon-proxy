@@ -40,7 +40,7 @@ impl TransactionRepo {
     pub async fn insert(&self, tx: &NeonTxInfo) -> Result<(), sqlx::Error> {
         let block_slot = tx.sol_slot as i64;
         let tx_hash = format!("0x{}", tx.neon_signature);
-        let tx_idx = tx.sol_tx_idx as i32;
+        let tx_idx = tx.tx_idx as i32;
         let sol_sig = &tx.sol_signature.to_string();
         let sol_idx = tx.sol_ix_idx as i32;
         let sol_inner_idx = tx.sol_ix_inner_idx as i32;
@@ -172,7 +172,7 @@ impl TransactionRepo {
             tx.sol_ix_idx as i64,                           // 5
             tx.sol_ix_inner_idx as i64,                     // 6
             block_slot,                                     // 7
-            tx.sol_tx_idx as i64,                           // 8
+            tx.tx_idx as i64,                               // 8
             format!("{:#0x}", tx.transaction.nonce()),      // 9
             format!("{:#0x}", tx.transaction.gas_price()),  // 10
             format!("{:#0x}", tx.transaction.gas_limit()),  // 11
@@ -418,7 +418,7 @@ impl NeonTransactionRow {
             sum_gas_used: U256::from_str_hex(&self.sum_gas_used).context("sum_gas_used")?,
             sol_signature: self.sol_sig,
             sol_slot: self.block_slot.try_into().context("sol_slot")?,
-            sol_tx_idx: self.tx_idx.try_into().context("sol_tx_idx")?,
+            tx_idx: self.tx_idx.try_into().context("sol_tx_idx")?,
             sol_ix_idx: self.sol_ix_idx.try_into().context("sol_ix_idx")?,
             sol_ix_inner_idx: self
                 .sol_ix_inner_idx

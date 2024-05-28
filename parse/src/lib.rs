@@ -189,7 +189,7 @@ fn merge_logs_transactions(
                 .unwrap_or_default(), // TODO: unclear what this is
             sol_signature: String::default(),    // TODO: should be in input?
             sol_slot: slot,
-            sol_tx_idx: idx as u64, /* actually just tx idx */
+            tx_idx: idx as u64, /* actually just tx idx */
             sol_ix_idx: sol_ix_idx as u64,
             sol_ix_inner_idx: 0, // TODO: what is this?
             status: log_info.ret.as_ref().map(|r| r.status).unwrap_or_default(), // TODO
