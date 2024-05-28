@@ -15,7 +15,7 @@ pub struct RichLog {
     pub slot: u64,
     pub timestamp: i64,
     pub tx_idx: u64,
-    pub tx_hash: String,
+    pub tx_hash: Vec<u8>,
     pub event: EventLog,
 }
 
@@ -34,6 +34,76 @@ impl RichLogBy {
     }
 }
 
+#[derive(sqlx::Type, Copy, Clone, Debug, Default)]
+#[sqlx(type_name = "Address", transparent)]
+struct PgAddress([u8; 20]);
+
+impl From<Address> for PgAddress {
+    fn from(addr: Address) -> Self {
+        Self(addr.0)
+    }
+}
+
+impl From<PgAddress> for Address {
+    fn from(value: PgAddress) -> Self {
+        Address(value.0)
+    }
+}
+
+impl From<Vec<u8>> for PgAddress {
+    fn from(val: Vec<u8>) -> Self {
+        assert_eq!(val.len(), 20);
+        let mut buf = [0; 20];
+        buf.copy_from_slice(&val);
+        PgAddress(buf)
+    }
+}
+
+fn u256_to_bytes(val: &U256) -> [u8; 32] {
+    let (hi, lo) = val.into_words();
+    let mut buf = [0; 32];
+    buf[0..16].copy_from_slice(&lo.to_le_bytes());
+    buf[16..32].copy_from_slice(&hi.to_le_bytes());
+    buf
+}
+
+#[derive(sqlx::Type, Clone, Debug, Default)]
+#[sqlx(type_name = "U256", transparent)]
+struct PgU256(sqlx::types::BigDecimal);
+
+impl From<sqlx::types::BigDecimal> for PgU256 {
+    fn from(val: sqlx::types::BigDecimal) -> Self {
+        Self(val)
+    }
+}
+
+impl From<U256> for PgU256 {
+    fn from(val: U256) -> Self {
+        let buf = u256_to_bytes(&val);
+        let bigint = num_bigint::BigInt::from_bytes_le(num_bigint::Sign::Plus, &buf);
+
+        PgU256(sqlx::types::BigDecimal::new(bigint, 0))
+    }
+}
+
+impl From<PgU256> for U256 {
+    fn from(value: PgU256) -> Self {
+        use std::str::FromStr;
+        U256::from_str(&value.0.to_string()).unwrap()
+    }
+}
+
+#[test]
+fn from_to_256() {
+    let x =
+        U256::from_str_hex("0xc7f505b2f371ae2175ee4913f4499e1f2633a7b5936321eed1cdaeb6115181d2")
+            .unwrap();
+    let big = PgU256::from(x);
+    let y: U256 = big.clone().into();
+    println!("x={} big={} y = {}", x, big.0, y);
+    assert_eq!(x, y);
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum TransactionBy {
     Hash([u8; 32]),
@@ -41,9 +111,9 @@ pub enum TransactionBy {
 }
 
 impl TransactionBy {
-    pub fn slot_hash(self) -> (Option<u64>, Option<String>) {
+    pub fn slot_hash(self) -> (Option<u64>, Option<[u8; 32]>) {
         match self {
-            TransactionBy::Hash(hash) => (None, Some(format!("0x{}", hex::encode(hash)))),
+            TransactionBy::Hash(hash) => (None, Some(hash)),
             TransactionBy::Slot(slot) => (Some(slot), None),
         }
     }
@@ -67,9 +137,9 @@ impl TransactionRepo {
 
     pub async fn insert(&self, tx: &NeonTxInfo) -> Result<(), sqlx::Error> {
         let block_slot = tx.sol_slot as i64;
-        let tx_hash = format!("0x{}", tx.neon_signature);
+        let tx_hash = hex::decode(tx.neon_signature.clone()).unwrap();
         let tx_idx = tx.tx_idx as i32;
-        let sol_sig = &tx.sol_signature.to_string();
+        let sol_sig = &tx.sol_signature;
         let sol_idx = tx.sol_ix_idx as i32;
         let sol_inner_idx = tx.sol_ix_inner_idx as i32;
 
@@ -83,26 +153,10 @@ impl TransactionRepo {
                 continue;
             }
 
-            let topic1 = log
-                .topic_list
-                .first()
-                .map(|t| format!("{:#0x}", t))
-                .unwrap_or_default();
-            let topic2 = log
-                .topic_list
-                .get(1)
-                .map(|t| format!("{:#0x}", t))
-                .unwrap_or_default();
-            let topic3 = log
-                .topic_list
-                .get(2)
-                .map(|t| format!("{:#0x}", t))
-                .unwrap_or_default();
-            let topic4 = log
-                .topic_list
-                .get(3)
-                .map(|t| format!("{:#0x}", t))
-                .unwrap_or_default();
+            let topic1 = log.topic_list.first().map(u256_to_bytes);
+            let topic2 = log.topic_list.get(1).map(u256_to_bytes);
+            let topic3 = log.topic_list.get(2).map(u256_to_bytes);
+            let topic4 = log.topic_list.get(3).map(u256_to_bytes);
 
             sqlx::query!(
                 r#"
@@ -127,21 +181,21 @@ impl TransactionRepo {
                 log_data
             ) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
             "#,
-                log.address.map(|a| a.to_string()).unwrap_or_default(),
+                log.address.map(PgAddress::from).unwrap_or_default() as PgAddress,
                 block_slot,
-                tx_hash,
+                hex::decode(&tx_hash).unwrap(),
                 tx_idx,
                 tx_log_idx,
                 log.log_idx as i64,
                 log.level as i64,
                 log.order as i64,
-                &sol_sig,
+                sol_sig.as_ref(), /* TODO */
                 sol_idx,
                 sol_inner_idx,
-                topic1,
-                topic2,
-                topic3,
-                topic4,
+                topic1.as_ref().map(|x| x.as_slice()),
+                topic2.as_ref().map(|x| x.as_slice()),
+                topic3.as_ref().map(|x| x.as_slice()),
+                topic4.as_ref().map(|x| x.as_slice()),
                 log.topic_list.len() as i32,
                 hex::encode(&log.data)
             )
@@ -193,31 +247,31 @@ impl TransactionRepo {
                sol_ix_idx = $5,
                sol_ix_inner_idx = $6
             "#,
-            tx_hash,                                        // 1
-            tx.tx_type as i32,                              // 2
-            tx.from.to_string(),                            // 3
-            sol_sig,                                        // 4
-            tx.sol_ix_idx as i64,                           // 5
-            tx.sol_ix_inner_idx as i64,                     // 6
-            block_slot,                                     // 7
-            tx.tx_idx as i64,                               // 8
-            format!("{:#0x}", tx.transaction.nonce()),      // 9
-            format!("{:#0x}", tx.transaction.gas_price()),  // 10
-            format!("{:#0x}", tx.transaction.gas_limit()),  // 11
-            format!("{:#0x}", tx.transaction.value()),      // 12
-            format!("{:#0x}", tx.gas_used),                 // 13
-            format!("{:#0x}", tx.sum_gas_used),             // 14
-            tx.transaction.target().map(|x| x.to_string()), // 15
-            tx.contract.map(|c| c.to_string()),             // 16
-            format!("{:#0x}", tx.status),                   // 17
-            tx.is_cancelled,                                // 18
-            tx.is_completed,                                // 19
+            tx_hash,                                                           // 1
+            tx.tx_type as i32,                                                 // 2
+            PgAddress::from(tx.from) as PgAddress,                             // 3
+            sol_sig.as_ref(),                                                  // 4
+            tx.sol_ix_idx as i64,                                              // 5
+            tx.sol_ix_inner_idx as i64,                                        // 6
+            block_slot,                                                        // 7
+            tx.tx_idx as i64,                                                  // 8
+            tx.transaction.nonce() as i64,                                     // 9
+            PgU256::from(tx.transaction.gas_price()) as PgU256,                // 10
+            PgU256::from(tx.transaction.gas_limit()) as PgU256,                // 11
+            PgU256::from(tx.transaction.value()) as PgU256,                    // 12
+            PgU256::from(tx.gas_used) as PgU256,                               // 13
+            PgU256::from(tx.sum_gas_used) as PgU256,                           // 14
+            tx.transaction.target().map(PgAddress::from) as Option<PgAddress>, // 15
+            tx.contract.map(PgAddress::from) as Option<PgAddress>,             // 16
+            tx.status as i16,                                                  // 17
+            tx.is_cancelled,                                                   // 18
+            tx.is_completed,                                                   // 19
             // TODO: Fix this for legacy
-            format!("{:#0x}", tx.transaction.recovery_id()), // 20
-            format!("{:#0x}", tx.transaction.r()),           // 21
-            format!("{:#0x}", tx.transaction.s()),           // 22
-            format!("0x{}", hex::encode(tx.transaction.call_data())), // 23
-            &[]                                              /* 24 logs */
+            PgU256::from(U256::new(tx.transaction.recovery_id() as u128)) as PgU256, // 20: TODO
+            PgU256::from(tx.transaction.r()) as PgU256,                              // 21
+            PgU256::from(tx.transaction.s()) as PgU256,                              // 22
+            tx.transaction.call_data(),                                              // 23
+            &[]                                                                      /* 24 logs */
         )
         .execute(&mut *txn)
         .await?;
@@ -233,12 +287,12 @@ impl TransactionRepo {
         sqlx::query_as!(
             NeonTransactionRow,
             r#"SELECT
-                 neon_sig as "neon_sig!", tx_type as "tx_type!", from_addr as "from_addr!",
+                 neon_sig as "neon_sig!", tx_type as "tx_type!", from_addr as "from_addr!: PgAddress",
                  sol_sig as "sol_sig!", sol_ix_idx as "sol_ix_idx!",
                  sol_ix_inner_idx as "sol_ix_inner_idx!", T.block_slot as "block_slot!",
                  tx_idx as "tx_idx!", nonce as "nonce!", gas_price as "gas_price!",
                  gas_limit as "gas_limit!", value as "value!", gas_used as "gas_used!",
-                 sum_gas_used as "sum_gas_used!", to_addr as "to_addr?", contract as "contract?",
+                 sum_gas_used as "sum_gas_used!", to_addr as "to_addr?: PgAddress", contract as "contract?: PgAddress",
                  status "status!", is_canceled as "is_canceled!", is_completed as "is_completed!", 
                  v "v!", r as "r!", s as "s!", 
                  calldata as "calldata!",
@@ -248,7 +302,7 @@ impl TransactionRepo {
                WHERE (neon_sig = $1 OR $2) AND (T.block_slot = $3 OR $4)
                ORDER BY (T.block_slot, tx_idx) ASC
            "#,
-            hash.as_ref().map_or("", String::as_str),
+            hash.as_ref().map(|x| x.as_slice()).unwrap_or_default(),
             hash.is_none(),
             slot.unwrap_or(0) as i64,
             slot.is_none(),
@@ -261,13 +315,13 @@ impl TransactionRepo {
     fn fetch_logs(
         &self,
         by: TransactionBy,
-    ) -> impl Stream<Item = Result<(String, EventLog), Error>> + '_ {
-        tracing::debug!(?by, "fetching logs");
+    ) -> impl Stream<Item = Result<([u8; 32], EventLog), Error>> + '_ {
+        tracing::info!(?by, "fetching logs");
         let (slot, hash) = by.slot_hash();
         sqlx::query_as!(
             NeonTransactionLogRow,
             r#"SELECT
-                address as "address!", tx_hash as "tx_hash!",
+                address as "address?: PgAddress", tx_hash as "tx_hash!",
                 log_idx as "log_idx!",
                 event_level as "event_level!", event_order as "event_order!",
                 log_topic1 as "log_topic1!", log_topic2 as "log_topic2!",
@@ -277,14 +331,18 @@ impl TransactionRepo {
                WHERE (tx_hash = $1 OR $2) AND (block_slot = $3 OR $4)
                ORDER BY (block_slot, tx_idx, tx_log_idx) ASC
             "#,
-            hash.as_ref().map_or("", String::as_str),
+            hash.as_ref().map(|x| x.as_slice()).unwrap_or_default(),
             hash.is_none(),
             slot.unwrap_or(0) as i64,
             slot.is_none(),
         )
         .map(|row| {
-            let hash = row.tx_hash.clone();
-            row.try_into().map(|log| (hash, log))
+            let hash = row
+                .tx_hash
+                .clone()
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("tx_hash"))?;
+            Ok::<_, Error>(row.try_into().map(|log| (hash, log))?)
         })
         .fetch(&self.pool)
         .map(|res| Ok(res??))
@@ -293,8 +351,8 @@ impl TransactionRepo {
     pub fn fetch_rich_logs(
         &self,
         by: RichLogBy,
-        address: &[String],
-        topics: [&[String]; 4],
+        address: &[Address],
+        topics: [&[Vec<u8>]; 4],
     ) -> impl Stream<Item = Result<RichLog, Error>> + '_ {
         tracing::debug!(?by, ?address, ?topics, "fetching logs");
         let (from, to, hash) = by.bounds();
@@ -302,11 +360,11 @@ impl TransactionRepo {
         sqlx::query_as!(
             NeonRichLogRow,
             r#"SELECT
-                address as "address!", tx_hash as "tx_hash!",
+                address as "address?: PgAddress", tx_hash as "tx_hash!",
                 log_idx as "log_idx!", L.block_slot as "block_slot!",
                 event_level as "event_level!", event_order as "event_order!",
-                log_topic1 as "log_topic1!", log_topic2 as "log_topic2!",
-                log_topic3 as "log_topic3!", log_topic4 as "log_topic4!",
+                log_topic1 as "log_topic1?", log_topic2 as "log_topic2?",
+                log_topic3 as "log_topic3?", log_topic4 as "log_topic4?",
                 log_topic_cnt as "log_topic_cnt!", log_data as "log_data!",
                 block_hash as "block_hash!", block_time as "block_time!",
                 tx_idx as "tx_idx!"
@@ -325,7 +383,11 @@ impl TransactionRepo {
             to.map_or(i64::MAX, |to| to as i64),      // 2
             hash.as_ref().map_or("", String::as_str), // 3
             hash.is_none(),                           // 4
-            address,                                  // 5
+            address
+                .into_iter()
+                .copied()
+                .map(PgAddress::from)
+                .collect::<Vec<_>>(), // 5
             address.is_empty(),                       // 6
             topics[0],                                // 7
             topics[0].is_empty(),                     // 8
@@ -366,35 +428,35 @@ impl TransactionRepo {
 
 #[derive(Debug, Clone)]
 struct NeonTransactionRow {
-    neon_sig: String,
+    neon_sig: Vec<u8>,
     tx_type: i32,
-    from_addr: String,
+    from_addr: PgAddress,
 
-    sol_sig: String,
+    sol_sig: Vec<u8>,
     sol_ix_idx: i32,
     sol_ix_inner_idx: i32,
     block_slot: i64,
     tx_idx: i32,
 
-    nonce: String,
-    gas_price: String,
-    gas_limit: String,
-    value: String,
-    gas_used: String,
-    sum_gas_used: String,
+    nonce: i64,
+    gas_price: PgU256,
+    gas_limit: PgU256,
+    value: PgU256,
+    gas_used: PgU256,
+    sum_gas_used: PgU256,
 
-    to_addr: Option<String>,
-    contract: Option<String>,
+    to_addr: Option<PgAddress>,
+    contract: Option<PgAddress>,
 
-    status: String,
+    status: i16,
     is_canceled: bool,
     is_completed: bool,
 
-    v: String,
-    r: String,
-    s: String,
+    v: PgU256,
+    r: PgU256,
+    s: PgU256,
 
-    calldata: String,
+    calldata: Vec<u8>,
     block_hash: Option<String>,
 }
 
@@ -414,24 +476,17 @@ impl NeonTransactionRow {
             byte => bail!("Unsupported EIP-2718 Transaction type | First byte: {byte}"),
         };
 
-        let nonce = u64::from_str_radix(self.nonce.strip_prefix("0x").context("nonce")?, 16)
-            .context("nonce")?;
-        let recovery_id = u8::from_str_radix(self.v.strip_prefix("0x").context("recovery_id")?, 16)
-            .context("recovery_id")?;
-        let gas_price = U256::from_str_hex(&self.gas_price).context("gas_price")?;
-        let gas_limit = U256::from_str_hex(&self.gas_limit).context("gas_limit")?;
-        let value = U256::from_str_hex(&self.value).context("value")?;
-        let v = U256::from_str_hex(&self.v).context("v")?;
-        let r = U256::from_str_hex(&self.r).context("r")?;
-        let s = U256::from_str_hex(&self.s).context("s")?;
+        let nonce = self.nonce as u64;
+        let recovery_id = U256::from(self.v.clone()).as_u8(); // TODO
+        let gas_price = self.gas_price.clone().into();
+        let gas_limit = self.gas_limit.clone().into();
+        let value = self.value.clone().into();
+        let v = self.v.clone().into();
+        let r = self.r.clone().into();
+        let s = self.s.clone().into();
 
-        let target = self
-            .to_addr
-            .as_ref()
-            .map(|s| Address::from_hex(s).context("target"))
-            .transpose()?;
-        let call_data = hex::decode(self.calldata.strip_prefix("0x").context("calldata")?)
-            .context("calldata")?;
+        let target = self.to_addr.map(Address::from);
+        let call_data = self.calldata.clone();
 
         let payload = match tx_kind {
             TxKind::Legacy => TransactionPayload::Legacy(LegacyTx {
@@ -467,10 +522,11 @@ impl NeonTransactionRow {
             transaction: payload,
             hash: [0; 32], // TODO
             byte_len: 0,   // TODO
-            signed_hash: hex::decode(self.neon_sig.strip_prefix("0x").unwrap())
-                .unwrap()
+            signed_hash: self
+                .neon_sig
+                .clone()
                 .try_into()
-                .unwrap(),
+                .map_err(|_| anyhow::anyhow!("signed_hash"))?,
         })
     }
 
@@ -483,19 +539,19 @@ impl NeonTransactionRow {
 
         let tx = NeonTxInfo {
             tx_type,
-            neon_signature: self.neon_sig,
-            from: Address::from_hex(&self.from_addr).context("from")?,
-            contract: self
-                .contract
-                .as_ref()
-                .map(|s| Address::from_hex(s))
-                .transpose()
-                .context("contract")?,
+            neon_signature: self
+                .neon_sig
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("neon signature"))?,
+            from: Address::from(self.from_addr),
+            contract: self.contract.map(Address::from),
             transaction,
             events: Vec::new(),
-            gas_used: U256::from_str_hex(&self.gas_used).context("gas_used")?,
-            sum_gas_used: U256::from_str_hex(&self.sum_gas_used).context("sum_gas_used")?,
-            sol_signature: self.sol_sig,
+            gas_used: U256::from(self.gas_used),
+            sum_gas_used: U256::from(self.sum_gas_used),
+            sol_signature: common::solana_sdk::signature::Signature::from(
+                <[u8; 64]>::try_from(self.sol_sig).map_err(|_| anyhow::anyhow!("sol signature"))?,
+            ),
             sol_slot: self.block_slot.try_into().context("sol_slot")?,
             tx_idx: self.tx_idx.try_into().context("sol_tx_idx")?,
             sol_ix_idx: self.sol_ix_idx.try_into().context("sol_ix_idx")?,
@@ -503,8 +559,7 @@ impl NeonTransactionRow {
                 .sol_ix_inner_idx
                 .try_into()
                 .context("sol_ix_inner_idx")?,
-            status: u8::from_str_radix(self.status.strip_prefix("0x").context("status")?, 16)
-                .context("status")?,
+            status: self.status as u8,
             is_completed: self.is_completed,
             is_cancelled: self.is_canceled,
         };
@@ -518,17 +573,17 @@ impl NeonTransactionRow {
 
 #[derive(Debug, FromRow)]
 struct NeonTransactionLogRow {
-    address: String,
-    tx_hash: String,
+    address: Option<PgAddress>,
+    tx_hash: Vec<u8>,
     log_idx: i32,
 
     event_level: i32,
     event_order: i32,
 
-    log_topic1: String,
-    log_topic2: String,
-    log_topic3: String,
-    log_topic4: String,
+    log_topic1: Option<Vec<u8>>,
+    log_topic2: Option<Vec<u8>>,
+    log_topic3: Option<Vec<u8>>,
+    log_topic4: Option<Vec<u8>>,
     log_topic_cnt: i32,
 
     log_data: String,
@@ -539,11 +594,7 @@ impl TryFrom<NeonTransactionLogRow> for EventLog {
 
     fn try_from(value: NeonTransactionLogRow) -> Result<Self, Self::Error> {
         {
-            let address = if value.address.is_empty() {
-                None // TODO: Insert null
-            } else {
-                Some(Address::from_hex(&value.address).context("address")?)
-            };
+            let address = value.address.map(Into::into);
             let mut topics = Vec::new();
             for topic in [
                 &value.log_topic1,
@@ -554,7 +605,11 @@ impl TryFrom<NeonTransactionLogRow> for EventLog {
             .iter()
             .take(value.log_topic_cnt as usize)
             {
-                let topic = U256::from_str_hex(topic).context("topic")?;
+                let topic = U256::from_le_bytes(
+                    topic.as_ref().context("topic")?[0..32]
+                        .try_into()
+                        .context("topic len")?,
+                );
                 topics.push(topic);
             }
             Result::<_, Self::Error>::Ok(EventLog {
@@ -579,17 +634,17 @@ struct NeonRichLogRow {
     block_time: i64,
 
     // NeonTransactionLogRow
-    address: String,
-    tx_hash: String,
+    address: Option<PgAddress>,
+    tx_hash: Vec<u8>,
     log_idx: i32,
 
     event_level: i32,
     event_order: i32,
 
-    log_topic1: String,
-    log_topic2: String,
-    log_topic3: String,
-    log_topic4: String,
+    log_topic1: Option<Vec<u8>>,
+    log_topic2: Option<Vec<u8>>,
+    log_topic3: Option<Vec<u8>>,
+    log_topic4: Option<Vec<u8>>,
     log_topic_cnt: i32,
 
     log_data: String,

@@ -5,29 +5,106 @@
     "columns": [],
     "parameters": {
       "Left": [
-        "Text",
+        "Bytea",
         "Int4",
-        "Text",
-        "Text",
+        {
+          "Custom": {
+            "name": "address",
+            "kind": {
+              "Domain": "Bytea"
+            }
+          }
+        },
+        "Bytea",
         "Int4",
         "Int4",
         "Int8",
         "Int4",
-        "Text",
-        "Text",
-        "Text",
-        "Text",
-        "Text",
-        "Text",
-        "Text",
-        "Text",
-        "Text",
+        "Int8",
+        {
+          "Custom": {
+            "name": "u256",
+            "kind": {
+              "Domain": "Numeric"
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "u256",
+            "kind": {
+              "Domain": "Numeric"
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "u256",
+            "kind": {
+              "Domain": "Numeric"
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "u256",
+            "kind": {
+              "Domain": "Numeric"
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "u256",
+            "kind": {
+              "Domain": "Numeric"
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "address",
+            "kind": {
+              "Domain": "Bytea"
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "address",
+            "kind": {
+              "Domain": "Bytea"
+            }
+          }
+        },
+        "Int2",
         "Bool",
         "Bool",
-        "Text",
-        "Text",
-        "Text",
-        "Text",
+        {
+          "Custom": {
+            "name": "u256",
+            "kind": {
+              "Domain": "Numeric"
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "u256",
+            "kind": {
+              "Domain": "Numeric"
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "u256",
+            "kind": {
+              "Domain": "Numeric"
+            }
+          }
+        },
+        "Bytea",
         "Bytea"
       ]
     },

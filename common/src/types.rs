@@ -3,6 +3,7 @@ use evm_loader::types::{Address, Transaction};
 
 use solana_sdk::clock::UnixTimestamp;
 use solana_sdk::message::v0::LoadedAddresses;
+use solana_sdk::signature::Signature;
 use solana_sdk::slot_history::Slot;
 use solana_sdk::transaction::{Result as TransactionResult, VersionedTransaction};
 use solana_transaction_status::InnerInstructions;
@@ -57,7 +58,7 @@ pub struct NeonTxInfo {
     // TODO: Remove this line https://github.com/neonlabsorg/neon-evm/blob/4236c916031f9e6385b831769a8539d552299df0/evm_loader/program/src/lib.rs#L30
     pub tx_type: u8,
     // TODO: Should probably be Arc-ed or Bytes
-    pub neon_signature: String,
+    pub neon_signature: [u8; 32],
     pub from: Address,
     // TODO: This migth be a method
     pub contract: Option<Address>,
@@ -70,7 +71,7 @@ pub struct NeonTxInfo {
     // Solana index
     // TODO: Should probably be Arc-ed or Bytes
     // TODO 2: Should probably be replaced by a ref to corresponding `NeonIxReceeipt`
-    pub sol_signature: String,
+    pub sol_signature: Signature,
     pub sol_slot: u64,
     pub tx_idx: u64,
     pub sol_ix_idx: u64,
