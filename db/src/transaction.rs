@@ -1,5 +1,6 @@
 use anyhow::{bail, Context};
 use futures_util::{Stream, StreamExt, TryStreamExt};
+use sqlx::postgres::PgHasArrayType;
 use sqlx::FromRow;
 
 use common::ethnum::U256;
@@ -35,8 +36,14 @@ impl RichLogBy {
 }
 
 #[derive(sqlx::Type, Copy, Clone, Debug, Default)]
-#[sqlx(type_name = "Address", transparent)]
+#[sqlx(type_name = "Address", transparent, no_pg_array)]
 struct PgAddress([u8; 20]);
+
+impl PgHasArrayType for PgAddress {
+    fn array_type_info() -> sqlx::postgres::PgTypeInfo {
+        <&[u8]>::array_type_info()
+    }
+}
 
 impl From<Address> for PgAddress {
     fn from(addr: Address) -> Self {
@@ -356,6 +363,7 @@ impl TransactionRepo {
     ) -> impl Stream<Item = Result<RichLog, Error>> + '_ {
         tracing::debug!(?by, ?address, ?topics, "fetching logs");
         let (from, to, hash) = by.bounds();
+        let address_ref: Vec<_> = address.iter().map(|addr| addr.0.to_vec()).collect();
 
         sqlx::query_as!(
             NeonRichLogRow,
@@ -383,11 +391,7 @@ impl TransactionRepo {
             to.map_or(i64::MAX, |to| to as i64),      // 2
             hash.as_ref().map_or("", String::as_str), // 3
             hash.is_none(),                           // 4
-            address
-                .into_iter()
-                .copied()
-                .map(PgAddress::from)
-                .collect::<Vec<_>>(), // 5
+            address_ref.as_slice(),                   // 5
             address.is_empty(),                       // 6
             topics[0],                                // 7
             topics[0].is_empty(),                     // 8
