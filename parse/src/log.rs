@@ -69,6 +69,7 @@ enum Mnemonic {
     Enter,
     Exit,
     Gas,
+    Steps,
 }
 
 impl Mnemonic {
@@ -276,6 +277,10 @@ impl Mnemonic {
     fn decode_miner(_input: &str) {
         warn!("miner opcode not implemented yet")
     }
+
+    fn decode_steps(_input: &str) {
+        warn!("steps opcode not implemented yet")
+    }
 }
 
 #[derive(Debug, Error)]
@@ -293,6 +298,7 @@ impl FromStr for Mnemonic {
             "ENTER" => Ok(Mnemonic::Enter),
             "EXIT" => Ok(Mnemonic::Exit),
             "GAS" => Ok(Mnemonic::Gas),
+            "STEPS" => Ok(Mnemonic::Steps),
             _ if s.starts_with("LOG") => {
                 let n = s.strip_prefix("LOG").unwrap();
                 let n = n.parse().map_err(|_| BadMnemonic)?;
@@ -389,6 +395,9 @@ pub fn parse(lines: impl IntoIterator<Item = impl AsRef<str>>) -> Result<NeonLog
                 Mnemonic::Miner => {
                     // TODO
                     Mnemonic::decode_miner(rest);
+                }
+                Mnemonic::Steps => {
+                    Mnemonic::decode_steps(rest);
                 }
             }
         }
