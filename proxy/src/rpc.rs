@@ -44,7 +44,7 @@ impl EthApiImpl {
         }
     }
 
-    async fn get_block(&self, by: db::BlockBy<'_>, full: bool) -> Result<Option<RichBlock>, Error> {
+    async fn get_block(&self, by: db::BlockBy, full: bool) -> Result<Option<RichBlock>, Error> {
         let Some(block) = self.blocks.fetch_by(by).await? else {
             return Ok(None);
         };
@@ -124,8 +124,8 @@ impl EthApiServer for EthApiImpl {
     async fn block_by_hash(&self, hash: B256, full: bool) -> RpcResult<Option<RichBlock>> {
         use common::solana_sdk::hash::Hash;
 
-        let hash = Hash::new_from_array(hash.0).to_string();
-        self.get_block(db::BlockBy::Hash(hash.as_str()), full)
+        let hash = Hash::new_from_array(hash.0);
+        self.get_block(db::BlockBy::Hash(hash), full)
             .await
             .map_err(Into::into)
     }
@@ -208,7 +208,7 @@ impl EthApiServer for EthApiImpl {
         let tx = self
             .get_transaction(db::TransactionBy::Hash(hash.0))
             .await?
-            .map(|tx| neon_to_eth(tx.inner, tx.blockhash.as_deref()).map_err(Error::from))
+            .map(|tx| neon_to_eth(tx.inner, tx.blockhash).map_err(Error::from))
             .transpose()?;
         Ok(tx)
     }
@@ -255,7 +255,7 @@ impl EthApiServer for EthApiImpl {
         let receipt = self
             .get_transaction(db::TransactionBy::Hash(hash.0))
             .await?
-            .map(|tx| neon_to_eth_receipt(tx.inner, tx.blockhash.as_deref()).map_err(Error::from))
+            .map(|tx| neon_to_eth_receipt(tx.inner, tx.blockhash).map_err(Error::from))
             .transpose()?;
         Ok(receipt)
     }

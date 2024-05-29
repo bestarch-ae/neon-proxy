@@ -38,6 +38,9 @@
     CREATE DOMAIN Address AS BYTEA
     CHECK (octet_length(VALUE) = 20 OR VALUE IS NULL);
 
+    CREATE DOMAIN SolanaBlockHash AS BYTEA
+    CHECK (octet_length(VALUE) = 32 OR VALUE IS NULL);
+
     --- Initialize stage
 
     CREATE TABLE IF NOT EXISTS constants (
@@ -67,15 +70,14 @@
     CREATE UNIQUE INDEX IF NOT EXISTS idx_gas_less_usages_neon_sig ON gas_less_usages(neon_sig);
 
     CREATE TABLE IF NOT EXISTS solana_blocks (
-        block_slot BIGINT, -- TODO: Primary key
-        block_hash TEXT,
+        block_slot BIGINT PRIMARY KEY,
+        block_hash SolanaBlockHash NOT NULL,
         block_time BIGINT,
-        parent_block_slot BIGINT,
-        parent_block_hash TEXT,
-        is_finalized BOOL,
-        is_active BOOL
+        parent_block_slot BIGINT NOT NULL,
+        parent_block_hash SolanaBlockHash NOT NULL,
+        is_finalized BOOL NOT NULL,
+        is_active BOOL NOT NULL
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_solana_blocks_slot ON solana_blocks(block_slot);
     CREATE INDEX IF NOT EXISTS idx_solana_blocks_hash ON solana_blocks(block_hash);
     CREATE INDEX IF NOT EXISTS idx_solana_blocks_slot_active ON solana_blocks(block_slot, is_active);
 

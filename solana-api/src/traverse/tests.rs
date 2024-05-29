@@ -208,8 +208,8 @@ fn create_block() -> UiConfirmedBlock {
         .collect();
 
     UiConfirmedBlock {
-        previous_blockhash: String::new(),
-        blockhash: String::new(),
+        previous_blockhash: Hash::new_unique().to_string(),
+        blockhash: Hash::new_unique().to_string(),
         parent_slot: 0,
         transactions: None,
         signatures: Some(signatures),

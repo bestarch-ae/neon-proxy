@@ -72,19 +72,19 @@ impl CachedBlock {
         None
     }
 
-    fn into_info(self) -> SolanaBlock {
+    fn into_info(self) -> Result<SolanaBlock, TxDecodeError> {
         debug_assert!(self.txs.is_empty());
         if !self.txs.is_empty() {
             tracing::error!(block = ?self, "removing cached block with remaining txs");
         }
 
-        SolanaBlock {
+        Ok(SolanaBlock {
             slot: self.slot,
-            hash: self.block.blockhash,
+            hash: self.block.blockhash.parse()?,
             parent_slot: self.block.parent_slot,
-            parent_hash: self.block.previous_blockhash,
+            parent_hash: self.block.previous_blockhash.parse()?,
             time: self.block.block_time,
-        }
+        })
     }
 }
 
@@ -146,7 +146,7 @@ impl TraverseLedger {
                     .cached_block
                     .take()
                     .expect("`get_block` always returns cached block")
-                    .into_info();
+                    .into_info()?;
                 return Ok(LedgerItem::Block(block));
             }
         };

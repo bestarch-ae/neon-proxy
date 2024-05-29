@@ -1,4 +1,5 @@
 use anyhow::{bail, Context};
+use common::solana_sdk::hash::Hash;
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use sqlx::postgres::PgHasArrayType;
 use sqlx::FromRow;
@@ -7,12 +8,14 @@ use common::ethnum::U256;
 use common::evm_loader::types::{AccessListTx, Address, LegacyTx, Transaction, TransactionPayload};
 use common::types::{EventKind, EventLog, NeonTxInfo};
 
+use crate::PgSolanaBlockHash;
+
 use super::Error;
 
 #[derive(Debug, Clone)]
 /// [`EventLog`] with additional block and transaction data
 pub struct RichLog {
-    pub blockhash: String,
+    pub blockhash: Hash,
     pub slot: u64,
     pub timestamp: i64,
     pub tx_idx: u64,
@@ -27,10 +30,10 @@ pub enum RichLogBy {
 }
 
 impl RichLogBy {
-    fn bounds(self) -> (Option<u64>, Option<u64>, Option<String>) {
+    fn bounds(self) -> (Option<u64>, Option<u64>, Option<[u8; 32]>) {
         match self {
             Self::SlotRange { from, to } => (from, to, None),
-            Self::Hash(hash) => (None, None, Some(format!("0x{}", hex::encode(hash)))),
+            Self::Hash(hash) => (None, None, Some(hash)),
         }
     }
 }
@@ -129,7 +132,7 @@ impl TransactionBy {
 #[derive(Debug, Clone)]
 pub struct WithBlockhash<T> {
     pub inner: T,
-    pub blockhash: Option<String>,
+    pub blockhash: Option<Hash>,
 }
 
 #[derive(Debug, Clone)]
@@ -303,7 +306,7 @@ impl TransactionRepo {
                  status "status!", is_canceled as "is_canceled!", is_completed as "is_completed!", 
                  v "v!", r as "r!", s as "s!", 
                  calldata as "calldata!",
-                 B.block_hash
+                 B.block_hash as "block_hash!: PgSolanaBlockHash"
                FROM neon_transactions T
                LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
                WHERE (neon_sig = $1 OR $2) AND (T.block_slot = $3 OR $4)
@@ -352,7 +355,7 @@ impl TransactionRepo {
             Ok::<_, Error>(row.try_into().map(|log| (hash, log))?)
         })
         .fetch(&self.pool)
-        .map(|res| Ok(res??))
+        .map(|res| res?)
     }
 
     pub fn fetch_rich_logs(
@@ -374,7 +377,7 @@ impl TransactionRepo {
                 log_topic1 as "log_topic1?", log_topic2 as "log_topic2?",
                 log_topic3 as "log_topic3?", log_topic4 as "log_topic4?",
                 log_topic_cnt as "log_topic_cnt!", log_data as "log_data!",
-                block_hash as "block_hash!", block_time as "block_time!",
+                block_hash as "block_hash!: PgSolanaBlockHash", block_time as "block_time!",
                 tx_idx as "tx_idx!"
                FROM neon_transaction_logs L
                LEFT JOIN solana_blocks B ON B.block_slot = L.block_slot
@@ -387,20 +390,20 @@ impl TransactionRepo {
                    AND (log_topic4 = ANY($13) OR $14)
                ORDER BY (L.block_slot, tx_idx, tx_log_idx) ASC
             "#,
-            from.unwrap_or(0) as i64,                 // 1
-            to.map_or(i64::MAX, |to| to as i64),      // 2
-            hash.as_ref().map_or("", String::as_str), // 3
-            hash.is_none(),                           // 4
-            address_ref.as_slice(),                   // 5
-            address.is_empty(),                       // 6
-            topics[0],                                // 7
-            topics[0].is_empty(),                     // 8
-            topics[1],                                // 9
-            topics[1].is_empty(),                     // 10
-            topics[2],                                // 11
-            topics[2].is_empty(),                     // 12
-            topics[3],                                // 13
-            topics[3].is_empty(),                     // 14
+            from.unwrap_or(0) as i64,                // 1
+            to.map_or(i64::MAX, |to| to as i64),     // 2
+            hash.as_ref().map(<[u8; 32]>::as_slice), // 3
+            hash.is_none(),                          // 4
+            address_ref.as_slice(),                  // 5
+            address.is_empty(),                      // 6
+            topics[0],                               // 7
+            topics[0].is_empty(),                    // 8
+            topics[1],                               // 9
+            topics[1].is_empty(),                    // 10
+            topics[2],                               // 11
+            topics[2].is_empty(),                    // 12
+            topics[3],                               // 13
+            topics[3].is_empty(),                    // 14
         )
         .map(TryInto::try_into)
         .fetch(&self.pool)
@@ -461,7 +464,7 @@ struct NeonTransactionRow {
     s: PgU256,
 
     calldata: Vec<u8>,
-    block_hash: Option<String>,
+    block_hash: Option<PgSolanaBlockHash>,
 }
 
 impl NeonTransactionRow {
@@ -570,7 +573,7 @@ impl NeonTransactionRow {
 
         Ok(WithBlockhash {
             inner: tx,
-            blockhash: self.block_hash,
+            blockhash: self.block_hash.map(Into::into),
         })
     }
 }
@@ -633,7 +636,7 @@ impl TryFrom<NeonTransactionLogRow> for EventLog {
 
 #[derive(Debug, FromRow)]
 struct NeonRichLogRow {
-    block_hash: String,
+    block_hash: PgSolanaBlockHash,
     block_slot: i64,
     block_time: i64,
 
@@ -674,7 +677,7 @@ impl TryFrom<NeonRichLogRow> for RichLog {
         };
 
         Ok(RichLog {
-            blockhash: value.block_hash,
+            blockhash: value.block_hash.into(),
             slot: value.block_slot.try_into().context("block_slot")?,
             timestamp: value.block_time,
             tx_idx: value.tx_idx.try_into().context("tx_idx")?,

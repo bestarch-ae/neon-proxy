@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT\n                 neon_sig as \"neon_sig!\", tx_type as \"tx_type!\", from_addr as \"from_addr!: PgAddress\",\n                 sol_sig as \"sol_sig!\", sol_ix_idx as \"sol_ix_idx!\",\n                 sol_ix_inner_idx as \"sol_ix_inner_idx!\", T.block_slot as \"block_slot!\",\n                 tx_idx as \"tx_idx!\", nonce as \"nonce!\", gas_price as \"gas_price!\",\n                 gas_limit as \"gas_limit!\", value as \"value!\", gas_used as \"gas_used!\",\n                 sum_gas_used as \"sum_gas_used!\", to_addr as \"to_addr?: PgAddress\", contract as \"contract?: PgAddress\",\n                 status \"status!\", is_canceled as \"is_canceled!\", is_completed as \"is_completed!\", \n                 v \"v!\", r as \"r!\", s as \"s!\", \n                 calldata as \"calldata!\",\n                 B.block_hash\n               FROM neon_transactions T\n               LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot\n               WHERE (neon_sig = $1 OR $2) AND (T.block_slot = $3 OR $4)\n               ORDER BY (T.block_slot, tx_idx) ASC\n           ",
+  "query": "SELECT\n                 neon_sig as \"neon_sig!\", tx_type as \"tx_type!\", from_addr as \"from_addr!: PgAddress\",\n                 sol_sig as \"sol_sig!\", sol_ix_idx as \"sol_ix_idx!\",\n                 sol_ix_inner_idx as \"sol_ix_inner_idx!\", T.block_slot as \"block_slot!\",\n                 tx_idx as \"tx_idx!\", nonce as \"nonce!\", gas_price as \"gas_price!\",\n                 gas_limit as \"gas_limit!\", value as \"value!\", gas_used as \"gas_used!\",\n                 sum_gas_used as \"sum_gas_used!\", to_addr as \"to_addr?: PgAddress\", contract as \"contract?: PgAddress\",\n                 status \"status!\", is_canceled as \"is_canceled!\", is_completed as \"is_completed!\", \n                 v \"v!\", r as \"r!\", s as \"s!\", \n                 calldata as \"calldata!\",\n                 B.block_hash as \"block_hash!: PgSolanaBlockHash\"\n               FROM neon_transactions T\n               LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot\n               WHERE (neon_sig = $1 OR $2) AND (T.block_slot = $3 OR $4)\n               ORDER BY (T.block_slot, tx_idx) ASC\n           ",
   "describe": {
     "columns": [
       {
@@ -120,8 +120,8 @@
       },
       {
         "ordinal": 23,
-        "name": "block_hash",
-        "type_info": "Text"
+        "name": "block_hash!: PgSolanaBlockHash",
+        "type_info": "Bytea"
       }
     ],
     "parameters": {
@@ -156,8 +156,8 @@
       false,
       false,
       false,
-      true
+      false
     ]
   },
-  "hash": "127fe0516ed1939e5fd3fdd7ed2717166968661537ed4ed233c012b09432b635"
+  "hash": "34be03e9131f62d4b510d715a4547abdcc4ea35f28eea900e54d120101137151"
 }

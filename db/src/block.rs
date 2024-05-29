@@ -1,6 +1,9 @@
 use anyhow::Context;
+use common::solana_sdk::hash::Hash;
 use common::types::SolanaBlock;
 use futures_util::FutureExt;
+
+use crate::PgSolanaBlockHash;
 
 use super::Error;
 
@@ -10,9 +13,9 @@ pub struct BlockRepo {
 }
 
 #[derive(Debug)]
-pub enum BlockBy<'a> {
+pub enum BlockBy {
     Slot(u64),
-    Hash(&'a str),
+    Hash(Hash),
 }
 
 impl BlockRepo {
@@ -33,10 +36,10 @@ impl BlockRepo {
                 is_active
             ) VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
             block.slot as i64,
-            block.hash,
+            PgSolanaBlockHash::from(block.hash) as PgSolanaBlockHash,
             block.time.unwrap_or(0),
             block.parent_slot as i64,
-            block.parent_hash,
+            PgSolanaBlockHash::from(block.parent_hash) as PgSolanaBlockHash,
             true,
             true,
         )
@@ -46,25 +49,25 @@ impl BlockRepo {
         Ok(())
     }
 
-    pub async fn fetch_by(&self, by: BlockBy<'_>) -> Result<Option<SolanaBlock>, Error> {
+    pub async fn fetch_by(&self, by: BlockBy) -> Result<Option<SolanaBlock>, Error> {
         let (slot, hash) = match by {
             BlockBy::Slot(num) => (Some(num as i64), None),
-            BlockBy::Hash(hash) => (None, Some(hash)),
+            BlockBy::Hash(hash) => (None, Some(PgSolanaBlockHash::from(hash))),
         };
         sqlx::query_as!(
             BlockRow,
             r#"SELECT
                 block_slot as "block_slot!",
-                block_hash as "block_hash!",
+                block_hash as "block_hash!: PgSolanaBlockHash",
                 block_time as "block_time!",
                 parent_block_slot as "parent_block_slot!",
-                parent_block_hash as "parent_block_hash!"
+                parent_block_hash as "parent_block_hash!: PgSolanaBlockHash"
                FROM solana_blocks
                WHERE (block_slot = $1 OR $2) AND (block_hash = $3 OR $4)
             "#,
             slot.unwrap_or(0),
             slot.is_none(),
-            hash.unwrap_or(""),
+            hash.as_ref().map(|hash| hash.0.as_slice()),
             hash.is_none(),
         )
         .map(TryInto::try_into)
@@ -76,10 +79,10 @@ impl BlockRepo {
 
 struct BlockRow {
     block_slot: i64,
-    block_hash: String,
+    block_hash: PgSolanaBlockHash,
     block_time: i64,
     parent_block_slot: i64,
-    parent_block_hash: String,
+    parent_block_hash: PgSolanaBlockHash,
 }
 
 impl TryFrom<BlockRow> for SolanaBlock {
@@ -95,9 +98,9 @@ impl TryFrom<BlockRow> for SolanaBlock {
         } = value;
         Ok(SolanaBlock {
             slot: block_slot.try_into().context("slot")?,
-            hash: block_hash,
+            hash: block_hash.into(),
             parent_slot: parent_block_slot.try_into().context("parent_slot")?,
-            parent_hash: parent_block_hash,
+            parent_hash: parent_block_hash.into(),
             time: Some(block_time),
         })
     }
