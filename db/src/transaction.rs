@@ -1,7 +1,6 @@
 use anyhow::{bail, Context};
 use common::solana_sdk::hash::Hash;
 use futures_util::{Stream, StreamExt, TryStreamExt};
-use sqlx::postgres::PgHasArrayType;
 use sqlx::FromRow;
 
 use common::ethnum::U256;
@@ -41,12 +40,6 @@ impl RichLogBy {
 #[derive(sqlx::Type, Copy, Clone, Debug, Default)]
 #[sqlx(type_name = "Address", transparent, no_pg_array)]
 struct PgAddress([u8; 20]);
-
-impl PgHasArrayType for PgAddress {
-    fn array_type_info() -> sqlx::postgres::PgTypeInfo {
-        <&[u8]>::array_type_info()
-    }
-}
 
 impl From<Address> for PgAddress {
     fn from(addr: Address) -> Self {
