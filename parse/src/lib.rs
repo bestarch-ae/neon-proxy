@@ -219,10 +219,7 @@ pub fn parse(
     let loaded = &transaction.loaded_addresses;
     let (neon_txs, holder_ops) = parse_transactions(tx, accountsdb, loaded)?;
 
-    let log_info = match log::parse(transaction.log_messages) {
-        Ok(log) => log,
-        Err(err) => panic!("log parsing error {:?}", err),
-    };
+    let log_info = log::parse(transaction.log_messages)?;
     let tx_infos = merge_logs_transactions(neon_txs, log_info, slot, tx_idx);
     Ok((tx_infos, holder_ops))
 }
