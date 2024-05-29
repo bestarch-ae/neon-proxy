@@ -162,7 +162,7 @@ struct DbRow {
 impl From<NeonTxInfo> for DbRow {
     fn from(val: NeonTxInfo) -> Self {
         DbRow {
-            neon_sig: format!("0x{}", val.neon_signature),
+            neon_sig: format!("0x{}", hex::encode(val.neon_signature)),
             tx_type: val.tx_type,
             from_addr: val.from.to_string(),
             sol_sig: String::new(),

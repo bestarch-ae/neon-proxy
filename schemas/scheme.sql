@@ -31,6 +31,16 @@
     END;
     $$;
 
+    CREATE DOMAIN U256 AS NUMERIC
+    CHECK (VALUE >= 0 AND VALUE < 2^256)
+    CHECK (SCALE(VALUE) = 0);
+
+    CREATE DOMAIN Address AS BYTEA
+    CHECK (octet_length(VALUE) = 20 OR VALUE IS NULL);
+
+    CREATE DOMAIN SolanaBlockHash AS BYTEA
+    CHECK (octet_length(VALUE) = 32 OR VALUE IS NULL);
+
     --- Initialize stage
 
     CREATE TABLE IF NOT EXISTS constants (
@@ -60,41 +70,40 @@
     CREATE UNIQUE INDEX IF NOT EXISTS idx_gas_less_usages_neon_sig ON gas_less_usages(neon_sig);
 
     CREATE TABLE IF NOT EXISTS solana_blocks (
-        block_slot BIGINT, -- TODO: Primary key
-        block_hash TEXT,
+        block_slot BIGINT PRIMARY KEY,
+        block_hash SolanaBlockHash NOT NULL,
         block_time BIGINT,
-        parent_block_slot BIGINT,
-        parent_block_hash TEXT,
-        is_finalized BOOL,
-        is_active BOOL
+        parent_block_slot BIGINT NOT NULL,
+        parent_block_hash SolanaBlockHash NOT NULL,
+        is_finalized BOOL NOT NULL,
+        is_active BOOL NOT NULL
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_solana_blocks_slot ON solana_blocks(block_slot);
     CREATE INDEX IF NOT EXISTS idx_solana_blocks_hash ON solana_blocks(block_hash);
     CREATE INDEX IF NOT EXISTS idx_solana_blocks_slot_active ON solana_blocks(block_slot, is_active);
 
     CREATE TABLE IF NOT EXISTS neon_transaction_logs (
-        address TEXT,
-        block_slot BIGINT, -- TODO: Reference solana_blocks. Need `solana_api::traverse` block/tx order change to work.
+        address Address,
+        block_slot BIGINT NOT NULL, -- TODO: Reference solana_blocks. Need `solana_api::traverse` block/tx order change to work.
 
-        tx_hash TEXT,
-        tx_idx INT,
-        tx_log_idx INT,
-        log_idx INT,
+        tx_hash BYTEA NOT NULL CHECK (octet_length(tx_hash) = 32),
+        tx_idx INT NOT NULL,
+        tx_log_idx INT NOT NULL,
+        log_idx INT NOT NULL,
 
-        event_level INT,
-        event_order INT,
+        event_level INT NOT NULL,
+        event_order INT NOT NULL,
 
-        sol_sig TEXT,
-        idx INT,
-        inner_idx INT,
+        sol_sig BYTEA CHECK (octet_length(sol_sig) = 64),
+        idx INT NOT NULL,
+        inner_idx INT NOT NULL,
 
-        log_topic1 TEXT,
-        log_topic2 TEXT,
-        log_topic3 TEXT,
-        log_topic4 TEXT,
-        log_topic_cnt INT,
+        log_topic1 BYTEA CHECK (octet_length(log_topic1) = 32 OR log_topic1 IS NULL),
+        log_topic2 BYTEA CHECK (octet_length(log_topic1) = 32 OR log_topic2 IS NULL),
+        log_topic3 BYTEA CHECK (octet_length(log_topic1) = 32 OR log_topic3 IS NULL),
+        log_topic4 BYTEA CHECK (octet_length(log_topic1) = 32 OR log_topic4 IS NULL),
+        log_topic_cnt INT NOT NULL,
 
-        log_data TEXT
+        log_data TEXT NOT NULL
     );
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_neon_transaction_logs_block_tx_log ON neon_transaction_logs(block_slot, tx_hash, tx_log_idx);
@@ -105,6 +114,7 @@
     CREATE INDEX IF NOT EXISTS idx_neon_transaction_logs_topic2 ON neon_transaction_logs(log_topic2);
     CREATE INDEX IF NOT EXISTS idx_neon_transaction_logs_topic3 ON neon_transaction_logs(log_topic3);
     CREATE INDEX IF NOT EXISTS idx_neon_transaction_logs_topic4 ON neon_transaction_logs(log_topic4);
+
 
     CREATE TABLE IF NOT EXISTS solana_neon_transactions (
         sol_sig TEXT,
@@ -131,36 +141,36 @@
     CREATE INDEX IF NOT EXISTS idx_solana_neon_transactions_neon_block ON solana_neon_transactions(block_slot);
 
     CREATE TABLE IF NOT EXISTS neon_transactions (
-        neon_sig TEXT,
-        tx_type INT,
-        from_addr TEXT,
+        neon_sig BYTEA NOT NULL CHECK (octet_length(neon_sig) = 32),
+        tx_type INT NOT NULL,
+        from_addr Address NOT NULL,
 
-        sol_sig TEXT,
-        sol_ix_idx INT,
+        sol_sig BYTEA CHECK (octet_length(sol_sig) = 64),
+        sol_ix_idx INT NOT NULL,
         sol_ix_inner_idx INT,
-        block_slot BIGINT,
-        tx_idx INT,
+        block_slot BIGINT NOT NULL,
+        tx_idx INT NOT NULL,
 
-        nonce TEXT,
-        gas_price TEXT,
-        gas_limit TEXT,
-        value TEXT,
-        gas_used TEXT,
-        sum_gas_used TEXT,
+        nonce BIGINT NOT NULL,
+        gas_price U256 NOT NULL,
+        gas_limit U256 NOT NULL,
+        value U256 NOT NULL,
+        gas_used U256 NOT NULL,
+        sum_gas_used U256 NOT NULL,
 
-        to_addr TEXT,
-        contract TEXT,
+        to_addr Address,
+        contract Address,
 
-        status TEXT,
-        is_canceled BOOLEAN,
-        is_completed BOOLEAN,
+        status SMALLINT NOT NULL,
+        is_canceled BOOLEAN NOT NULL,
+        is_completed BOOLEAN NOT NULL,
 
-        v TEXT,
-        r TEXT,
-        s TEXT,
+        v U256 NOT NULL,
+        r U256 NOT NULL,
+        s U256 NOT NULL,
 
-        calldata TEXT,
-        logs BYTEA
+        calldata BYTEA NOT NULL,
+        logs BYTEA NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_neon_transactions_sol_sig_block ON neon_transactions(sol_sig, block_slot);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_neon_transactions_neon_sig ON neon_transactions(neon_sig);

@@ -4,8 +4,8 @@ mod transaction;
 use std::str::FromStr;
 
 use anyhow::Context;
-use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
+use common::solana_sdk::{hash::Hash, pubkey::Pubkey};
 use sqlx::PgPool;
 use thiserror::Error;
 
@@ -22,6 +22,22 @@ pub enum Error {
     Sqlx(#[from] sqlx::Error),
     #[error("parsing error: {0}")]
     Parse(#[from] anyhow::Error),
+}
+
+#[derive(sqlx::Type, Copy, Clone, Debug, Default)]
+#[sqlx(type_name = "SolanaBlockHash", transparent)]
+pub(crate) struct PgSolanaBlockHash([u8; 32]);
+
+impl From<Hash> for PgSolanaBlockHash {
+    fn from(value: Hash) -> Self {
+        Self(value.to_bytes())
+    }
+}
+
+impl From<PgSolanaBlockHash> for Hash {
+    fn from(value: PgSolanaBlockHash) -> Self {
+        Hash::new_from_array(value.0)
+    }
 }
 
 pub struct SolanaSignaturesRepo {

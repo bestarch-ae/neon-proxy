@@ -1,3 +1,4 @@
+use common::solana_sdk::hash::ParseHashError;
 use thiserror::Error;
 
 use common::solana_sdk::message::v0::LoadedAddresses;
@@ -26,6 +27,8 @@ pub enum TxDecodeError {
     InvalidLoadedAddr(ParsePubkeyError),
     #[error("invalid transaction encoding ({0:?})")]
     InvalidEncoding(EncodedTransaction),
+    #[error("invalid block hash: {0}")]
+    InvalidHash(#[from] ParseHashError),
 }
 
 trait OptionSerializerExt {
