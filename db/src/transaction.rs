@@ -241,7 +241,6 @@ impl TransactionRepo {
                    $19, $20, $21, $22, $23, $24)
             ON CONFLICT (neon_sig)
             DO UPDATE SET
-               block_slot = $7,
                /* sum_gas_used = EXCLUDED.sum_gas_used + $13, TODO */
                is_completed = $19,
                is_canceled = $18,
