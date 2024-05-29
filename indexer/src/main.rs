@@ -59,8 +59,11 @@ async fn main() -> Result<()> {
     let mut last_written_slot = None;
     tracing::info!("connected");
 
+    let mut neon_tx_idx = 0;
+
     while let Some(result) = traverse.next().await {
-        tracing::debug!(?result, "retrieved transaction");
+        tracing::debug!(?result, "retrieved transaction/block");
+
         match result {
             Ok(LedgerItem::Transaction(tx)) => {
                 let signature = tx.tx.signatures[0];
@@ -75,13 +78,15 @@ async fn main() -> Result<()> {
                 let (txs, holders) = match neon_parse::parse(tx, &mut adb) {
                     Ok((txs, holders)) => (txs, holders),
                     Err(err) => {
-                        tracing::warn!(?err, "failed to parse tx");
+                        tracing::warn!(?err, "failed to parse solana transaction");
                         continue;
                     }
                 };
                 tracing::debug!(?txs, "parsed transactions");
-                for tx in &txs {
-                    if let Err(err) = tx_repo.insert(tx).await {
+                for mut tx in txs {
+                    tx.tx_idx = neon_tx_idx;
+                    neon_tx_idx += 1;
+                    if let Err(err) = tx_repo.insert(&tx).await {
                         tracing::warn!(?err, "failed to save neon transaction");
                     } else {
                         tracing::info!(
@@ -101,6 +106,7 @@ async fn main() -> Result<()> {
                 }
             }
             Ok(LedgerItem::Block(block)) => {
+                neon_tx_idx = 0;
                 if let Err(err) = block_repo.insert(&block).await {
                     tracing::warn!(?err, slot = block.slot, "failed to save solana block");
                 } else {
