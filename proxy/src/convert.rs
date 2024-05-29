@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use anyhow::{anyhow, Context, Error};
 use db::{RichLog, RichLogBy};
 use hex_literal::hex;
@@ -47,13 +45,13 @@ fn neon_extra_fields(tx: &NeonTxInfo) -> Result<OtherFields, Error> {
     Ok(OtherFields::new(neon_fields))
 }
 
-pub fn neon_to_eth(tx: NeonTxInfo, blockhash: Option<&str>) -> Result<Transaction, Error> {
+pub fn neon_to_eth(tx: NeonTxInfo, blockhash: Option<Hash>) -> Result<Transaction, Error> {
     let other = neon_extra_fields(&tx)?;
 
     Ok(Transaction {
         hash: B256::from(&tx.neon_signature),
         nonce: tx.transaction.nonce(),
-        block_hash: blockhash.map(sol_blockhash_into_hex).transpose()?,
+        block_hash: blockhash.map(sol_blockhash_into_hex),
         block_number: Some(tx.sol_slot), /* TODO: not sure if correct */
         transaction_index: Some(tx.tx_idx),
         from: tx.from.0.into(),
@@ -76,7 +74,7 @@ pub fn neon_to_eth(tx: NeonTxInfo, blockhash: Option<&str>) -> Result<Transactio
 
 pub fn neon_to_eth_receipt(
     tx: NeonTxInfo,
-    blockhash: Option<&str>,
+    blockhash: Option<Hash>,
 ) -> Result<AnyTransactionReceipt, Error> {
     let receipt = Receipt {
         status: tx.status > 0x0,
@@ -89,7 +87,7 @@ pub fn neon_to_eth_receipt(
                     inner: neon_event_to_log(event),
                     // TODO: Do we really need all these fields
                     transaction_index: Some(tx.tx_idx),
-                    block_hash: blockhash.map(sol_blockhash_into_hex).transpose()?,
+                    block_hash: blockhash.map(sol_blockhash_into_hex),
                     block_number: Some(tx.sol_slot),
                     block_timestamp: None,
                     transaction_hash: Some(B256::from(&tx.neon_signature)),
@@ -109,7 +107,7 @@ pub fn neon_to_eth_receipt(
         inner: envelope,
         transaction_hash: B256::from(&tx.neon_signature),
         transaction_index: Some(tx.tx_idx),
-        block_hash: blockhash.map(sol_blockhash_into_hex).transpose()?,
+        block_hash: blockhash.map(sol_blockhash_into_hex),
         block_number: Some(tx.sol_slot),
         gas_used: tx.gas_used.as_u128(),
         effective_gas_price: tx.transaction.gas_price().as_u128(),
@@ -152,8 +150,6 @@ fn build_block_header(block: SolanaBlock, txs: &[NeonTxInfo]) -> Result<Header, 
         time,
         ..
     } = block;
-    let hash: Hash = hash.parse().context("hash")?;
-    let parent_hash: Hash = parent_hash.parse().context("parent_hash")?;
     let hash = B256::new(hash.to_bytes());
     let parent_hash = B256::new(parent_hash.to_bytes());
 
@@ -191,12 +187,12 @@ fn build_block_header(block: SolanaBlock, txs: &[NeonTxInfo]) -> Result<Header, 
 }
 
 pub fn build_block(block: SolanaBlock, txs: Vec<NeonTxInfo>, full: bool) -> Result<Block, Error> {
-    let hash = block.hash.clone();
+    let hash = block.hash;
     let header = build_block_header(block, &txs).context("block header")?;
     let transactions = if full {
         let txs = txs
             .into_iter()
-            .map(|tx| neon_to_eth(tx, Some(&hash)))
+            .map(|tx| neon_to_eth(tx, Some(hash)))
             .collect::<Result<_, Error>>()
             .context("transactions")?;
         BlockTransactions::Full(txs)
@@ -216,16 +212,15 @@ pub fn build_block(block: SolanaBlock, txs: Vec<NeonTxInfo>, full: bool) -> Resu
     })
 }
 
-fn sol_blockhash_into_hex(hash: impl AsRef<str>) -> Result<B256, <Hash as FromStr>::Err> {
-    let hash = Hash::from_str(hash.as_ref())?;
-    Ok(hash.to_bytes().into())
+fn sol_blockhash_into_hex(hash: Hash) -> B256 {
+    hash.to_bytes().into()
 }
 
 pub fn convert_rich_log(log: RichLog) -> Result<Log, Error> {
     Ok(Log {
         inner: neon_event_to_log(&log.event),
         transaction_index: Some(log.tx_idx),
-        block_hash: Some(sol_blockhash_into_hex(&log.blockhash)?),
+        block_hash: Some(sol_blockhash_into_hex(log.blockhash)),
         block_number: Some(log.slot),
         block_timestamp: Some(log.timestamp as u64),
         transaction_hash: Some(B256::try_from(log.tx_hash.as_slice()).context("transaction hash")?),

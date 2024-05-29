@@ -2,6 +2,7 @@ use ethnum::U256;
 use evm_loader::types::{Address, Transaction};
 
 use solana_sdk::clock::UnixTimestamp;
+use solana_sdk::hash::Hash;
 use solana_sdk::message::v0::LoadedAddresses;
 use solana_sdk::signature::Signature;
 use solana_sdk::slot_history::Slot;
@@ -12,9 +13,9 @@ use solana_transaction_status::InnerInstructions;
 #[derive(Debug, Clone)]
 pub struct SolanaBlock {
     pub slot: Slot,
-    pub hash: String,
+    pub hash: Hash,
     pub parent_slot: Slot,
-    pub parent_hash: String,
+    pub parent_hash: Hash,
     pub time: Option<UnixTimestamp>,
 }
 

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT\n                address as \"address?: PgAddress\", tx_hash as \"tx_hash!\",\n                log_idx as \"log_idx!\", L.block_slot as \"block_slot!\",\n                event_level as \"event_level!\", event_order as \"event_order!\",\n                log_topic1 as \"log_topic1?\", log_topic2 as \"log_topic2?\",\n                log_topic3 as \"log_topic3?\", log_topic4 as \"log_topic4?\",\n                log_topic_cnt as \"log_topic_cnt!\", log_data as \"log_data!\",\n                block_hash as \"block_hash!\", block_time as \"block_time!\",\n                tx_idx as \"tx_idx!\"\n               FROM neon_transaction_logs L\n               LEFT JOIN solana_blocks B ON B.block_slot = L.block_slot\n               WHERE (L.block_slot >= $1) AND (L.block_slot <= $2)\n                   AND (block_hash = $3 OR $4)\n                   AND (address = ANY($5) OR $6)\n                   AND (log_topic1 = ANY($7) OR $8)\n                   AND (log_topic2 = ANY($9) OR $10)\n                   AND (log_topic3 = ANY($11) OR $12)\n                   AND (log_topic4 = ANY($13) OR $14)\n               ORDER BY (L.block_slot, tx_idx, tx_log_idx) ASC\n            ",
+  "query": "SELECT\n                address as \"address?: PgAddress\", tx_hash as \"tx_hash!\",\n                log_idx as \"log_idx!\", L.block_slot as \"block_slot!\",\n                event_level as \"event_level!\", event_order as \"event_order!\",\n                log_topic1 as \"log_topic1?\", log_topic2 as \"log_topic2?\",\n                log_topic3 as \"log_topic3?\", log_topic4 as \"log_topic4?\",\n                log_topic_cnt as \"log_topic_cnt!\", log_data as \"log_data!\",\n                block_hash as \"block_hash!: PgSolanaBlockHash\", block_time as \"block_time!\",\n                tx_idx as \"tx_idx!\"\n               FROM neon_transaction_logs L\n               LEFT JOIN solana_blocks B ON B.block_slot = L.block_slot\n               WHERE (L.block_slot >= $1) AND (L.block_slot <= $2)\n                   AND (block_hash = $3 OR $4)\n                   AND (address = ANY($5) OR $6)\n                   AND (log_topic1 = ANY($7) OR $8)\n                   AND (log_topic2 = ANY($9) OR $10)\n                   AND (log_topic3 = ANY($11) OR $12)\n                   AND (log_topic4 = ANY($13) OR $14)\n               ORDER BY (L.block_slot, tx_idx, tx_log_idx) ASC\n            ",
   "describe": {
     "columns": [
       {
@@ -65,8 +65,8 @@
       },
       {
         "ordinal": 12,
-        "name": "block_hash!",
-        "type_info": "Text"
+        "name": "block_hash!: PgSolanaBlockHash",
+        "type_info": "Bytea"
       },
       {
         "ordinal": 13,
@@ -83,7 +83,7 @@
       "Left": [
         "Int8",
         "Int8",
-        "Text",
+        "Bytea",
         "Bool",
         "ByteaArray",
         "Bool",
@@ -110,10 +110,10 @@
       true,
       false,
       false,
-      true,
+      false,
       true,
       false
     ]
   },
-  "hash": "1fd7746d952cd81cdcbcf3bb87dfb9776e8315178ded44247a2facea15adbc6a"
+  "hash": "f4b3e132e5af6e587a8fa61b117a952cebecd333fa61a1c53d3ec0d8c16afafe"
 }

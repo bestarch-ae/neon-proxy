@@ -6,10 +6,24 @@
     "parameters": {
       "Left": [
         "Int8",
-        "Text",
+        {
+          "Custom": {
+            "name": "solanablockhash",
+            "kind": {
+              "Domain": "Bytea"
+            }
+          }
+        },
         "Int8",
         "Int8",
-        "Text",
+        {
+          "Custom": {
+            "name": "solanablockhash",
+            "kind": {
+              "Domain": "Bytea"
+            }
+          }
+        },
         "Bool",
         "Bool"
       ]
