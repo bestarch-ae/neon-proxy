@@ -13,6 +13,7 @@ use rpc_api_types::{
     TransactionReceipt, ValueOrArray, WithOtherFields,
 };
 
+use common::evm_loader::types::Address as NeonAddress;
 use common::solana_sdk::hash::Hash;
 use common::types::{EventLog, NeonTxInfo, SolanaBlock};
 
@@ -227,7 +228,7 @@ pub fn convert_rich_log(log: RichLog) -> Result<Log, Error> {
         block_hash: Some(sol_blockhash_into_hex(&log.blockhash)?),
         block_number: Some(log.slot),
         block_timestamp: Some(log.timestamp as u64),
-        transaction_hash: Some(B256::from_str(&log.tx_hash).context("transaction hash")?),
+        transaction_hash: Some(B256::try_from(log.tx_hash.as_slice()).context("transaction hash")?),
         log_index: Some(log.event.log_idx),
         removed: false,
     })
@@ -236,8 +237,8 @@ pub fn convert_rich_log(log: RichLog) -> Result<Log, Error> {
 #[derive(Debug, Clone)]
 pub struct LogFilters {
     pub block: RichLogBy,
-    pub address: Vec<String>,
-    pub topics: [Vec<String>; 4],
+    pub address: Vec<NeonAddress>,
+    pub topics: [Vec<Vec<u8>>; 4],
 }
 
 pub fn convert_filters(filters: Filter) -> Result<LogFilters, Error> {
@@ -257,21 +258,22 @@ pub fn convert_filters(filters: Filter) -> Result<LogFilters, Error> {
         FilterBlockOption::AtBlockHash(hash) => RichLogBy::Hash(hash.0),
     };
 
-    fn extract_filter_set<T>(filter_set: FilterSet<T>) -> Vec<String>
+    fn extract_filter_set<T, U, F>(filter_set: FilterSet<T>, mut f: F) -> Vec<U>
     where
         T: Eq + std::hash::Hash + Clone + ToString,
+        F: FnMut(&T) -> U,
     {
-        let mut vec = match filter_set.to_value_or_array() {
+        match filter_set.to_value_or_array() {
             None => Vec::new(),
-            Some(ValueOrArray::Value(val)) => vec![val.to_string()],
-            Some(ValueOrArray::Array(vec)) => vec.iter().map(ToString::to_string).collect(),
-        };
-        vec.iter_mut().for_each(|str| str.make_ascii_lowercase());
-        vec
+            Some(ValueOrArray::Value(val)) => vec![f(&val)],
+            Some(ValueOrArray::Array(vec)) => vec.iter().map(f).collect(),
+        }
     }
 
-    let address = extract_filter_set(filters.address);
-    let topics = filters.topics.map(extract_filter_set);
+    let address = extract_filter_set(filters.address, |addr| NeonAddress(addr.0 .0));
+    let topics = filters
+        .topics
+        .map(|topics| extract_filter_set(topics, |topic| topic.0.to_vec()));
 
     Ok(LogFilters {
         block,
