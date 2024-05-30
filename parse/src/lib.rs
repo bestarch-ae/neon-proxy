@@ -147,10 +147,9 @@ fn merge_logs_transactions(
     txs: Vec<TransactionMeta>,
     log_info: NeonLogInfo,
     slot: u64,
-    _sol_tx_idx: u64,
 ) -> Vec<NeonTxInfo> {
     let mut tx_infos = Vec::new();
-    for (idx, meta) in txs.into_iter().enumerate() {
+    for meta in txs.into_iter() {
         let TransactionMeta {
             neon_transaction: tx,
             sol_ix_idx,
@@ -170,6 +169,12 @@ fn merge_logs_transactions(
             None
         };
 
+        let gas_used = log_info
+            .ret
+            .as_ref()
+            .map(|r| r.gas_used)
+            .unwrap_or_default();
+
         let tx_info = NeonTxInfo {
             tx_type: 0, // TODO
             neon_signature: neon_sig,
@@ -177,19 +182,11 @@ fn merge_logs_transactions(
             contract,
             transaction: tx,
             events: log_info.event_list.clone(), // TODO
-            gas_used: log_info
-                .ret
-                .as_ref()
-                .map(|r| r.gas_used)
-                .unwrap_or_default(), // TODO
-            sum_gas_used: log_info
-                .ix
-                .as_ref()
-                .map(|i| i.total_gas_used)
-                .unwrap_or_default(), // TODO: unclear what this is
+            gas_used,
+            sum_gas_used: Default::default(),    /* set later */
             sol_signature: Signature::default(), // TODO: should be in input?
             sol_slot: slot,
-            tx_idx: idx as u64, /* actually just tx idx */
+            tx_idx: 0, /* set later */
             sol_ix_idx: sol_ix_idx as u64,
             sol_ix_inner_idx: 0, // TODO: what is this?
             status: log_info.ret.as_ref().map(|r| r.status).unwrap_or_default(), // TODO
@@ -206,9 +203,7 @@ pub fn parse(
     transaction: SolanaTransaction,
     accountsdb: &mut impl AccountsDb,
 ) -> Result<(Vec<NeonTxInfo>, Vec<HolderOperation>), Error> {
-    let SolanaTransaction {
-        slot, tx, tx_idx, ..
-    } = transaction;
+    let SolanaTransaction { slot, tx, .. } = transaction;
     let sig_slot_info = SolTxSigSlotInfo {
         signature: tx.signatures[0],
         block_slot: slot,
@@ -220,7 +215,7 @@ pub fn parse(
     let (neon_txs, holder_ops) = parse_transactions(tx, accountsdb, loaded)?;
 
     let log_info = log::parse(transaction.log_messages)?;
-    let tx_infos = merge_logs_transactions(neon_txs, log_info, slot, tx_idx);
+    let tx_infos = merge_logs_transactions(neon_txs, log_info, slot);
     Ok((tx_infos, holder_ops))
 }
 
@@ -479,7 +474,7 @@ mod tests {
             _ => panic!("no logs"),
         };
         let logs = log::parse(logs).unwrap();
-        let neon_tx_infos = merge_logs_transactions(neon_txs, logs, 0, 0);
+        let neon_tx_infos = merge_logs_transactions(neon_txs, logs, 0);
 
         tracing::info!(?neon_tx_infos);
 
