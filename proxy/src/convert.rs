@@ -11,17 +11,20 @@ use rpc_api_types::{
     TransactionReceipt, ValueOrArray, WithOtherFields,
 };
 
-use common::evm_loader::types::Address as NeonAddress;
+use common::evm_loader::types::{Address as NeonAddress, TransactionPayload};
 use common::solana_sdk::hash::Hash;
 use common::types::{EventLog, NeonTxInfo, SolanaBlock};
 
 fn neon_extra_fields(tx: &NeonTxInfo) -> Result<OtherFields, Error> {
     let mut neon_fields = std::collections::BTreeMap::new();
 
-    // TODO: implement proper recovery id calculation (EIP-155)
+    let v = match &tx.transaction.transaction {
+        TransactionPayload::Legacy(legacy) => legacy.v,
+        TransactionPayload::AccessList(tx) => tx.chain_id * 2 + 35 + u128::from(tx.recovery_id),
+    };
     neon_fields.insert(
         "v".to_string(),
-        serde_json::to_value(U256::from(tx.transaction.recovery_id())).context("extra fields")?,
+        serde_json::to_value(v).context("extra fields")?,
     );
 
     neon_fields.insert(
@@ -32,14 +35,6 @@ fn neon_extra_fields(tx: &NeonTxInfo) -> Result<OtherFields, Error> {
     neon_fields.insert(
         "s".to_string(),
         serde_json::to_value(tx.transaction.s()).context("extra fields")?,
-    );
-
-    // TODO: get chainId from somewhere if None
-    let chain_id = tx.transaction.chain_id();
-
-    neon_fields.insert(
-        "chainID".to_string(),
-        serde_json::to_value(chain_id).context("chainID")?,
     );
 
     Ok(OtherFields::new(neon_fields))
