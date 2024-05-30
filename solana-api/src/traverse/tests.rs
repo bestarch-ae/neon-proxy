@@ -300,7 +300,13 @@ async fn correct_order() {
         address,
     };
     let api = SolanaApi::with_sender(tx_db);
-    let mut traverse = TraverseLedger::new(api, address, None);
+    let mut traverse = TraverseLedger::new_with_api(
+        api,
+        TraverseConfig {
+            target_key: address,
+            ..Default::default()
+        },
+    );
 
     const TXS_PER_SLOT_2: u64 = 2;
     const ADD_NEW_AT: usize = 1337;

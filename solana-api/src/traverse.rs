@@ -95,6 +95,18 @@ pub enum LedgerItem {
     Block(SolanaBlock),
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct TraverseConfig {
+    pub endpoint: String,
+    /// Request only finalized transactions
+    pub finalized: bool,
+    pub rps_limit_sleep: Option<Duration>,
+    /// Request only successful transactions
+    pub only_success: bool,
+    pub target_key: Pubkey,
+    pub last_observed: Option<Signature>,
+}
+
 pub struct TraverseLedger {
     last_observed: Option<Signature>,
     api: SolanaApi,
@@ -109,25 +121,23 @@ pub struct TraverseLedger {
 }
 
 impl TraverseLedger {
-    pub fn new(api: SolanaApi, target_key: Pubkey, last_observed: Option<Signature>) -> Self {
+    pub fn new(config: TraverseConfig) -> Self {
+        let mut config = config;
+        let api = SolanaApi::new(std::mem::take(&mut config.endpoint), config.finalized);
+        Self::new_with_api(api, config)
+    }
+
+    pub(crate) fn new_with_api(api: SolanaApi, config: TraverseConfig) -> Self {
         Self {
             api,
-            target_key,
-            last_observed,
+            target_key: config.target_key,
+            last_observed: config.last_observed,
             buffer: VecDeque::new(),
             cached_block: None,
             next_request: Instant::now(),
-            only_success: false,
-            rps_limit_sleep: None,
+            only_success: config.only_success,
+            rps_limit_sleep: config.rps_limit_sleep,
         }
-    }
-
-    pub fn set_only_success(&mut self, only_success: bool) {
-        self.only_success = only_success
-    }
-
-    pub fn set_rps_limit_sleep(&mut self, rps_limit_sleep: Option<Duration>) {
-        self.rps_limit_sleep = rps_limit_sleep
     }
 
     pub async fn next(&mut self) -> Option<Result<LedgerItem, TraverseError>> {

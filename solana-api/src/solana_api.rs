@@ -24,15 +24,22 @@ pub const SIGNATURES_LIMIT: usize = 1000;
 
 pub struct SolanaApi {
     client: RpcClient,
+    commitment: CommitmentLevel,
 }
 
 impl SolanaApi {
-    pub fn new(endpoint: impl ToString) -> Self {
+    pub fn new(endpoint: impl ToString, finalized: bool) -> Self {
+        let commitment = if finalized {
+            CommitmentLevel::Finalized
+        } else {
+            CommitmentLevel::Confirmed
+        };
         Self {
             client: RpcClient::new_sender(
                 LoggedSender(HttpSender::new(endpoint.to_string())),
                 RpcClientConfig::default(),
             ),
+            commitment,
         }
     }
 
@@ -73,7 +80,9 @@ impl SolanaApi {
                     before: max,
                     until: min,
                     limit: Some(SIGNATURES_LIMIT),
-                    commitment: None,
+                    commitment: Some(CommitmentConfig {
+                        commitment: self.commitment,
+                    }),
                 },
             )
             .await
@@ -88,7 +97,9 @@ impl SolanaApi {
                 signature,
                 RpcTransactionConfig {
                     encoding: Some(UiTransactionEncoding::Base64),
-                    commitment: None,
+                    commitment: Some(CommitmentConfig {
+                        commitment: self.commitment,
+                    }),
                     max_supported_transaction_version: Some(0),
                 },
             )
@@ -103,7 +114,9 @@ impl SolanaApi {
                     encoding: None,
                     transaction_details: Some(TransactionDetails::Signatures),
                     rewards: Some(false),
-                    commitment: Some(CommitmentConfig::default()),
+                    commitment: Some(CommitmentConfig {
+                        commitment: self.commitment,
+                    }),
                     max_supported_transaction_version: Some(0),
                 },
             )
@@ -154,7 +167,10 @@ mod test_ext {
         #[cfg(test)]
         pub fn with_sender(sender: impl RpcSender + Send + Sync + 'static) -> Self {
             let client = RpcClient::new_sender(sender, Default::default());
-            Self { client }
+            Self {
+                client,
+                commitment: CommitmentLevel::Confirmed,
+            }
         }
     }
 }

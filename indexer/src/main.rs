@@ -2,13 +2,13 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
-use neon_parse::Action;
 use solana::solana_api::SolanaApi;
-use solana::traverse::{LedgerItem, TraverseLedger};
+use solana::traverse::{LedgerItem, TraverseConfig, TraverseLedger};
 
 use common::ethnum::U256;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
+use neon_parse::Action;
 
 #[derive(Parser)]
 struct Args {
@@ -53,12 +53,15 @@ async fn main() -> Result<()> {
 
     tracing::info!("starting traversal from {:?}", from);
 
-    let api = SolanaApi::new(opts.url);
-
-    let mut traverse = TraverseLedger::new(api, opts.target, from);
-    traverse.set_rps_limit_sleep(opts.rps_limit_sleep.map(Duration::from_secs));
-    traverse.set_only_success(true);
-
+    let traverse_config = TraverseConfig {
+        endpoint: opts.url,
+        rps_limit_sleep: opts.rps_limit_sleep.map(Duration::from_secs),
+        target_key: opts.target,
+        last_observed: opts.from,
+        finalized: true,
+        only_success: true,
+    };
+    let mut traverse = TraverseLedger::new(traverse_config);
     let mut adb = accountsdb::DummyAdb::new(opts.target, holder_repo.clone());
 
     let mut last_written_slot = None;
