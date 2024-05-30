@@ -111,8 +111,14 @@ impl EthApiServer for EthApiImpl {
     }
 
     /// Returns the number of most recent block.
+    /// TODO: why is this not async?
     fn block_number(&self) -> RpcResult<U256> {
-        todo!()
+        let blocks = self.blocks.clone();
+        let num = tokio::task::block_in_place(move || {
+            tokio::runtime::Handle::current().block_on(async move { blocks.latest_number().await })
+        })
+        .map_err(Error::from)?;
+        Ok(U256::from(num))
     }
 
     /// Returns the chain ID of the current network.

@@ -75,6 +75,14 @@ impl BlockRepo {
         .map(|res| Ok(res.map(Option::transpose)??))
         .await
     }
+
+    pub async fn latest_number(&self) -> Result<u64, Error> {
+        let num = sqlx::query!("SELECT max(block_slot) as \"slot!\" FROM solana_blocks")
+            .fetch_one(&self.pool)
+            .await?
+            .slot as u64;
+        Ok(num)
+    }
 }
 
 struct BlockRow {
