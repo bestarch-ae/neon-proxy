@@ -63,6 +63,7 @@ async fn main() -> Result<()> {
     /* TODO: we should always start from the start of the block otherwise these would be wrong */
     let mut neon_tx_idx = 0;
     let mut block_gas_used = U256::new(0);
+    let mut block_log_idx = 0;
 
     while let Some(result) = traverse.next().await {
         tracing::debug!(?result, "retrieved transaction/block");
@@ -94,6 +95,13 @@ async fn main() -> Result<()> {
                         neon_tx_idx += 1;
                         block_gas_used += tx.gas_used;
                         tx.sum_gas_used = block_gas_used;
+
+                        for log in &mut tx.events {
+                            if !log.is_hidden {
+                                log.log_idx = block_log_idx;
+                                block_log_idx += 1;
+                            }
+                        }
                     }
 
                     if let Err(err) = tx_repo.insert(&tx).await {
@@ -118,6 +126,7 @@ async fn main() -> Result<()> {
             Ok(LedgerItem::Block(block)) => {
                 neon_tx_idx = 0;
                 block_gas_used = U256::new(0);
+                block_log_idx = 0;
 
                 if let Err(err) = block_repo.insert(&block).await {
                     tracing::warn!(?err, slot = block.slot, "failed to save solana block");
