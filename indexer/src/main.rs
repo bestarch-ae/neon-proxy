@@ -88,10 +88,13 @@ async fn main() -> Result<()> {
                 tracing::debug!(?txs, "parsed transactions");
                 for mut tx in txs {
                     tx.tx_idx = neon_tx_idx;
-                    neon_tx_idx += 1;
 
-                    block_gas_used += tx.gas_used;
-                    tx.sum_gas_used = block_gas_used;
+                    // only completed transactions increment gas and idx
+                    if tx.is_completed {
+                        neon_tx_idx += 1;
+                        block_gas_used += tx.gas_used;
+                        tx.sum_gas_used = block_gas_used;
+                    }
 
                     if let Err(err) = tx_repo.insert(&tx).await {
                         tracing::warn!(?err, "failed to save neon transaction");
