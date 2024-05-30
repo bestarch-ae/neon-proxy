@@ -5,6 +5,7 @@ use clap::Parser;
 use solana::solana_api::SolanaApi;
 use solana::traverse::{LedgerItem, TraverseLedger};
 
+use common::ethnum::U256;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
 
@@ -59,7 +60,9 @@ async fn main() -> Result<()> {
     let mut last_written_slot = None;
     tracing::info!("connected");
 
+    /* TODO: we should always start from the start of the block otherwise these would be wrong */
     let mut neon_tx_idx = 0;
+    let mut block_gas_used = U256::new(0);
 
     while let Some(result) = traverse.next().await {
         tracing::debug!(?result, "retrieved transaction/block");
@@ -86,6 +89,10 @@ async fn main() -> Result<()> {
                 for mut tx in txs {
                     tx.tx_idx = neon_tx_idx;
                     neon_tx_idx += 1;
+
+                    block_gas_used += tx.gas_used;
+                    tx.sum_gas_used = block_gas_used;
+
                     if let Err(err) = tx_repo.insert(&tx).await {
                         tracing::warn!(?err, "failed to save neon transaction");
                     } else {
@@ -107,6 +114,8 @@ async fn main() -> Result<()> {
             }
             Ok(LedgerItem::Block(block)) => {
                 neon_tx_idx = 0;
+                block_gas_used = U256::new(0);
+
                 if let Err(err) = block_repo.insert(&block).await {
                     tracing::warn!(?err, slot = block.slot, "failed to save solana block");
                 } else {
