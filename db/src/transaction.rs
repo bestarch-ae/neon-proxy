@@ -146,6 +146,12 @@ impl TransactionRepo {
         let sol_idx = tx.sol_ix_idx as i32;
         let sol_inner_idx = tx.sol_ix_inner_idx as i32;
 
+        let v = match &tx.transaction.transaction {
+            TransactionPayload::Legacy(legacy) => legacy.v,
+            TransactionPayload::AccessList(tx) => tx.chain_id * 2 + 35 + u128::from(tx.recovery_id),
+        };
+        let chain_id = tx.transaction.chain_id();
+
         let mut txn = self.pool.begin().await?;
 
         let mut tx_log_idx = 0;
@@ -232,17 +238,17 @@ impl TransactionRepo {
                 is_canceled,
                 is_completed,
                 v, r, s,
+                chain_id,
                 calldata,
                 logs
             )
             VALUES($1, $2, $3, $4, $5, $6,
                    $7, $8, $9, $10, $11, $12,
                    $13, $14, $15, $16, $17, $18,
-                   $19, $20, $21, $22, $23, $24)
+                   $19, $20, $21, $22, $23, $24, $25)
             ON CONFLICT (neon_sig)
             DO UPDATE SET
                block_slot = $7,
-               /* sum_gas_used = EXCLUDED.sum_gas_used + $13, TODO */
                is_completed = $19,
                is_canceled = $18,
                status = $17,
@@ -269,12 +275,12 @@ impl TransactionRepo {
             tx.status as i16,                                                  // 17
             tx.is_cancelled,                                                   // 18
             tx.is_completed,                                                   // 19
-            // TODO: Fix this for legacy
-            PgU256::from(U256::new(tx.transaction.recovery_id() as u128)) as PgU256, // 20: TODO
-            PgU256::from(tx.transaction.r()) as PgU256,                              // 21
-            PgU256::from(tx.transaction.s()) as PgU256,                              // 22
-            tx.transaction.call_data(),                                              // 23
-            &[]                                                                      /* 24 logs */
+            PgU256::from(v) as PgU256,                                         // 20: TODO
+            PgU256::from(tx.transaction.r()) as PgU256,                        // 21
+            PgU256::from(tx.transaction.s()) as PgU256,                        // 22
+            chain_id.map(|x| x as i64),                                        // 23
+            tx.transaction.call_data(),                                        // 24
+            &[]                                                                /* 25 logs */
         )
         .execute(&mut *txn)
         .await?;
@@ -297,7 +303,7 @@ impl TransactionRepo {
                  gas_limit as "gas_limit!", value as "value!", gas_used as "gas_used!",
                  sum_gas_used as "sum_gas_used!", to_addr as "to_addr?: PgAddress", contract as "contract?: PgAddress",
                  status "status!", is_canceled as "is_canceled!", is_completed as "is_completed!", 
-                 v "v!", r as "r!", s as "s!", 
+                 v "v!", r as "r!", s as "s!", chain_id,
                  calldata as "calldata!",
                  B.block_hash as "block_hash!: PgSolanaBlockHash"
                FROM neon_transactions T
@@ -455,6 +461,7 @@ struct NeonTransactionRow {
     v: PgU256,
     r: PgU256,
     s: PgU256,
+    chain_id: Option<i64>,
 
     calldata: Vec<u8>,
     block_hash: Option<PgSolanaBlockHash>,
@@ -477,13 +484,20 @@ impl NeonTransactionRow {
         };
 
         let nonce = self.nonce as u64;
-        let recovery_id = U256::from(self.v.clone()).as_u8(); // TODO
         let gas_price = self.gas_price.clone().into();
         let gas_limit = self.gas_limit.clone().into();
         let value = self.value.clone().into();
-        let v = self.v.clone().into();
+        let v: U256 = self.v.clone().into();
         let r = self.r.clone().into();
         let s = self.s.clone().into();
+        let chain_id = self.chain_id.map(|x| U256::from(x as u128));
+        let recovery_id = match v.as_u64() {
+            _legacy if v <= 35 => v.as_u8() - 27,
+            _access_list => {
+                let chain_id = chain_id.ok_or_else(|| anyhow::anyhow!("missing chain_id"))?;
+                (v.as_u64() - 35 - 2 * chain_id.as_u64()) as u8
+            }
+        };
 
         let target = self.to_addr.map(Address::from);
         let call_data = self.calldata.clone();
@@ -499,7 +513,7 @@ impl NeonTransactionRow {
                 v,
                 r,
                 s,
-                chain_id: None,
+                chain_id,
                 recovery_id,
             }),
             TxKind::AccessList => TransactionPayload::AccessList(AccessListTx {
@@ -511,7 +525,7 @@ impl NeonTransactionRow {
                 call_data,
                 r,
                 s,
-                chain_id: U256::new(0), // TODO
+                chain_id: chain_id.unwrap_or(U256::new(0)), // TODO
                 recovery_id,
                 access_list: Vec::new(), // TODO
             }),

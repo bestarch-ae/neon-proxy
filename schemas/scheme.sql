@@ -168,6 +168,7 @@
         v U256 NOT NULL,
         r U256 NOT NULL,
         s U256 NOT NULL,
+        chain_id BIGINT, /* NULL for legacy transactions */
 
         calldata BYTEA NOT NULL,
         logs BYTEA NOT NULL
