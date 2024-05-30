@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT max(block_slot) as \"slot!\" FROM solana_blocks",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "slot!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "da315b561987c4ed7ba2d4941c99ad8fb199dd88356dd86e03b7094fbb9873da"
+}
