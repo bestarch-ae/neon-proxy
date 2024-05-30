@@ -76,8 +76,24 @@ impl BlockRepo {
         .await
     }
 
-    pub async fn latest_number(&self) -> Result<u64, Error> {
-        let num = sqlx::query!("SELECT max(block_slot) as \"slot!\" FROM solana_blocks")
+    pub async fn latest_number(&self, is_finalized: bool) -> Result<u64, Error> {
+        let num = sqlx::query!(
+            r#"
+                SELECT max(block_slot) as "slot!"
+                FROM solana_blocks
+                WHERE is_finalized = $1 OR $2
+            "#,
+            is_finalized,
+            !is_finalized
+        )
+        .fetch_one(&self.pool)
+        .await?
+        .slot as u64;
+        Ok(num)
+    }
+
+    pub async fn earliest_slot(&self) -> Result<u64, Error> {
+        let num = sqlx::query!(r#"SELECT min(block_slot) as "slot!" FROM solana_blocks"#)
             .fetch_one(&self.pool)
             .await?
             .slot as u64;

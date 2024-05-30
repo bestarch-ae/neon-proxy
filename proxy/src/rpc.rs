@@ -11,6 +11,7 @@ use rpc_api::servers::EthApiServer;
 use rpc_api::EthFilterApiServer;
 use rpc_api_types::serde_helpers::JsonStorageKey;
 use rpc_api_types::Filter;
+use rpc_api_types::FilterBlockOption;
 use rpc_api_types::FilterChanges;
 use rpc_api_types::FilterId;
 use rpc_api_types::Log;
@@ -44,17 +45,57 @@ impl EthApiImpl {
         }
     }
 
-    async fn get_block(&self, by: db::BlockBy, full: bool) -> Result<Option<RichBlock>, Error> {
-        let Some(block) = self.blocks.fetch_by(by).await? else {
+    async fn find_slot(&self, tag: BlockNumberOrTag) -> Result<u64, Error> {
+        let is_finalized = match tag {
+            BlockNumberOrTag::Number(slot) => return Ok(slot),
+            BlockNumberOrTag::Earliest => return Ok(self.blocks.earliest_slot().await?),
+            BlockNumberOrTag::Pending => false,
+            // Confirmed
+            BlockNumberOrTag::Latest => false,
+            // Finalized
+            BlockNumberOrTag::Finalized | BlockNumberOrTag::Safe => true,
+        };
+
+        Ok(self.blocks.latest_number(is_finalized).await?)
+    }
+
+    async fn normalize_filter(&self, filter: Filter) -> Result<Filter, Error> {
+        let mut filter = filter;
+        if let FilterBlockOption::Range {
+            ref mut from_block,
+            ref mut to_block,
+        } = filter.block_option
+        {
+            for tag_ref in [from_block, to_block] {
+                if let Some(tag) = tag_ref {
+                    let tag = *tag;
+                    tag_ref.replace(BlockNumberOrTag::Number(self.find_slot(tag).await?));
+                }
+            }
+        }
+        Ok(filter)
+    }
+
+    async fn get_block(
+        &self,
+        by: db::BlockBy,
+        full: bool,
+        is_pending: bool,
+    ) -> Result<Option<RichBlock>, Error> {
+        let Some(mut block) = self.blocks.fetch_by(by).await? else {
             return Ok(None);
         };
         let slot = block.slot;
-        let txs = self
-            .transactions
-            .fetch_without_events(::db::TransactionBy::Slot(slot))
-            .map_ok(|tx| tx.inner)
-            .try_collect()
-            .await?;
+        let txs = if is_pending {
+            block.slot += 1;
+            Vec::new()
+        } else {
+            self.transactions
+                .fetch_without_events(::db::TransactionBy::Slot(slot))
+                .map_ok(|tx| tx.inner)
+                .try_collect()
+                .await?
+        };
         Ok(Some(build_block(block, txs, full)?.into()))
     }
 
@@ -115,7 +156,8 @@ impl EthApiServer for EthApiImpl {
     fn block_number(&self) -> RpcResult<U256> {
         let blocks = self.blocks.clone();
         let num = tokio::task::block_in_place(move || {
-            tokio::runtime::Handle::current().block_on(async move { blocks.latest_number().await })
+            tokio::runtime::Handle::current()
+                .block_on(async move { blocks.latest_number(false).await })
         })
         .map_err(Error::from)?;
         Ok(U256::from(num))
@@ -131,7 +173,7 @@ impl EthApiServer for EthApiImpl {
         use common::solana_sdk::hash::Hash;
 
         let hash = Hash::new_from_array(hash.0);
-        self.get_block(db::BlockBy::Hash(hash), full)
+        self.get_block(db::BlockBy::Hash(hash), full, false)
             .await
             .map_err(Into::into)
     }
@@ -139,13 +181,11 @@ impl EthApiServer for EthApiImpl {
     /// Returns information about a block by number.
     async fn block_by_number(
         &self,
-        number: BlockNumberOrTag,
+        tag: BlockNumberOrTag,
         full: bool,
     ) -> RpcResult<Option<RichBlock>> {
-        let BlockNumberOrTag::Number(slot) = number else {
-            return unimplemented();
-        };
-        self.get_block(db::BlockBy::Slot(slot), full)
+        let slot = self.find_slot(tag).await?;
+        self.get_block(db::BlockBy::Slot(slot), full, tag.is_pending())
             .await
             .map_err(Into::into)
     }
@@ -478,6 +518,7 @@ impl EthApiServer for EthApiImpl {
 impl EthFilterApiServer for EthApiImpl {
     /// Returns logs matching given filter object.
     async fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
+        let filter = self.normalize_filter(filter).await?;
         let filters = convert_filters(filter).map_err(Error::from)?;
         Ok(self.get_logs(filters).await?)
     }
