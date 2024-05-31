@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT max(block_slot) as \"slot!\" FROM solana_blocks",
+  "query": "SELECT min(block_slot) as \"slot!\" FROM solana_blocks",
   "describe": {
     "columns": [
       {
@@ -16,5 +16,5 @@
       null
     ]
   },
-  "hash": "da315b561987c4ed7ba2d4941c99ad8fb199dd88356dd86e03b7094fbb9873da"
+  "hash": "9d359c7599d7df13b8ec2d405d35265bf1947b136364fcf5b3c82eb4793b40b3"
 }

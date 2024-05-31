@@ -40,12 +40,32 @@ impl BlockRepo {
             block.time.unwrap_or(0),
             block.parent_slot as i64,
             PgSolanaBlockHash::from(block.parent_hash) as PgSolanaBlockHash,
-            true,
+            block.is_finalized,
             true,
         )
         .execute(&mut *txn)
         .await?;
         txn.commit().await?;
+        Ok(())
+    }
+
+    pub async fn finalize(&self, slot: u64) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"UPDATE solana_blocks SET is_finalized = true WHERE block_slot = $1"#,
+            slot as i64
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn purge(&self, slot: u64) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"DELETE FROM solana_blocks WHERE block_slot = $1"#,
+            slot as i64
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 

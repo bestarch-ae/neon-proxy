@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE solana_blocks SET is_finalized = true WHERE block_slot = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "48cccbd9419c2e94e8a3985a0695d3088cc58f3aa8f7a6250f27b3655c6cba10"
+}

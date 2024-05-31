@@ -152,9 +152,17 @@ async fn main() -> Result<()> {
                 }
             }
             Ok(LedgerItem::FinalizedBlock(slot)) => {
+                if let Err(err) = block_repo.finalize(slot).await {
+                    tracing::warn!(%err, slot, "failed finalizing block in db");
+                    continue;
+                }
                 tracing::info!(slot, "block was finalized");
             }
             Ok(LedgerItem::PurgedBlock(slot)) => {
+                if let Err(err) = block_repo.purge(slot).await {
+                    tracing::warn!(%err, slot, "failed purging block in db");
+                    continue;
+                }
                 tracing::info!(slot, "block was purged");
             }
             Err(err) => {

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT max(block_slot) as \"slot!\"\n                FROM solana_blocks\n                WHERE is_finalized = $1 OR $2\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "slot!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c61850a30bd905b2342296e53699ccc0a25e875dfe08e2d2f419386da61b15e4"
+}

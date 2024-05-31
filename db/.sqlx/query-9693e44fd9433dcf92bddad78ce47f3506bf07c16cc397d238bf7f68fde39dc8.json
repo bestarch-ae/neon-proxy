@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT\n                block_slot as \"block_slot!\",\n                block_hash as \"block_hash!: PgSolanaBlockHash\",\n                block_time as \"block_time!\",\n                parent_block_slot as \"parent_block_slot!\",\n                parent_block_hash as \"parent_block_hash!: PgSolanaBlockHash\"\n               FROM solana_blocks\n               WHERE (block_slot = $1 OR $2) AND (block_hash = $3 OR $4)\n            ",
+  "query": "SELECT\n                block_slot as \"block_slot!\",\n                block_hash as \"block_hash!: PgSolanaBlockHash\",\n                block_time as \"block_time!\",\n                parent_block_slot as \"parent_block_slot!\",\n                parent_block_hash as \"parent_block_hash!: PgSolanaBlockHash\", \n                is_finalized\n               FROM solana_blocks\n               WHERE (block_slot = $1 OR $2) AND (block_hash = $3 OR $4)\n            ",
   "describe": {
     "columns": [
       {
@@ -27,6 +27,11 @@
         "ordinal": 4,
         "name": "parent_block_hash!: PgSolanaBlockHash",
         "type_info": "Bytea"
+      },
+      {
+        "ordinal": 5,
+        "name": "is_finalized",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
@@ -42,8 +47,9 @@
       false,
       true,
       false,
+      false,
       false
     ]
   },
-  "hash": "ea4af60d60532e81d71c8c51d9d8f8d977f78a9188d0f6fb589e81e2d12eec3c"
+  "hash": "9693e44fd9433dcf92bddad78ce47f3506bf07c16cc397d238bf7f68fde39dc8"
 }
