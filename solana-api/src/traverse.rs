@@ -1,3 +1,4 @@
+mod finalization_tracker;
 #[cfg(test)]
 mod tests;
 
@@ -19,6 +20,8 @@ use common::types::{SolanaBlock, SolanaTransaction};
 use crate::convert::{decode_ui_transaction, TxDecodeError};
 use crate::solana_api::{SolanaApi, SIGNATURES_LIMIT};
 use crate::utils::ward;
+
+use finalization_tracker::{BlockStatus, FinalizationTracker};
 
 // const SIGNATURES_LIMIT: usize = 1000;
 const RECHECK_INTERVAL: Duration = Duration::from_secs(1);

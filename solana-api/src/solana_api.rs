@@ -27,6 +27,15 @@ pub struct SolanaApi {
     commitment: CommitmentLevel,
 }
 
+impl std::fmt::Debug for SolanaApi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SolanaApi")
+            .field("client", &"RpcClient")
+            .field("commitment", &self.commitment)
+            .finish()
+    }
+}
+
 impl SolanaApi {
     pub fn new(endpoint: impl ToString, finalized: bool) -> Self {
         let commitment = if finalized {
@@ -120,6 +129,18 @@ impl SolanaApi {
                     max_supported_transaction_version: Some(0),
                 },
             )
+            .await
+    }
+
+    pub async fn get_finalized_slot(&self) -> ClientResult<Slot> {
+        self.client
+            .get_slot_with_commitment(CommitmentConfig::finalized())
+            .await
+    }
+
+    pub async fn get_finalized_blocks(&self, from: u64) -> ClientResult<Vec<Slot>> {
+        self.client
+            .get_blocks_with_commitment(from, None, CommitmentConfig::finalized())
             .await
     }
 }
