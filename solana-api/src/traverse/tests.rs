@@ -127,6 +127,8 @@ impl RpcSender for TransactionDB {
                 let block = serde_json::to_value(block.value()).expect("cannot serialize block");
                 Ok(block)
             }
+            RpcRequest::GetBlocks => Ok(serde_json::to_value(Vec::<()>::new()).unwrap()),
+            RpcRequest::GetSlot => Ok(serde_json::to_value(u64::MAX).unwrap()),
             request => panic!("unsupported request: {} - {}", request, params),
         }
     }
@@ -343,7 +345,7 @@ async fn correct_order() {
         let tx = loop {
             match traverse.next().await.unwrap().unwrap() {
                 LedgerItem::Transaction(tx) => break tx,
-                LedgerItem::Block(_) => continue, // Skip blocks for now
+                _item => continue, // Skip blocks for now
             }
         };
         assert_eq!(

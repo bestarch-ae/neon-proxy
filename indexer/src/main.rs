@@ -151,6 +151,12 @@ async fn main() -> Result<()> {
                     last_written_slot.replace(block.slot);
                 }
             }
+            Ok(LedgerItem::FinalizedBlock(slot)) => {
+                tracing::info!(slot, "block was finalized");
+            }
+            Ok(LedgerItem::PurgedBlock(slot)) => {
+                tracing::info!(slot, "block was purged");
+            }
             Err(err) => {
                 tracing::warn!(?err, "failed to retrieve transaction");
                 continue;

@@ -101,11 +101,20 @@ async fn main() -> Result<()> {
                     parent_slot,
                     parent_hash,
                     time,
+                    is_finalized: _,
                 } = block;
                 println!("===== End of Block =====");
                 println!("Slot: {slot}, Hash: {hash}");
                 println!("Parent Slot: {parent_slot}, Parent Hash: {parent_hash}");
                 println!("Time: {time:?}");
+                println!();
+            }
+            LedgerItem::FinalizedBlock(slot) => {
+                println!("===== Finalized Block {slot} =====");
+                println!();
+            }
+            LedgerItem::PurgedBlock(slot) => {
+                println!("===== Purged Block {slot} =====");
                 println!();
             }
         }

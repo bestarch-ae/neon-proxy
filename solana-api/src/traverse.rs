@@ -87,6 +87,7 @@ impl CachedBlock {
             parent_slot: self.block.parent_slot,
             parent_hash: self.block.previous_blockhash.parse()?,
             time: self.block.block_time,
+            is_finalized: false,
         })
     }
 }
@@ -96,6 +97,8 @@ impl CachedBlock {
 pub enum LedgerItem {
     Transaction(SolanaTransaction),
     Block(SolanaBlock),
+    FinalizedBlock(u64),
+    PurgedBlock(u64),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -104,6 +107,7 @@ pub struct TraverseConfig {
     /// Request only finalized transactions
     pub finalized: bool,
     pub rps_limit_sleep: Option<Duration>,
+    pub status_poll_interval: Option<Duration>,
     /// Request only successful transactions
     pub only_success: bool,
     pub target_key: Pubkey,
@@ -111,6 +115,93 @@ pub struct TraverseConfig {
 }
 
 pub struct TraverseLedger {
+    traverse: InnerTraverseLedger,
+    api: SolanaApi,
+    tracker: Option<FinalizationTracker>,
+    status_poll_interval: Option<Duration>,
+    purged_block: Option<u64>,
+}
+
+impl TraverseLedger {
+    pub fn new(config: TraverseConfig) -> Self {
+        let mut config = config;
+        let api = SolanaApi::new(std::mem::take(&mut config.endpoint), config.finalized);
+        Self::new_with_api(api, config)
+    }
+
+    pub(crate) fn new_with_api(api: SolanaApi, config: TraverseConfig) -> Self {
+        Self {
+            status_poll_interval: config.status_poll_interval,
+            traverse: InnerTraverseLedger::new_with_api(api.clone(), config),
+            api,
+            tracker: None,
+            purged_block: None,
+        }
+    }
+
+    pub async fn next(&mut self) -> Option<Result<LedgerItem, TraverseError>> {
+        if let Some(purged) = self.purged_block.take() {
+            return Some(Ok(LedgerItem::PurgedBlock(purged)));
+        }
+
+        if self.tracker.is_none() {
+            let tracker = match FinalizationTracker::init(
+                self.api.clone(),
+                self.status_poll_interval,
+            )
+            .await
+            {
+                Ok(tracker) => tracker,
+                Err(err) => return Some(Err(err.into())),
+            };
+            self.tracker = Some(tracker);
+        }
+
+        let tracker = self.tracker.as_mut().expect("uninit finalization tracker");
+
+        tokio::select! {
+            result = tracker.next() => Some(match result {
+                Err(err) => Err(err.into()),
+                Ok((slot, true)) => Ok(LedgerItem::FinalizedBlock(slot)),
+                Ok((slot, false)) => Ok(LedgerItem::PurgedBlock(slot)),
+            }),
+            result = self.traverse.try_next() => match result {
+                res @ Ok(InnerLedgerItem::Transaction(..))
+                    | res @ Err(..) => Some(res.map(Into::into)),
+                Ok(InnerLedgerItem::Block(mut block)) => {
+                    match tracker.check_or_schedule_new_slot(block.slot) {
+                        BlockStatus::Finalized => block.is_finalized = true,
+                        BlockStatus::Pending => block.is_finalized = false,
+                        BlockStatus::Purged => {
+                            block.is_finalized = false;
+                            // We need this as long as we stream block AFTER its transactions
+                            self.purged_block = Some(block.slot);
+                        }
+                    }
+                    Some(Ok(LedgerItem::Block(block)))
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+enum InnerLedgerItem {
+    Transaction(SolanaTransaction),
+    Block(SolanaBlock),
+}
+
+impl From<InnerLedgerItem> for LedgerItem {
+    fn from(value: InnerLedgerItem) -> Self {
+        match value {
+            InnerLedgerItem::Transaction(tx) => Self::Transaction(tx),
+            InnerLedgerItem::Block(block) => Self::Block(block),
+        }
+    }
+}
+
+struct InnerTraverseLedger {
     last_observed: Option<Signature>,
     api: SolanaApi,
     target_key: Pubkey,
@@ -123,14 +214,8 @@ pub struct TraverseLedger {
     rps_limit_sleep: Option<Duration>,
 }
 
-impl TraverseLedger {
-    pub fn new(config: TraverseConfig) -> Self {
-        let mut config = config;
-        let api = SolanaApi::new(std::mem::take(&mut config.endpoint), config.finalized);
-        Self::new_with_api(api, config)
-    }
-
-    pub(crate) fn new_with_api(api: SolanaApi, config: TraverseConfig) -> Self {
+impl InnerTraverseLedger {
+    fn new_with_api(api: SolanaApi, config: TraverseConfig) -> Self {
         Self {
             api,
             target_key: config.target_key,
@@ -143,11 +228,7 @@ impl TraverseLedger {
         }
     }
 
-    pub async fn next(&mut self) -> Option<Result<LedgerItem, TraverseError>> {
-        Some(self.try_next().await)
-    }
-
-    async fn try_next(&mut self) -> Result<LedgerItem, TraverseError> {
+    async fn try_next(&mut self) -> Result<InnerLedgerItem, TraverseError> {
         let (idx, signature) = {
             let block = self.get_block().await?;
             if let Some(result) = block.next_transaction() {
@@ -160,7 +241,7 @@ impl TraverseLedger {
                     .take()
                     .expect("`get_block` always returns cached block")
                     .into_info()?;
-                return Ok(LedgerItem::Block(block));
+                return Ok(InnerLedgerItem::Block(block));
             }
         };
 
@@ -172,7 +253,7 @@ impl TraverseLedger {
             .inspect_err(|err| tracing::error!(%err, %signature, "could not decode transaction"))?;
         tx.tx_idx = idx;
 
-        Ok(LedgerItem::Transaction(tx))
+        Ok(InnerLedgerItem::Transaction(tx))
     }
 
     async fn get_block(&mut self) -> Result<&mut CachedBlock, ClientError> {

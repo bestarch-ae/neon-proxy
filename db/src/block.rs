@@ -61,7 +61,8 @@ impl BlockRepo {
                 block_hash as "block_hash!: PgSolanaBlockHash",
                 block_time as "block_time!",
                 parent_block_slot as "parent_block_slot!",
-                parent_block_hash as "parent_block_hash!: PgSolanaBlockHash"
+                parent_block_hash as "parent_block_hash!: PgSolanaBlockHash", 
+                is_finalized
                FROM solana_blocks
                WHERE (block_slot = $1 OR $2) AND (block_hash = $3 OR $4)
             "#,
@@ -107,6 +108,7 @@ struct BlockRow {
     block_time: i64,
     parent_block_slot: i64,
     parent_block_hash: PgSolanaBlockHash,
+    is_finalized: bool,
 }
 
 impl TryFrom<BlockRow> for SolanaBlock {
@@ -119,6 +121,7 @@ impl TryFrom<BlockRow> for SolanaBlock {
             block_time,
             parent_block_slot,
             parent_block_hash,
+            is_finalized,
         } = value;
         Ok(SolanaBlock {
             slot: block_slot.try_into().context("slot")?,
@@ -126,6 +129,7 @@ impl TryFrom<BlockRow> for SolanaBlock {
             parent_slot: parent_block_slot.try_into().context("parent_slot")?,
             parent_hash: parent_block_hash.into(),
             time: Some(block_time),
+            is_finalized,
         })
     }
 }

@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod mock;
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use common::solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use common::solana_sdk::hash::Hash;
@@ -22,8 +24,9 @@ use solana_rpc_client::http_sender::HttpSender;
 
 pub const SIGNATURES_LIMIT: usize = 1000;
 
+#[derive(Clone)]
 pub struct SolanaApi {
-    client: RpcClient,
+    client: Arc<RpcClient>,
     commitment: CommitmentLevel,
 }
 
@@ -44,10 +47,10 @@ impl SolanaApi {
             CommitmentLevel::Confirmed
         };
         Self {
-            client: RpcClient::new_sender(
+            client: Arc::new(RpcClient::new_sender(
                 LoggedSender(HttpSender::new(endpoint.to_string())),
                 RpcClientConfig::default(),
-            ),
+            )),
             commitment,
         }
     }
@@ -187,7 +190,7 @@ mod test_ext {
 
         #[cfg(test)]
         pub fn with_sender(sender: impl RpcSender + Send + Sync + 'static) -> Self {
-            let client = RpcClient::new_sender(sender, Default::default());
+            let client = Arc::new(RpcClient::new_sender(sender, Default::default()));
             Self {
                 client,
                 commitment: CommitmentLevel::Confirmed,
