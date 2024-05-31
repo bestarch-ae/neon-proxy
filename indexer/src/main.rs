@@ -53,8 +53,11 @@ async fn main() -> Result<()> {
     tracing::info!("starting traversal from {:?}", from);
 
     let api = SolanaApi::new(opts.url);
+
     let mut traverse = TraverseLedger::new(api, opts.target, from);
     traverse.set_rps_limit_sleep(opts.rps_limit_sleep.map(Duration::from_secs));
+    traverse.set_only_success(true);
+
     let mut adb = accountsdb::DummyAdb::new(opts.target, holder_repo.clone());
 
     let mut last_written_slot = None;
