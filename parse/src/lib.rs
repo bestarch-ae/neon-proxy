@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use thiserror::Error;
 
 use common::evm_loader::types::{Address, Transaction};
@@ -74,7 +72,7 @@ fn parse_transactions(
     tx: VersionedTransaction,
     accountsdb: &mut impl AccountsDb,
     loaded: &LoadedAddresses,
-) -> Result<(Vec<TransactionMeta>, Vec<HolderOperation>), Error> {
+) -> Result<Vec<Action<TransactionMeta>>, Error> {
     use transaction::ParseResult;
 
     tracing::debug!("parsing tx {:?} with loaded addresses: {:?}", tx, loaded);
@@ -89,8 +87,8 @@ fn parse_transactions(
         tracing::warn!("not a neon transaction");
         return Ok(Default::default());
     };
-    let mut transactions = HashMap::new();
-    let mut holder_ops = Vec::new();
+    let mut actions = Vec::new();
+
     for (idx, ix) in tx.message.instructions().iter().enumerate() {
         tracing::debug!("instruction {:?}", ix);
         if ix.program_id_index != neon_idx as u8 {
@@ -106,103 +104,100 @@ fn parse_transactions(
         tracing::debug!("parse result: {:?}", res);
         match res {
             ParseResult::TransactionExecuted(neon_tx) => {
-                transactions.insert(
-                    neon_tx.hash(),
-                    TransactionMeta {
-                        neon_transaction: neon_tx,
-                        sol_ix_idx: idx,
-                        is_cancelled: false,
-                        is_completed: true,
-                    },
-                );
+                actions.push(Action::AddTransaction(TransactionMeta {
+                    neon_transaction: neon_tx,
+                    sol_ix_idx: idx,
+                    is_cancelled: false,
+                    is_completed: true,
+                }));
             }
             ParseResult::TransactionStep(neon_tx) => {
-                transactions.insert(
-                    neon_tx.hash(),
-                    TransactionMeta {
-                        neon_transaction: neon_tx,
-                        sol_ix_idx: idx,
-                        is_cancelled: false,
-                        is_completed: false,
-                    },
-                );
+                actions.push(Action::AddTransaction(TransactionMeta {
+                    neon_transaction: neon_tx,
+                    sol_ix_idx: idx,
+                    is_cancelled: false,
+                    is_completed: false,
+                }));
             }
             ParseResult::TransactionCancel(hash) => {
-                if let Some(tx) = transactions.get_mut(&hash) {
-                    tx.is_cancelled = true;
-                }
+                actions.push(Action::CancelTransaction(hash));
             }
-            ParseResult::HolderOperation(op) => holder_ops.push(op),
+            ParseResult::HolderOperation(op) => actions.push(Action::WriteHolder(op)),
             res => {
                 tracing::debug!("unhandled parse result: {:?}", res);
             }
         }
     }
-    let mut txs = transactions.into_values().collect::<Vec<_>>();
-    txs.sort_by_key(|tx| tx.sol_ix_idx);
-    Ok((txs, holder_ops))
+    Ok(actions)
 }
 
-fn merge_logs_transactions(
-    txs: Vec<TransactionMeta>,
-    log_info: NeonLogInfo,
-    slot: u64,
-) -> Vec<NeonTxInfo> {
-    let mut tx_infos = Vec::new();
-    for meta in txs.into_iter() {
-        let TransactionMeta {
-            neon_transaction: tx,
-            sol_ix_idx,
-            is_cancelled,
-            is_completed,
-        } = meta;
-        let neon_sig = tx.hash();
+fn add_log(meta: TransactionMeta, log_info: &NeonLogInfo, slot: u64) -> NeonTxInfo {
+    let TransactionMeta {
+        neon_transaction: tx,
+        sol_ix_idx,
+        is_cancelled,
+        is_completed,
+    } = meta;
+    let neon_sig = tx.hash();
 
-        // if `to` address is absent, it means we are
-        // creating new contract
-        let contract = if tx.target().is_none() {
-            let sender = tx.recover_caller_address().unwrap();
-            let nonce = tx.nonce();
+    // if `to` address is absent, it means we are
+    // creating new contract
+    let contract = if tx.target().is_none() {
+        let sender = tx.recover_caller_address().unwrap();
+        let nonce = tx.nonce();
 
-            Some(Address::from_create(&sender, nonce))
-        } else {
-            None
-        };
+        Some(Address::from_create(&sender, nonce))
+    } else {
+        None
+    };
 
-        let gas_used = log_info
-            .ret
-            .as_ref()
-            .map(|r| r.gas_used)
-            .unwrap_or_default();
+    let gas_used = log_info
+        .ret
+        .as_ref()
+        .map(|r| r.gas_used)
+        .unwrap_or_default();
 
-        let tx_info = NeonTxInfo {
-            tx_type: 0, // TODO
-            neon_signature: neon_sig,
-            from: tx.recover_caller_address().unwrap_or_default(),
-            contract,
-            transaction: tx,
-            events: log_info.event_list.clone(), // TODO
-            gas_used,
-            sum_gas_used: Default::default(),    /* set later */
-            sol_signature: Signature::default(), // TODO: should be in input?
-            sol_slot: slot,
-            tx_idx: 0, /* set later */
-            sol_ix_idx: sol_ix_idx as u64,
-            sol_ix_inner_idx: 0, // TODO: what is this?
-            status: log_info.ret.as_ref().map(|r| r.status).unwrap_or_default(), // TODO
-            is_cancelled,
-            is_completed: is_completed || !is_cancelled, /* TODO */
-        };
-        tx_infos.push(tx_info);
+    NeonTxInfo {
+        tx_type: 0, // TODO
+        neon_signature: neon_sig,
+        from: tx.recover_caller_address().unwrap_or_default(),
+        contract,
+        transaction: tx,
+        events: log_info.event_list.clone(), // TODO
+        gas_used,
+        sum_gas_used: Default::default(),    /* set later */
+        sol_signature: Signature::default(), // TODO: should be in input?
+        sol_slot: slot,
+        tx_idx: 0, /* set later */
+        sol_ix_idx: sol_ix_idx as u64,
+        sol_ix_inner_idx: 0, // TODO: what is this?
+        status: log_info.ret.as_ref().map(|r| r.status).unwrap_or_default(), // TODO
+        is_cancelled,
+        is_completed: is_completed || !is_cancelled, /* TODO */
     }
-    tx_infos
+}
+
+pub enum Action<T> {
+    AddTransaction(T),
+    WriteHolder(HolderOperation),
+    CancelTransaction([u8; 32]),
+}
+
+impl<T> Action<T> {
+    fn map_transaction<S>(self, mut f: impl FnMut(T) -> S) -> Action<S> {
+        match self {
+            Action::AddTransaction(tx) => Action::AddTransaction(f(tx)),
+            Action::WriteHolder(op) => Action::WriteHolder(op),
+            Action::CancelTransaction(hash) => Action::CancelTransaction(hash),
+        }
+    }
 }
 
 #[tracing::instrument(skip_all)]
 pub fn parse(
     transaction: SolanaTransaction,
     accountsdb: &mut impl AccountsDb,
-) -> Result<(Vec<NeonTxInfo>, Vec<HolderOperation>), Error> {
+) -> Result<impl Iterator<Item = Action<NeonTxInfo>>, Error> {
     let SolanaTransaction { slot, tx, .. } = transaction;
     let sig_slot_info = SolTxSigSlotInfo {
         signature: tx.signatures[0],
@@ -212,11 +207,14 @@ pub fn parse(
         ident: sig_slot_info,
     };
     let loaded = &transaction.loaded_addresses;
-    let (neon_txs, holder_ops) = parse_transactions(tx, accountsdb, loaded)?;
+    let actions = parse_transactions(tx, accountsdb, loaded)?;
 
     let log_info = log::parse(transaction.log_messages)?;
-    let tx_infos = merge_logs_transactions(neon_txs, log_info, slot);
-    Ok((tx_infos, holder_ops))
+    let iter = actions
+        .into_iter()
+        .map(move |action| action.map_transaction(|tx| add_log(tx, &log_info, slot)));
+    // let tx_infos = merge_logs_transactions(actions, log_info, slot);
+    Ok(iter)
 }
 
 #[cfg(test)]
@@ -466,7 +464,7 @@ mod tests {
 
         let pubkeys = tx.message.static_account_keys();
         tracing::info!(?pubkeys);
-        let (neon_txs, _) = parse_transactions(tx, adb, &loaded).unwrap();
+        let actions = parse_transactions(tx, adb, &loaded).unwrap();
         let logs = match meta.log_messages {
             common::solana_transaction_status::option_serializer::OptionSerializer::Some(logs) => {
                 logs
@@ -474,7 +472,15 @@ mod tests {
             _ => panic!("no logs"),
         };
         let logs = log::parse(logs).unwrap();
-        let neon_tx_infos = merge_logs_transactions(neon_txs, logs, 0);
+
+        let neon_tx_infos = actions
+            .into_iter()
+            .map(move |action| action.map_transaction(|tx| add_log(tx, &logs, 0)))
+            .filter_map(|action| match action {
+                Action::AddTransaction(tx) => Some(tx),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
 
         tracing::info!(?neon_tx_infos);
 

@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
+use neon_parse::Action;
 use solana::solana_api::SolanaApi;
 use solana::traverse::{LedgerItem, TraverseLedger};
 
@@ -79,48 +80,53 @@ async fn main() -> Result<()> {
 
                 adb.set_slot_idx(slot, tx_idx);
 
-                let (txs, holders) = match neon_parse::parse(tx, &mut adb) {
-                    Ok((txs, holders)) => (txs, holders),
+                let actions = match neon_parse::parse(tx, &mut adb) {
+                    Ok(actions) => actions,
                     Err(err) => {
                         tracing::warn!(?err, "failed to parse solana transaction");
                         continue;
                     }
                 };
-                tracing::debug!(?txs, "parsed transactions");
-                for mut tx in txs {
-                    tx.tx_idx = neon_tx_idx;
+                tracing::debug!("parsed transactions");
+                for mut action in actions {
+                    match action {
+                        Action::AddTransaction(tx) => {
+                            tx.tx_idx = neon_tx_idx;
 
-                    // only completed transactions increment gas and idx
-                    if tx.is_completed {
-                        neon_tx_idx += 1;
-                        block_gas_used += tx.gas_used;
-                        tx.sum_gas_used = block_gas_used;
+                            // only completed transactions increment gas and idx
+                            if tx.is_completed {
+                                neon_tx_idx += 1;
+                                block_gas_used += tx.gas_used;
+                                tx.sum_gas_used = block_gas_used;
 
-                        for log in &mut tx.events {
-                            if !log.is_hidden {
-                                log.log_idx = block_log_idx;
-                                block_log_idx += 1;
+                                for log in &mut tx.events {
+                                    if !log.is_hidden {
+                                        log.log_idx = block_log_idx;
+                                        block_log_idx += 1;
+                                    }
+                                }
+                            }
+
+                            if let Err(err) = tx_repo.insert(&tx).await {
+                                tracing::warn!(?err, "failed to save neon transaction");
+                            } else {
+                                tracing::info!(
+                                    signature = hex::encode(tx.neon_signature),
+                                    "saved transaction"
+                                );
                             }
                         }
-                    }
-
-                    if let Err(err) = tx_repo.insert(&tx).await {
-                        tracing::warn!(?err, "failed to save neon transaction");
-                    } else {
-                        tracing::info!(
-                            signature = hex::encode(tx.neon_signature),
-                            "saved transaction"
-                        );
+                        Action::CancelTransaction(hash) => { /* TODO */ }
+                        Action::WriteHolder(op) => {
+                            tracing::info!(slot = %slot, pubkey = %op.pubkey(), "saving holder");
+                            if let Err(err) = save_holder(&holder_repo, slot, tx_idx, &op).await {
+                                tracing::warn!(?err, "failed to save neon holder");
+                            }
+                        }
                     }
                 }
                 if let Err(err) = sig_repo.insert(slot, tx_idx, signature).await {
                     tracing::warn!(?err, "failed to save solana transaction");
-                }
-                for holder in &holders {
-                    tracing::info!(slot = %slot, pubkey = %holder.pubkey(), "saving holder");
-                    if let Err(err) = save_holder(&holder_repo, slot, tx_idx, holder).await {
-                        tracing::warn!(?err, "failed to save neon holder");
-                    }
                 }
             }
             Ok(LedgerItem::Block(block)) => {
