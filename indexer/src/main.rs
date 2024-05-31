@@ -88,9 +88,9 @@ async fn main() -> Result<()> {
                     }
                 };
                 tracing::debug!("parsed transactions");
-                for mut action in actions {
+                for action in actions {
                     match action {
-                        Action::AddTransaction(tx) => {
+                        Action::AddTransaction(mut tx) => {
                             tx.tx_idx = neon_tx_idx;
 
                             // only completed transactions increment gas and idx
@@ -116,7 +116,11 @@ async fn main() -> Result<()> {
                                 );
                             }
                         }
-                        Action::CancelTransaction(hash) => { /* TODO */ }
+                        Action::CancelTransaction(hash) => {
+                            if let Err(err) = tx_repo.set_canceled(&hash, slot).await {
+                                tracing::warn!(?err, "failed to cancel neon transaction");
+                            }
+                        }
                         Action::WriteHolder(op) => {
                             tracing::info!(slot = %slot, pubkey = %op.pubkey(), "saving holder");
                             if let Err(err) = save_holder(&holder_repo, slot, tx_idx, &op).await {

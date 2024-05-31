@@ -138,6 +138,21 @@ impl TransactionRepo {
         Self { pool }
     }
 
+    pub async fn set_canceled(&self, hash: &[u8; 32], slot: u64) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"
+            UPDATE neon_transactions
+            SET is_canceled = true, block_slot = $1
+            WHERE neon_sig = $2 AND is_completed = false
+            "#,
+            slot as i64,
+            hash.as_ref()
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn insert(&self, tx: &NeonTxInfo) -> Result<(), sqlx::Error> {
         let block_slot = tx.sol_slot as i64;
         let tx_hash = tx.neon_signature;
