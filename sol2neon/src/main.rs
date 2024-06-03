@@ -249,8 +249,12 @@ fn main() -> Result<(), Error> {
         let transaction: Wrapped<SolanaTransaction> = encoded.into();
         let transaction = transaction.0;
         let signature = transaction.tx.signatures[0];
-        let (tx_infos, _) = parse(transaction, &mut accounts_db)
-            .with_context(|| format!("parsing transaction {}", signature))?;
+        let tx_infos = parse(transaction, &mut accounts_db)
+            .with_context(|| format!("parsing transaction {}", signature))?
+            .filter_map(|action| match action {
+                neon_parse::Action::AddTransaction(tx) => Some(tx),
+                _ => None,
+            });
 
         for tx_info in tx_infos {
             let tx_info: DbRow = tx_info.into();
