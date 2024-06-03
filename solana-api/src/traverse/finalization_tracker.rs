@@ -76,6 +76,7 @@ impl FinalizationTracker {
     }
 
     /// Returns next pending slot and a boolean if the slot was finalized or purged.
+    /// Is cancel safe
     pub async fn next(&mut self) -> Result<(u64, bool), ClientError> {
         loop {
             if let Some(pending_slot) = self.pending_slots.front().copied() {

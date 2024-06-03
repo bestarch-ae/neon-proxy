@@ -5253,6 +5253,7 @@ dependencies = [
  "async-trait",
  "clap 4.5.4",
  "dashmap",
+ "futures-util",
  "neon-proxy-common",
  "rand 0.8.5",
  "serde_json",

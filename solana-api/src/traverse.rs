@@ -6,6 +6,8 @@ use std::collections::{HashSet, VecDeque};
 use std::str::FromStr;
 use std::time::Duration;
 
+use futures_util::stream::{self, BoxStream};
+use futures_util::{Stream, StreamExt};
 use solana_client::client_error::{ClientError, ClientErrorKind};
 use solana_client::rpc_response::RpcConfirmedTransactionStatusWithSignature;
 use thiserror::Error;
@@ -115,7 +117,7 @@ pub struct TraverseConfig {
 }
 
 pub struct TraverseLedger {
-    traverse: InnerTraverseLedger,
+    traverse: BoxStream<'static, Result<InnerLedgerItem, TraverseError>>,
     api: SolanaApi,
     tracker: Option<FinalizationTracker>,
     status_poll_interval: Option<Duration>,
@@ -132,7 +134,9 @@ impl TraverseLedger {
     pub(crate) fn new_with_api(api: SolanaApi, config: TraverseConfig) -> Self {
         Self {
             status_poll_interval: config.status_poll_interval,
-            traverse: InnerTraverseLedger::new_with_api(api.clone(), config),
+            traverse: Box::pin(
+                InnerTraverseLedger::new_with_api(api.clone(), config).into_stream(),
+            ),
             api,
             tracker: None,
             purged_block: None,
@@ -165,7 +169,7 @@ impl TraverseLedger {
                 Ok((slot, true)) => Ok(LedgerItem::FinalizedBlock(slot)),
                 Ok((slot, false)) => Ok(LedgerItem::PurgedBlock(slot)),
             }),
-            result = self.traverse.try_next() => match result {
+            Some(result) = self.traverse.next() => match result {
                 res @ Ok(InnerLedgerItem::Transaction(..))
                     | res @ Err(..) => Some(res.map(Into::into)),
                 Ok(InnerLedgerItem::Block(mut block)) => {
@@ -226,6 +230,13 @@ impl InnerTraverseLedger {
             only_success: config.only_success,
             rps_limit_sleep: config.rps_limit_sleep,
         }
+    }
+
+    fn into_stream(self) -> impl Stream<Item = Result<InnerLedgerItem, TraverseError>> {
+        stream::unfold(self, |mut this| async move {
+            let value = this.try_next().await;
+            Some((value, this))
+        })
     }
 
     async fn try_next(&mut self) -> Result<InnerLedgerItem, TraverseError> {
