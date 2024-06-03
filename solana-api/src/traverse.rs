@@ -94,6 +94,20 @@ impl CachedBlock {
     }
 }
 
+macro_rules! retry {
+    ($val:expr, $message:literal) => {
+        loop {
+            match $val.await {
+                Ok(val) => break val,
+                Err(err) => {
+                    tracing::warn!(%err, retry_in = ?RECHECK_INTERVAL, $message);
+                    sleep(RECHECK_INTERVAL).await
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum LedgerItem {
@@ -256,9 +270,10 @@ impl InnerTraverseLedger {
             }
         };
 
-        let tx = self.api.get_transaction(&signature).await.inspect_err(
-            |err| tracing::error!(%err, %signature, "could not request transaction"),
-        )?;
+        let tx = retry!(
+            self.api.get_transaction(&signature),
+            "could not request transaction {signature}"
+        );
 
         let mut tx = decode_ui_transaction(tx)
             .inspect_err(|err| tracing::error!(%err, %signature, "could not decode transaction"))?;
@@ -283,7 +298,7 @@ impl InnerTraverseLedger {
                     txs.insert(candidate.signature);
                 }
             }
-            let block = self.api.get_block(slot).await?;
+            let block = retry!(self.api.get_block(slot), "failed requesting block {slot}");
             tracing::debug!(
                 slot,
                 hash = block.blockhash,
