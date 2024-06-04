@@ -35,6 +35,10 @@ struct Args {
     #[arg(long, default_value = None, value_name = "SECS")]
     /// Seconds to sleep between RPS limit rejected gSFA
     rps_limit_sleep: Option<u64>,
+
+    #[arg(long)]
+    /// Indexed confirmed blocks and transactions
+    confirmed: bool,
 }
 
 #[tokio::main]
@@ -58,8 +62,9 @@ async fn main() -> Result<()> {
         rps_limit_sleep: opts.rps_limit_sleep.map(Duration::from_secs),
         target_key: opts.target,
         last_observed: opts.from,
-        finalized: true,
+        finalized: !opts.confirmed,
         only_success: true,
+        ..Default::default()
     };
     let mut traverse = TraverseLedger::new(traverse_config);
     let mut adb = accountsdb::DummyAdb::new(opts.target, holder_repo.clone());
