@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
-use solana::solana_api::SolanaApi;
 use solana::traverse::{LedgerItem, TraverseConfig, TraverseLedger};
 
 use common::ethnum::U256;
