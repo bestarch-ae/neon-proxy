@@ -136,6 +136,7 @@ pub struct TraverseLedger {
     tracker: Option<FinalizationTracker>,
     status_poll_interval: Option<Duration>,
     purged_block: Option<u64>,
+    is_finalized: bool,
 }
 
 impl TraverseLedger {
@@ -147,6 +148,7 @@ impl TraverseLedger {
 
     pub(crate) fn new_with_api(api: SolanaApi, config: TraverseConfig) -> Self {
         Self {
+            is_finalized: config.finalized,
             status_poll_interval: config.status_poll_interval,
             traverse: Box::pin(
                 InnerTraverseLedger::new_with_api(api.clone(), config).into_stream(),
@@ -178,14 +180,14 @@ impl TraverseLedger {
         let tracker = self.tracker.as_mut().expect("uninit finalization tracker");
 
         tokio::select! {
-            result = tracker.next() => Some(match result {
+            result = tracker.next(), if !self.is_finalized => Some(match result {
                 Err(err) => Err(err.into()),
                 Ok((slot, true)) => Ok(LedgerItem::FinalizedBlock(slot)),
                 Ok((slot, false)) => Ok(LedgerItem::PurgedBlock(slot)),
             }),
-            Some(result) = self.traverse.next() => match result {
-                res @ Ok(InnerLedgerItem::Transaction(..))
-                    | res @ Err(..) => Some(res.map(Into::into)),
+            Some(result) = self.traverse.next() => Some(match result {
+                res @ Ok(InnerLedgerItem::Transaction(..)) | res @ Err(..) => res.map(Into::into),
+                res @ Ok(InnerLedgerItem::Block(..)) if self.is_finalized => res.map(Into::into),
                 Ok(InnerLedgerItem::Block(mut block)) => {
                     match tracker.check_or_schedule_new_slot(block.slot) {
                         BlockStatus::Finalized => block.is_finalized = true,
@@ -196,9 +198,9 @@ impl TraverseLedger {
                             self.purged_block = Some(block.slot);
                         }
                     }
-                    Some(Ok(LedgerItem::Block(block)))
+                    Ok(LedgerItem::Block(block))
                 }
-            }
+            })
         }
     }
 }
