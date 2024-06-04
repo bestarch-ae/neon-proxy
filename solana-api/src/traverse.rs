@@ -117,24 +117,51 @@ pub enum LedgerItem {
     PurgedBlock(u64),
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct TraverseConfig {
     pub endpoint: String,
     /// Request only finalized transactions
     pub finalized: bool,
     pub rps_limit_sleep: Option<Duration>,
-    pub status_poll_interval: Option<Duration>,
+    pub status_poll_interval: Duration,
     /// Request only successful transactions
     pub only_success: bool,
     pub target_key: Pubkey,
     pub last_observed: Option<Signature>,
+    pub signature_buffer_limit: Option<usize>,
+}
+
+impl TraverseConfig {
+    const DEFAULT_SIGNATURE_BUFFER_SIZE_CAP_MB: usize = 512;
+
+    pub const fn signature_limit_size_mb_to_len(size: usize) -> usize {
+        const MAX_BASE58_SIGNATURE_LEN: usize = 88;
+        1024 * 1024 * size / MAX_BASE58_SIGNATURE_LEN
+    }
+}
+
+impl Default for TraverseConfig {
+    fn default() -> Self {
+        TraverseConfig {
+            endpoint: String::default(),
+            finalized: true,
+            rps_limit_sleep: None,
+            status_poll_interval: finalization_tracker::POLL_INTERVAL,
+            only_success: true,
+            target_key: Pubkey::default(),
+            last_observed: None,
+            signature_buffer_limit: Some(Self::signature_limit_size_mb_to_len(
+                Self::DEFAULT_SIGNATURE_BUFFER_SIZE_CAP_MB,
+            )),
+        }
+    }
 }
 
 pub struct TraverseLedger {
     traverse: BoxStream<'static, Result<InnerLedgerItem, TraverseError>>,
     api: SolanaApi,
     tracker: Option<FinalizationTracker>,
-    status_poll_interval: Option<Duration>,
+    status_poll_interval: Duration,
     purged_block: Option<u64>,
     is_finalized: bool,
 }
@@ -224,27 +251,26 @@ impl From<InnerLedgerItem> for LedgerItem {
 struct InnerTraverseLedger {
     last_observed: Option<Signature>,
     api: SolanaApi,
-    target_key: Pubkey,
     // Sigatures buffer. Starts with the oldest/last processed, ends with the most recent.
     // TODO: Limit this
     buffer: VecDeque<Candidate>,
     cached_block: Option<CachedBlock>,
     next_request: Instant,
-    only_success: bool,
-    rps_limit_sleep: Option<Duration>,
+    config: TraverseConfig,
 }
 
 impl InnerTraverseLedger {
     fn new_with_api(api: SolanaApi, config: TraverseConfig) -> Self {
+        assert!(config
+            .signature_buffer_limit
+            .map_or(true, |limit| limit > 1));
         Self {
             api,
-            target_key: config.target_key,
             last_observed: config.last_observed,
             buffer: VecDeque::new(),
             cached_block: None,
             next_request: Instant::now(),
-            only_success: config.only_success,
-            rps_limit_sleep: config.rps_limit_sleep,
+            config,
         }
     }
 
@@ -372,6 +398,13 @@ impl InnerTraverseLedger {
 
     /// Populate signature buffer with new signatures.
     async fn recheck_new_signatures(&mut self) {
+        if self
+            .config
+            .signature_buffer_limit
+            .map_or(false, |limit| self.buffer.len() >= limit)
+        {
+            return;
+        }
         // getSignaturesForAddress returns `limit` last transaction signatures, where `limit` <= 1000.
         // Response contains a list of signatures sorted from the most recent to the oldest in batch.
         //
@@ -388,20 +421,24 @@ impl InnerTraverseLedger {
         let mut last_observed = None;
         // Hash of the earliest transaction in a batch.
         let mut earliest = None;
-        let mut new_signatures = VecDeque::new();
+        let mut new_signatures = VecDeque::<Candidate>::new();
 
         loop {
             tracing::debug!(
-                ?earliest, ?self.last_observed, target = %self.target_key,
+                ?earliest, ?self.last_observed, target = %self.config.target_key,
                 "requesting signatures for address"
             );
             let txs = loop {
                 let res = self
                     .api
-                    .get_signatures_for_address(&self.target_key, self.last_observed, earliest)
+                    .get_signatures_for_address(
+                        &self.config.target_key,
+                        self.last_observed,
+                        earliest,
+                    )
                     .await;
 
-                if let Some(sleep_duration) = self.rps_limit_sleep {
+                if let Some(sleep_duration) = self.config.rps_limit_sleep {
                     if matches!(
                         res,
                         Err(ClientError {
@@ -445,9 +482,19 @@ impl InnerTraverseLedger {
                     err,
                     ..
                 } = item;
-                if self.only_success && err.is_some() {
+                if self.config.only_success && err.is_some() {
                     tracing::debug!(?err, %signature, slot, "skipped failed transaction");
                 } else {
+                    if self.config.signature_buffer_limit.map_or(false, |limit| {
+                        self.buffer.len() + new_signatures.len() + 1 >= limit
+                    }) {
+                        new_signatures.pop_back();
+                        let sign = &new_signatures.back().expect("must not be empty").signature;
+                        let sign =
+                            ward!([error] sign.parse(), "could not parse last observed signature");
+                        last_observed = Some(sign);
+                    }
+
                     let sign = Candidate { signature, slot };
                     new_signatures.push_front(sign);
                 }

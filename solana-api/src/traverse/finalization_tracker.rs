@@ -7,7 +7,7 @@ use tokio::time::{sleep_until, Instant};
 
 use crate::solana_api::SolanaApi;
 
-const POLL_INTERVAL: Duration = Duration::from_secs(1);
+pub(super) const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum BlockStatus {
@@ -27,11 +27,7 @@ pub(super) struct FinalizationTracker {
 }
 
 impl FinalizationTracker {
-    pub async fn init(
-        api: SolanaApi,
-        poll_interval: Option<Duration>,
-    ) -> Result<Self, ClientError> {
-        let poll_interval = poll_interval.unwrap_or(POLL_INTERVAL);
+    pub async fn init(api: SolanaApi, poll_interval: Duration) -> Result<Self, ClientError> {
         let init_slot = api.get_finalized_slot().await?;
         Ok(Self {
             init_slot,

@@ -306,6 +306,7 @@ async fn correct_order() {
         api,
         TraverseConfig {
             target_key: address,
+            signature_buffer_limit: Some(3000),
             ..Default::default()
         },
     );
