@@ -226,7 +226,7 @@ pub fn convert_rich_log(log: RichLog) -> Result<Log, Error> {
         transaction_index: Some(log.tx_idx),
         block_hash: Some(sol_blockhash_into_hex(log.blockhash)),
         block_number: Some(log.slot),
-        block_timestamp: Some(log.timestamp as u64),
+        block_timestamp: None,
         transaction_hash: Some(B256::try_from(log.tx_hash.as_slice()).context("transaction hash")?),
         log_index: Some(log.event.log_idx),
         removed: false,
