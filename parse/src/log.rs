@@ -432,7 +432,7 @@ pub fn parse(lines: impl IntoIterator<Item = impl AsRef<str>>) -> Result<NeonLog
         current_order += 1;
         event.level = event_level;
         event.order = current_order;
-        event.address = event_addr;
+        event.address = event.address.or(event_addr);
     }
 
     let log_info = NeonLogInfo {
