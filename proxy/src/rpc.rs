@@ -91,10 +91,11 @@ impl EthApiImpl {
             Vec::new()
         } else {
             self.transactions
-                .fetch_without_events(::db::TransactionBy::Slot(slot))
-                .map_ok(|tx| tx.inner)
-                .try_collect()
+                .fetch(::db::TransactionBy::Slot(slot))
                 .await?
+                .into_iter()
+                .map(|tx| tx.inner)
+                .collect()
         };
         Ok(Some(build_block(block, txs, full)?.into()))
     }

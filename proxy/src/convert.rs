@@ -131,6 +131,7 @@ pub fn neon_event_to_log(event: &EventLog) -> PrimitiveLog {
 }
 
 fn build_block_header(block: SolanaBlock, txs: &[NeonTxInfo]) -> Result<Header, Error> {
+    tracing::debug!("Building header for block {:?} txs: {}", block, txs.len());
     // Consts taken from here:
     // https://github.com/neonlabsorg/proxy-model.py/blob/149298b924d7cbf5e02eb85eac041b63e21e59d5/proxy/neon_rpc_api_model/neon_rpc_api_worker.py#L626C25-L626C89
     const UNCLES_HASH: B256 = B256::new(hex!(
@@ -154,12 +155,20 @@ fn build_block_header(block: SolanaBlock, txs: &[NeonTxInfo]) -> Result<Header, 
         B256::with_last_byte(1)
     };
 
-    let logs_bloom = Bloom::default();
+    let mut logs_bloom = Bloom::default();
     let mut gas_used = 0;
 
     for tx in txs {
-        // logs_bloom |= tx.events.inner.bloom(); TODO
         gas_used += tx.gas_used.as_u128();
+        for event in &tx.events {
+            let topics: Vec<_> = event
+                .topic_list
+                .iter()
+                .map(|topic| B256::new(topic.to_be_bytes())) // TODO: Is this ok?
+                .collect();
+            let address = Address(event.address.unwrap_or_default().0.into());
+            logs_bloom.accrue_raw_log(address, &topics);
+        }
     }
 
     Ok(Header {
