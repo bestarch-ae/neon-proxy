@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM solana_blocks WHERE block_slot = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d0e2bc49da942fe2dae470aea23c8f1ebef5cb8fd5cfa94f5b30facdbb7ba373"
+}

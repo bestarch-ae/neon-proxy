@@ -4,8 +4,7 @@ use clap::Parser;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
 use common::types::SolanaBlock;
-use solana_api::solana_api::SolanaApi;
-use solana_api::traverse::{LedgerItem, TraverseLedger};
+use solana_api::traverse::{LedgerItem, TraverseConfig, TraverseLedger};
 use solana_client::rpc_client::SerializableTransaction;
 use tracing_subscriber::EnvFilter;
 
@@ -55,11 +54,15 @@ async fn main() -> Result<()> {
         .init();
     let opts = Cli::try_parse()?;
 
-    let api = SolanaApi::new(opts.url);
-    let mut traverse = TraverseLedger::new(api, opts.target, opts.from);
-    if opts.no_fail {
-        traverse.set_only_success(true)
-    }
+    let traverse_config = TraverseConfig {
+        endpoint: opts.url,
+        target_key: opts.target,
+        last_observed: opts.from,
+        finalized: true,
+        only_success: opts.no_fail,
+        ..Default::default()
+    };
+    let mut traverse = TraverseLedger::new(traverse_config);
 
     while let Some(result) = traverse.next().await {
         match result? {
@@ -98,11 +101,20 @@ async fn main() -> Result<()> {
                     parent_slot,
                     parent_hash,
                     time,
+                    is_finalized: _,
                 } = block;
                 println!("===== End of Block =====");
                 println!("Slot: {slot}, Hash: {hash}");
                 println!("Parent Slot: {parent_slot}, Parent Hash: {parent_hash}");
                 println!("Time: {time:?}");
+                println!();
+            }
+            LedgerItem::FinalizedBlock(slot) => {
+                println!("===== Finalized Block {slot} =====");
+                println!();
+            }
+            LedgerItem::PurgedBlock(slot) => {
+                println!("===== Purged Block {slot} =====");
                 println!();
             }
         }

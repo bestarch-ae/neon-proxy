@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod mock;
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use common::solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use common::solana_sdk::hash::Hash;
@@ -22,17 +24,34 @@ use solana_rpc_client::http_sender::HttpSender;
 
 pub const SIGNATURES_LIMIT: usize = 1000;
 
+#[derive(Clone)]
 pub struct SolanaApi {
-    client: RpcClient,
+    client: Arc<RpcClient>,
+    commitment: CommitmentLevel,
+}
+
+impl std::fmt::Debug for SolanaApi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SolanaApi")
+            .field("client", &"RpcClient")
+            .field("commitment", &self.commitment)
+            .finish()
+    }
 }
 
 impl SolanaApi {
-    pub fn new(endpoint: impl ToString) -> Self {
+    pub fn new(endpoint: impl ToString, finalized: bool) -> Self {
+        let commitment = if finalized {
+            CommitmentLevel::Finalized
+        } else {
+            CommitmentLevel::Confirmed
+        };
         Self {
-            client: RpcClient::new_sender(
+            client: Arc::new(RpcClient::new_sender(
                 LoggedSender(HttpSender::new(endpoint.to_string())),
                 RpcClientConfig::default(),
-            ),
+            )),
+            commitment,
         }
     }
 
@@ -73,7 +92,9 @@ impl SolanaApi {
                     before: max,
                     until: min,
                     limit: Some(SIGNATURES_LIMIT),
-                    commitment: None,
+                    commitment: Some(CommitmentConfig {
+                        commitment: self.commitment,
+                    }),
                 },
             )
             .await
@@ -88,7 +109,9 @@ impl SolanaApi {
                 signature,
                 RpcTransactionConfig {
                     encoding: Some(UiTransactionEncoding::Base64),
-                    commitment: None,
+                    commitment: Some(CommitmentConfig {
+                        commitment: self.commitment,
+                    }),
                     max_supported_transaction_version: Some(0),
                 },
             )
@@ -103,10 +126,24 @@ impl SolanaApi {
                     encoding: None,
                     transaction_details: Some(TransactionDetails::Signatures),
                     rewards: Some(false),
-                    commitment: Some(CommitmentConfig::default()),
+                    commitment: Some(CommitmentConfig {
+                        commitment: self.commitment,
+                    }),
                     max_supported_transaction_version: Some(0),
                 },
             )
+            .await
+    }
+
+    pub async fn get_finalized_slot(&self) -> ClientResult<Slot> {
+        self.client
+            .get_slot_with_commitment(CommitmentConfig::finalized())
+            .await
+    }
+
+    pub async fn get_finalized_blocks(&self, from: u64) -> ClientResult<Vec<Slot>> {
+        self.client
+            .get_blocks_with_commitment(from, None, CommitmentConfig::finalized())
             .await
     }
 }
@@ -153,8 +190,11 @@ mod test_ext {
 
         #[cfg(test)]
         pub fn with_sender(sender: impl RpcSender + Send + Sync + 'static) -> Self {
-            let client = RpcClient::new_sender(sender, Default::default());
-            Self { client }
+            let client = Arc::new(RpcClient::new_sender(sender, Default::default()));
+            Self {
+                client,
+                commitment: CommitmentLevel::Confirmed,
+            }
         }
     }
 }

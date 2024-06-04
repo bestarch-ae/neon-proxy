@@ -1,3 +1,4 @@
+mod finalization_tracker;
 #[cfg(test)]
 mod tests;
 
@@ -5,6 +6,8 @@ use std::collections::{HashSet, VecDeque};
 use std::str::FromStr;
 use std::time::Duration;
 
+use futures_util::stream::{self, BoxStream};
+use futures_util::{Stream, StreamExt};
 use solana_client::client_error::{ClientError, ClientErrorKind};
 use solana_client::rpc_response::RpcConfirmedTransactionStatusWithSignature;
 use thiserror::Error;
@@ -19,6 +22,8 @@ use common::types::{SolanaBlock, SolanaTransaction};
 use crate::convert::{decode_ui_transaction, TxDecodeError};
 use crate::solana_api::{SolanaApi, SIGNATURES_LIMIT};
 use crate::utils::ward;
+
+use finalization_tracker::{BlockStatus, FinalizationTracker};
 
 // const SIGNATURES_LIMIT: usize = 1000;
 const RECHECK_INTERVAL: Duration = Duration::from_secs(1);
@@ -84,7 +89,22 @@ impl CachedBlock {
             parent_slot: self.block.parent_slot,
             parent_hash: self.block.previous_blockhash.parse()?,
             time: self.block.block_time,
+            is_finalized: false,
         })
+    }
+}
+
+macro_rules! retry {
+    ($val:expr, $message:literal) => {
+        loop {
+            match $val.await {
+                Ok(val) => break val,
+                Err(err) => {
+                    tracing::warn!(%err, retry_in = ?RECHECK_INTERVAL, $message);
+                    sleep(RECHECK_INTERVAL).await
+                }
+            }
+        }
     }
 }
 
@@ -93,9 +113,115 @@ impl CachedBlock {
 pub enum LedgerItem {
     Transaction(SolanaTransaction),
     Block(SolanaBlock),
+    FinalizedBlock(u64),
+    PurgedBlock(u64),
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TraverseConfig {
+    pub endpoint: String,
+    /// Request only finalized transactions
+    pub finalized: bool,
+    pub rps_limit_sleep: Option<Duration>,
+    pub status_poll_interval: Option<Duration>,
+    /// Request only successful transactions
+    pub only_success: bool,
+    pub target_key: Pubkey,
+    pub last_observed: Option<Signature>,
 }
 
 pub struct TraverseLedger {
+    traverse: BoxStream<'static, Result<InnerLedgerItem, TraverseError>>,
+    api: SolanaApi,
+    tracker: Option<FinalizationTracker>,
+    status_poll_interval: Option<Duration>,
+    purged_block: Option<u64>,
+    is_finalized: bool,
+}
+
+impl TraverseLedger {
+    pub fn new(config: TraverseConfig) -> Self {
+        let mut config = config;
+        let api = SolanaApi::new(std::mem::take(&mut config.endpoint), config.finalized);
+        Self::new_with_api(api, config)
+    }
+
+    pub(crate) fn new_with_api(api: SolanaApi, config: TraverseConfig) -> Self {
+        Self {
+            is_finalized: config.finalized,
+            status_poll_interval: config.status_poll_interval,
+            traverse: Box::pin(
+                InnerTraverseLedger::new_with_api(api.clone(), config).into_stream(),
+            ),
+            api,
+            tracker: None,
+            purged_block: None,
+        }
+    }
+
+    pub async fn next(&mut self) -> Option<Result<LedgerItem, TraverseError>> {
+        if let Some(purged) = self.purged_block.take() {
+            return Some(Ok(LedgerItem::PurgedBlock(purged)));
+        }
+
+        if self.tracker.is_none() {
+            let tracker = match FinalizationTracker::init(
+                self.api.clone(),
+                self.status_poll_interval,
+            )
+            .await
+            {
+                Ok(tracker) => tracker,
+                Err(err) => return Some(Err(err.into())),
+            };
+            self.tracker = Some(tracker);
+        }
+
+        let tracker = self.tracker.as_mut().expect("uninit finalization tracker");
+
+        tokio::select! {
+            result = tracker.next(), if !self.is_finalized => Some(match result {
+                Err(err) => Err(err.into()),
+                Ok((slot, true)) => Ok(LedgerItem::FinalizedBlock(slot)),
+                Ok((slot, false)) => Ok(LedgerItem::PurgedBlock(slot)),
+            }),
+            Some(result) = self.traverse.next() => Some(match result {
+                res @ Ok(InnerLedgerItem::Transaction(..)) | res @ Err(..) => res.map(Into::into),
+                res @ Ok(InnerLedgerItem::Block(..)) if self.is_finalized => res.map(Into::into),
+                Ok(InnerLedgerItem::Block(mut block)) => {
+                    match tracker.check_or_schedule_new_slot(block.slot) {
+                        BlockStatus::Finalized => block.is_finalized = true,
+                        BlockStatus::Pending => block.is_finalized = false,
+                        BlockStatus::Purged => {
+                            block.is_finalized = false;
+                            // We need this as long as we stream block AFTER its transactions
+                            self.purged_block = Some(block.slot);
+                        }
+                    }
+                    Ok(LedgerItem::Block(block))
+                }
+            })
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+enum InnerLedgerItem {
+    Transaction(SolanaTransaction),
+    Block(SolanaBlock),
+}
+
+impl From<InnerLedgerItem> for LedgerItem {
+    fn from(value: InnerLedgerItem) -> Self {
+        match value {
+            InnerLedgerItem::Transaction(tx) => Self::Transaction(tx),
+            InnerLedgerItem::Block(block) => Self::Block(block),
+        }
+    }
+}
+
+struct InnerTraverseLedger {
     last_observed: Option<Signature>,
     api: SolanaApi,
     target_key: Pubkey,
@@ -108,33 +234,28 @@ pub struct TraverseLedger {
     rps_limit_sleep: Option<Duration>,
 }
 
-impl TraverseLedger {
-    pub fn new(api: SolanaApi, target_key: Pubkey, last_observed: Option<Signature>) -> Self {
+impl InnerTraverseLedger {
+    fn new_with_api(api: SolanaApi, config: TraverseConfig) -> Self {
         Self {
             api,
-            target_key,
-            last_observed,
+            target_key: config.target_key,
+            last_observed: config.last_observed,
             buffer: VecDeque::new(),
             cached_block: None,
             next_request: Instant::now(),
-            only_success: false,
-            rps_limit_sleep: None,
+            only_success: config.only_success,
+            rps_limit_sleep: config.rps_limit_sleep,
         }
     }
 
-    pub fn set_only_success(&mut self, only_success: bool) {
-        self.only_success = only_success
+    fn into_stream(self) -> impl Stream<Item = Result<InnerLedgerItem, TraverseError>> {
+        stream::unfold(self, |mut this| async move {
+            let value = this.try_next().await;
+            Some((value, this))
+        })
     }
 
-    pub fn set_rps_limit_sleep(&mut self, rps_limit_sleep: Option<Duration>) {
-        self.rps_limit_sleep = rps_limit_sleep
-    }
-
-    pub async fn next(&mut self) -> Option<Result<LedgerItem, TraverseError>> {
-        Some(self.try_next().await)
-    }
-
-    async fn try_next(&mut self) -> Result<LedgerItem, TraverseError> {
+    async fn try_next(&mut self) -> Result<InnerLedgerItem, TraverseError> {
         let (idx, signature) = {
             let block = self.get_block().await?;
             if let Some(result) = block.next_transaction() {
@@ -147,19 +268,20 @@ impl TraverseLedger {
                     .take()
                     .expect("`get_block` always returns cached block")
                     .into_info()?;
-                return Ok(LedgerItem::Block(block));
+                return Ok(InnerLedgerItem::Block(block));
             }
         };
 
-        let tx = self.api.get_transaction(&signature).await.inspect_err(
-            |err| tracing::error!(%err, %signature, "could not request transaction"),
-        )?;
+        let tx = retry!(
+            self.api.get_transaction(&signature),
+            "could not request transaction {signature}"
+        );
 
         let mut tx = decode_ui_transaction(tx)
             .inspect_err(|err| tracing::error!(%err, %signature, "could not decode transaction"))?;
         tx.tx_idx = idx;
 
-        Ok(LedgerItem::Transaction(tx))
+        Ok(InnerLedgerItem::Transaction(tx))
     }
 
     async fn get_block(&mut self) -> Result<&mut CachedBlock, ClientError> {
@@ -178,7 +300,7 @@ impl TraverseLedger {
                     txs.insert(candidate.signature);
                 }
             }
-            let block = self.api.get_block(slot).await?;
+            let block = retry!(self.api.get_block(slot), "failed requesting block {slot}");
             tracing::debug!(
                 slot,
                 hash = block.blockhash,

@@ -17,6 +17,7 @@ pub struct SolanaBlock {
     pub parent_slot: Slot,
     pub parent_hash: Hash,
     pub time: Option<UnixTimestamp>,
+    pub is_finalized: bool,
 }
 
 /// Solana transaction.

@@ -127,6 +127,8 @@ impl RpcSender for TransactionDB {
                 let block = serde_json::to_value(block.value()).expect("cannot serialize block");
                 Ok(block)
             }
+            RpcRequest::GetBlocks => Ok(serde_json::to_value(Vec::<()>::new()).unwrap()),
+            RpcRequest::GetSlot => Ok(serde_json::to_value(u64::MAX).unwrap()),
             request => panic!("unsupported request: {} - {}", request, params),
         }
     }
@@ -300,7 +302,13 @@ async fn correct_order() {
         address,
     };
     let api = SolanaApi::with_sender(tx_db);
-    let mut traverse = TraverseLedger::new(api, address, None);
+    let mut traverse = TraverseLedger::new_with_api(
+        api,
+        TraverseConfig {
+            target_key: address,
+            ..Default::default()
+        },
+    );
 
     const TXS_PER_SLOT_2: u64 = 2;
     const ADD_NEW_AT: usize = 1337;
@@ -337,7 +345,7 @@ async fn correct_order() {
         let tx = loop {
             match traverse.next().await.unwrap().unwrap() {
                 LedgerItem::Transaction(tx) => break tx,
-                LedgerItem::Block(_) => continue, // Skip blocks for now
+                _item => continue, // Skip blocks for now
             }
         };
         assert_eq!(
