@@ -423,7 +423,10 @@ impl InnerTraverseLedger {
         let mut earliest = None;
         let mut new_signatures = VecDeque::<Candidate>::new();
 
-        loop {
+        let final_sign = self.last_observed.as_ref().map(Signature::to_string);
+        let mut prev_len = None;
+
+        'outer: loop {
             tracing::debug!(
                 ?earliest, ?self.last_observed, target = %self.config.target_key,
                 "requesting signatures for address"
@@ -456,7 +459,17 @@ impl InnerTraverseLedger {
             let txs = ward!([error] txs, "could not request signatures");
 
             if txs.is_empty() {
-                break;
+                tracing::debug!("stopping traverse, empty response");
+                break 'outer;
+            }
+            if let Some(prev) = prev_len.replace(txs.len()) {
+                if prev < SIGNATURES_LIMIT {
+                    tracing::warn!(
+                        previous = prev,
+                        current = txs.len(),
+                        "previous gSFA response was shorter than 1000, but current is not empty"
+                    );
+                }
             }
 
             if last_observed.is_none() {
@@ -469,8 +482,6 @@ impl InnerTraverseLedger {
             let sign = Signature::from_str(&txs.last().expect("checked non empty").signature);
             earliest = Some(ward!([error] sign, "could not parse earliest signature in a batch"));
 
-            let len = txs.len();
-
             for item in txs {
                 // let sign = ward!(
                 //     [error] Signature::from_str(&item.signature),
@@ -482,6 +493,12 @@ impl InnerTraverseLedger {
                     err,
                     ..
                 } = item;
+
+                if final_sign.as_ref().map_or(false, |last| &signature == last) {
+                    tracing::debug!("stopping traverse, found final signature");
+                    break 'outer;
+                }
+
                 if self.config.only_success && err.is_some() {
                     tracing::debug!(?err, %signature, slot, "skipped failed transaction");
                 } else {
@@ -498,11 +515,6 @@ impl InnerTraverseLedger {
                     let sign = Candidate { signature, slot };
                     new_signatures.push_front(sign);
                 }
-            }
-
-            // Means we reached last_observed
-            if len != SIGNATURES_LIMIT {
-                break;
             }
         }
 

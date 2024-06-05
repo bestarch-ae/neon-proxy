@@ -24,6 +24,8 @@ use common::solana_transaction_status::VersionedTransactionWithStatusMeta;
 use common::solana_transaction_status::{Rewards, TransactionStatusMeta};
 use common::solana_transaction_status::{TransactionWithStatusMeta, UiTransactionEncoding};
 
+use crate::solana_api::SIGNATURES_LIMIT;
+
 use super::*;
 
 struct TransactionDB {
