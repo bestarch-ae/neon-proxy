@@ -217,7 +217,7 @@ fn decode_holder_write(
     let offset = usize::from_le_bytes(*array_ref![instruction, 32, 8]);
     let data = &instruction[32 + 8..];
 
-    tracing::info!(pubkey = %holder_pubkey, ?transaction_hash, ?offset, ?data, "holder write");
+    tracing::debug!(pubkey = %holder_pubkey, ?transaction_hash, ?offset, ?data, "holder write");
 
     let mut holder = match adb.get_by_key(&holder_pubkey) {
         Some(account) => {
