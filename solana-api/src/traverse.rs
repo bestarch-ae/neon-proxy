@@ -4,6 +4,7 @@ mod tests;
 
 use std::collections::{HashSet, VecDeque};
 use std::str::FromStr;
+use std::sync::Once;
 use std::time::Duration;
 
 use futures_util::stream::{self, BoxStream};
@@ -425,6 +426,7 @@ impl InnerTraverseLedger {
 
         let final_sign = self.last_observed.as_ref().map(Signature::to_string);
         let mut prev_len = None;
+        let warn_buffer_exceeded = Once::new();
 
         'outer: loop {
             tracing::debug!(
@@ -505,6 +507,12 @@ impl InnerTraverseLedger {
                     if self.config.signature_buffer_limit.map_or(false, |limit| {
                         self.buffer.len() + new_signatures.len() + 1 >= limit
                     }) {
+                        warn_buffer_exceeded.call_once(|| {
+                            tracing::warn!(
+                                limit = ?self.config.signature_buffer_limit,
+                                "signature buffer was exceeded, newer signatures will be purged"
+                            )
+                        });
                         new_signatures.pop_back();
                         let sign = &new_signatures.back().expect("must not be empty").signature;
                         let sign =
