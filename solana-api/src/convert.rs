@@ -70,15 +70,13 @@ pub fn decode_ui_transaction(
             .loaded_addresses
             .opt()
             .map(decode_loaded_addresses)
-            .ok_or(TxDecodeError::MissingLoadedAddr)?
-            .map_err(TxDecodeError::InvalidLoadedAddr)?,
+            .transpose()
+            .map_err(TxDecodeError::InvalidLoadedAddr)?
+            .unwrap_or_default(),
         status: meta.err.map_or(Ok(()), Err),
         log_messages: meta.log_messages.opt().ok_or(TxDecodeError::MissingLogs)?,
         inner_instructions: Vec::new(),
-        compute_units_consumed: meta
-            .compute_units_consumed
-            .opt()
-            .ok_or(TxDecodeError::MissingCUnits)?,
+        compute_units_consumed: meta.compute_units_consumed.opt().unwrap_or(0),
         fee: meta.fee,
     };
 
