@@ -60,7 +60,7 @@ async fn main() -> Result<()> {
         endpoint: opts.url,
         rps_limit_sleep: opts.rps_limit_sleep.map(Duration::from_secs),
         target_key: opts.target,
-        last_observed: opts.from,
+        last_observed: from,
         finalized: !opts.confirmed,
         only_success: true,
         ..Default::default()
