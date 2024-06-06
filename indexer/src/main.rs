@@ -3,6 +3,7 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::Parser;
 use solana::traverse::{LedgerItem, TraverseConfig, TraverseLedger};
+use tokio::sync::mpsc;
 
 use common::ethnum::U256;
 use common::solana_sdk::pubkey::Pubkey;
@@ -81,12 +82,26 @@ async fn main() -> Result<()> {
     let mut last_written_slot = None;
     tracing::info!("connected");
 
+    let (tx, mut rx) = mpsc::channel(128);
+
+    let traverse_handle = tokio::spawn(async move {
+        while let Some(result) = traverse.next().await {
+            if let Err(err) = tx.send(result).await {
+                tracing::error!(?err, "failed to send");
+            }
+            metrics()
+                .traverse_channel_capacity
+                .set(tx.capacity() as i64);
+        }
+        tracing::info!("traverse stopped");
+    });
+
     /* TODO: we should always start from the start of the block otherwise these would be wrong */
     let mut neon_tx_idx = 0;
     let mut block_gas_used = U256::new(0);
     let mut block_log_idx = 0;
 
-    while let Some(result) = traverse.next().await {
+    while let Some(result) = rx.recv().await {
         tracing::debug!(?result, "retrieved transaction/block");
 
         match result {
@@ -205,6 +220,10 @@ async fn main() -> Result<()> {
             }
         };
     }
+
+    if let Err(err) = traverse_handle.await {
+        tracing::error!(?err, "traverse task failed");
+    };
 
     Ok(())
 }
