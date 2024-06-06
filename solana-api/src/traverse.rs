@@ -437,6 +437,7 @@ impl InnerTraverseLedger {
         let final_sign = self.last_observed.as_ref().map(Signature::to_string);
         let mut prev_len = None;
         let warn_buffer_exceeded = Once::new();
+        let mut empty_retries = 0;
 
         'outer: loop {
             tracing::debug!(
@@ -471,9 +472,17 @@ impl InnerTraverseLedger {
             let txs = ward!([error] txs, "could not request signatures");
 
             if txs.is_empty() {
+                if empty_retries < 5 {
+                    tracing::debug!("got empty response, try {empty_retries} out of 5");
+                    empty_retries += 1;
+                    sleep(RECHECK_INTERVAL).await;
+                    continue;
+                }
                 tracing::debug!("stopping traverse, empty response");
                 break 'outer;
             }
+            empty_retries = 5;
+
             if let Some(prev) = prev_len.replace(txs.len()) {
                 if prev < SIGNATURES_LIMIT {
                     tracing::warn!(
