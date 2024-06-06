@@ -15,6 +15,7 @@ tokio = "1.35.1"
 thiserror = "1"
 tracing = "0.1"
 futures-util = "0.3.30"
+prometheus = { version = "0.13", default-features = false }
 
 [dev-dependencies]
 anyhow = "1.0.82"

@@ -22,6 +22,8 @@ use solana_client::rpc_response::RpcConfirmedTransactionStatusWithSignature;
 use solana_client::rpc_sender::RpcSender;
 use solana_rpc_client::http_sender::HttpSender;
 
+use crate::metrics::metrics;
+
 pub const SIGNATURES_LIMIT: usize = 1000;
 
 #[derive(Clone)]
@@ -85,6 +87,7 @@ impl SolanaApi {
         min: Option<Signature>,
         max: Option<Signature>,
     ) -> ClientResult<Vec<RpcConfirmedTransactionStatusWithSignature>> {
+        metrics().get_signatures_for_address.inc();
         self.client
             .get_signatures_for_address_with_config(
                 address,
@@ -104,6 +107,7 @@ impl SolanaApi {
         &self,
         signature: &Signature,
     ) -> ClientResult<EncodedConfirmedTransactionWithStatusMeta> {
+        metrics().get_transaction.inc();
         self.client
             .get_transaction_with_config(
                 signature,
@@ -119,6 +123,7 @@ impl SolanaApi {
     }
 
     pub async fn get_block(&self, slot: Slot) -> ClientResult<UiConfirmedBlock> {
+        metrics().get_block.inc();
         self.client
             .get_block_with_config(
                 slot,
@@ -142,6 +147,7 @@ impl SolanaApi {
     }
 
     pub async fn get_finalized_blocks(&self, from: u64) -> ClientResult<Vec<Slot>> {
+        metrics().get_blocks.inc();
         self.client
             .get_blocks_with_commitment(from, None, CommitmentConfig::finalized())
             .await

@@ -21,6 +21,7 @@ use common::solana_transaction_status::UiConfirmedBlock;
 use common::types::{SolanaBlock, SolanaTransaction};
 
 use crate::convert::{decode_ui_transaction, TxDecodeError};
+use crate::metrics::metrics;
 use crate::solana_api::{SolanaApi, SIGNATURES_LIMIT};
 use crate::utils::ward;
 
@@ -322,6 +323,7 @@ impl InnerTraverseLedger {
                 let candidate = self.pop_candidate().await;
                 if candidate.slot != slot {
                     self.buffer.push_front(candidate);
+                    metrics().traverse.buffer_len.inc();
                     break;
                 } else {
                     txs.insert(candidate.signature);
@@ -334,7 +336,13 @@ impl InnerTraverseLedger {
                 num_txs = txs.len(),
                 "cached new block"
             );
+            let num_txs = txs.len();
             self.cached_block = Some(CachedBlock::new(slot, block, txs));
+            metrics().traverse.cached_block.set(slot as i64);
+            metrics()
+                .traverse
+                .transactions_per_block
+                .observe(num_txs as f64);
         }
 
         Ok(self.cached_block.as_mut().expect("just replaced the block"))
@@ -388,6 +396,7 @@ impl InnerTraverseLedger {
     async fn pop_candidate(&mut self) -> Candidate {
         loop {
             if let Some(candidate) = self.buffer.pop_front() {
+                metrics().traverse.buffer_len.dec();
                 break candidate;
             }
 
@@ -422,11 +431,13 @@ impl InnerTraverseLedger {
         let mut last_observed = None;
         // Hash of the earliest transaction in a batch.
         let mut earliest = None;
+        metrics().traverse.uncommited_buffer_len.set(0);
         let mut new_signatures = VecDeque::<Candidate>::new();
 
         let final_sign = self.last_observed.as_ref().map(Signature::to_string);
         let mut prev_len = None;
         let warn_buffer_exceeded = Once::new();
+        let mut empty_retries = 0;
 
         'outer: loop {
             tracing::debug!(
@@ -461,9 +472,17 @@ impl InnerTraverseLedger {
             let txs = ward!([error] txs, "could not request signatures");
 
             if txs.is_empty() {
+                if empty_retries < 5 {
+                    tracing::debug!("got empty response, try {empty_retries} out of 5");
+                    empty_retries += 1;
+                    sleep(RECHECK_INTERVAL).await;
+                    continue;
+                }
                 tracing::debug!("stopping traverse, empty response");
                 break 'outer;
             }
+            empty_retries = 5;
+
             if let Some(prev) = prev_len.replace(txs.len()) {
                 if prev < SIGNATURES_LIMIT {
                     tracing::warn!(
@@ -475,14 +494,18 @@ impl InnerTraverseLedger {
             }
 
             if last_observed.is_none() {
-                let sign = Signature::from_str(&txs.first().expect("checked non empty").signature);
+                let first = txs.first().expect("checked non empty");
+                let sign = Signature::from_str(&first.signature);
                 // This is the last transaction despite being the first in list.
                 let sign = ward!([error] sign, "could not parse last observed signature");
                 last_observed.replace(sign);
+                metrics().traverse.last_observed_slot.set(first.slot as i64);
             }
 
-            let sign = Signature::from_str(&txs.last().expect("checked non empty").signature);
+            let last = txs.last().expect("checked non empty");
+            let sign = Signature::from_str(&last.signature);
             earliest = Some(ward!([error] sign, "could not parse earliest signature in a batch"));
+            metrics().traverse.earliest_slot.set(last.slot as i64);
 
             for item in txs {
                 // let sign = ward!(
@@ -503,6 +526,7 @@ impl InnerTraverseLedger {
 
                 if self.config.only_success && err.is_some() {
                     tracing::debug!(?err, %signature, slot, "skipped failed transaction");
+                    metrics().traverse.ignored_signatures.inc();
                 } else {
                     if self.config.signature_buffer_limit.map_or(false, |limit| {
                         self.buffer.len() + new_signatures.len() + 1 >= limit
@@ -518,6 +542,8 @@ impl InnerTraverseLedger {
                         let sign =
                             ward!([error] sign.parse(), "could not parse last observed signature");
                         last_observed = Some(sign);
+                    } else {
+                        metrics().traverse.uncommited_buffer_len.inc();
                     }
 
                     let sign = Candidate { signature, slot };
@@ -536,5 +562,7 @@ impl InnerTraverseLedger {
         );
 
         self.buffer.extend(new_signatures);
+        metrics().traverse.buffer_len.set(self.buffer.len() as i64);
+        metrics().traverse.uncommited_buffer_len.set(0);
     }
 }

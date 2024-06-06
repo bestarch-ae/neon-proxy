@@ -5322,6 +5322,7 @@ dependencies = [
  "dashmap",
  "futures-util",
  "neon-proxy-common",
+ "prometheus",
  "rand 0.8.5",
  "serde_json",
  "solana-client",
