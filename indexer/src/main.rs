@@ -82,7 +82,7 @@ async fn main() -> Result<()> {
     let mut last_written_slot = None;
     tracing::info!("connected");
 
-    let (tx, mut rx) = mpsc::channel(1024);
+    let (tx, mut rx) = mpsc::channel(128);
 
     let traverse_handle = tokio::spawn(async move {
         while let Some(result) = traverse.next().await {
