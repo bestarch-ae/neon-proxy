@@ -18,6 +18,7 @@ pub use transaction::HolderOperation;
 
 pub trait AccountsDb {
     fn init_account(&mut self, _pubkey: Pubkey) {}
+    fn delete_account(&mut self, _pubkey: Pubkey) {}
     fn get_by_key<'a>(&'a mut self, _pubkey: &'a Pubkey) -> Option<AccountInfo<'a>> {
         None
     }

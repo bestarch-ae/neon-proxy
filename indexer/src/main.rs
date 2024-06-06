@@ -150,7 +150,9 @@ async fn main() -> Result<()> {
                         }
                         Action::WriteHolder(op) => {
                             tracing::info!(slot = %slot, pubkey = %op.pubkey(), "saving holder");
-                            if let Err(err) = save_holder(&holder_repo, slot, tx_idx, &op).await {
+                            if let Err(err) =
+                                process_holder(&holder_repo, slot, tx_idx, &op, &mut adb).await
+                            {
                                 tracing::warn!(?err, "failed to save neon holder");
                                 metrics().database_errors.inc();
                             } else {
@@ -207,11 +209,12 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn save_holder(
+async fn process_holder(
     repo: &db::HolderRepo,
     slot: u64,
     tx_idx: u32,
     op: &neon_parse::HolderOperation,
+    adb: &mut impl neon_parse::AccountsDb,
 ) -> Result<(), anyhow::Error> {
     use neon_parse::HolderOperation;
     match op {
@@ -237,6 +240,7 @@ async fn save_holder(
             .await?
         }
         HolderOperation::Delete(pubkey) => {
+            adb.delete_account(*pubkey);
             repo.insert(slot, tx_idx, false, None, pubkey, None, None)
                 .await?
         }
@@ -334,10 +338,14 @@ mod accountsdb {
         }
 
         fn init_account(&mut self, pubkey: Pubkey) {
-            tracing::info!(%pubkey, "init account");
+            tracing::debug!(%pubkey, "init account");
             let db = self.db.clone();
             let slot = self.slot;
             let tx_idx = self.tx_idx;
+
+            super::metrics()
+                .holders_in_memory
+                .set(self.map.len() as i64);
 
             self.map.entry(pubkey).or_insert_with(move || {
                 use common::evm_loader::account::TAG_HOLDER;
@@ -348,6 +356,14 @@ mod accountsdb {
 
                 Data { data, lamports: 0 }
             });
+        }
+
+        fn delete_account(&mut self, pubkey: Pubkey) {
+            super::metrics()
+                .holders_in_memory
+                .set(self.map.len() as i64);
+
+            self.map.remove(&pubkey);
         }
     }
 }
