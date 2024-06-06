@@ -17,3 +17,5 @@ common = { path = "../common", package = "neon-proxy-common" }
 solana = { path = "../solana-api", package = "solana-api" }
 db = { path = "../db" }
 hex = "0.4.3"
+prometheus = { version = "0.13", default-features = false, features = ["process"] }
+prometheus_exporter = { version = "0.8" }

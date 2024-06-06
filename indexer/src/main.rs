@@ -7,7 +7,10 @@ use solana::traverse::{LedgerItem, TraverseConfig, TraverseLedger};
 use common::ethnum::U256;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
+use metrics::metrics;
 use neon_parse::Action;
+
+mod metrics;
 
 #[derive(Parser)]
 struct Args {
@@ -38,6 +41,10 @@ struct Args {
     #[arg(long)]
     /// Indexed confirmed blocks and transactions
     confirmed: bool,
+
+    #[arg(long)]
+    /// Address for prometheus metrics
+    metrics_addr: Option<std::net::SocketAddr>,
 }
 
 #[tokio::main]
@@ -68,6 +75,9 @@ async fn main() -> Result<()> {
     let mut traverse = TraverseLedger::new(traverse_config);
     let mut adb = accountsdb::DummyAdb::new(opts.target, holder_repo.clone());
 
+    if let Some(addr) = opts.metrics_addr {
+        metrics().expose(addr)?;
+    }
     let mut last_written_slot = None;
     tracing::info!("connected");
 
@@ -85,6 +95,9 @@ async fn main() -> Result<()> {
                 let tx_idx = tx.tx_idx as u32;
                 let slot = tx.slot;
 
+                metrics().transactions_processed.inc();
+                metrics().current_slot.set(slot as i64);
+
                 let _span =
                     tracing::info_span!("solana transaction", signature = %signature).entered();
 
@@ -94,6 +107,7 @@ async fn main() -> Result<()> {
                     Ok(actions) => actions,
                     Err(err) => {
                         tracing::warn!(?err, "failed to parse solana transaction");
+                        metrics().parsing_errors.inc();
                         continue;
                     }
                 };
@@ -119,7 +133,9 @@ async fn main() -> Result<()> {
 
                             if let Err(err) = tx_repo.insert(&tx).await {
                                 tracing::warn!(?err, "failed to save neon transaction");
+                                metrics().database_errors.inc();
                             } else {
+                                metrics().neon_transactions_saved.inc();
                                 tracing::info!(
                                     signature = hex::encode(tx.neon_signature),
                                     "saved transaction"
@@ -129,18 +145,23 @@ async fn main() -> Result<()> {
                         Action::CancelTransaction(hash) => {
                             if let Err(err) = tx_repo.set_canceled(&hash, slot).await {
                                 tracing::warn!(?err, "failed to cancel neon transaction");
+                                metrics().database_errors.inc();
                             }
                         }
                         Action::WriteHolder(op) => {
                             tracing::info!(slot = %slot, pubkey = %op.pubkey(), "saving holder");
                             if let Err(err) = save_holder(&holder_repo, slot, tx_idx, &op).await {
                                 tracing::warn!(?err, "failed to save neon holder");
+                                metrics().database_errors.inc();
+                            } else {
+                                metrics().holders_saved.inc();
                             }
                         }
                     }
                 }
                 if let Err(err) = sig_repo.insert(slot, tx_idx, signature).await {
                     tracing::warn!(?err, "failed to save solana transaction");
+                    metrics().database_errors.inc();
                 }
             }
             Ok(LedgerItem::Block(block)) => {
@@ -150,27 +171,34 @@ async fn main() -> Result<()> {
 
                 if let Err(err) = block_repo.insert(&block).await {
                     tracing::warn!(?err, slot = block.slot, "failed to save solana block");
+                    metrics().database_errors.inc();
                 } else {
                     tracing::info!(slot = block.slot, "saved solana block");
                     last_written_slot.replace(block.slot);
+                    metrics().blocks_processed.inc();
                 }
             }
             Ok(LedgerItem::FinalizedBlock(slot)) => {
                 if let Err(err) = block_repo.finalize(slot).await {
                     tracing::warn!(%err, slot, "failed finalizing block in db");
+                    metrics().database_errors.inc();
                     continue;
                 }
+                metrics().finalized_blocks_processed.inc();
                 tracing::info!(slot, "block was finalized");
             }
             Ok(LedgerItem::PurgedBlock(slot)) => {
                 if let Err(err) = block_repo.purge(slot).await {
                     tracing::warn!(%err, slot, "failed purging block in db");
+                    metrics().database_errors.inc();
                     continue;
                 }
+                metrics().purged_blocks_processed.inc();
                 tracing::info!(slot, "block was purged");
             }
             Err(err) => {
                 tracing::warn!(?err, "failed to retrieve transaction");
+                metrics().traverse_errors.inc();
                 continue;
             }
         };
