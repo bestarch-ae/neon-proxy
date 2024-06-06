@@ -89,6 +89,9 @@ async fn main() -> Result<()> {
             if let Err(err) = tx.send(result).await {
                 tracing::error!(?err, "failed to send");
             }
+            metrics()
+                .traverse_channel_capacity
+                .set(tx.capacity() as i64);
         }
         tracing::info!("traverse stopped");
     });
