@@ -12,6 +12,7 @@ pub struct IndexerMetrics {
     pub database_errors: IntCounter,
     pub parsing_errors: IntCounter,
     pub current_slot: IntGauge,
+    pub holders_in_memory: IntGauge,
 }
 
 impl IndexerMetrics {
@@ -69,5 +70,10 @@ pub fn metrics() -> &'static IndexerMetrics {
         parsing_errors: register_int_counter!("indexer_parsing_errors", "Number of parsing errors")
             .unwrap(),
         current_slot: register_int_gauge!("indexer_current_slot", "Current slot").unwrap(),
+        holders_in_memory: register_int_gauge!(
+            "indexer_holders_in_memory",
+            "Number of holders cached in memory"
+        )
+        .unwrap(),
     })
 }
