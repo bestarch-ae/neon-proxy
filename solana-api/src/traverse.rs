@@ -3,6 +3,7 @@ mod finalization_tracker;
 mod tests;
 
 use std::collections::{HashSet, VecDeque};
+use std::mem;
 use std::str::FromStr;
 use std::sync::Once;
 use std::time::Duration;
@@ -167,16 +168,24 @@ pub struct TraverseLedger {
 }
 
 impl TraverseLedger {
-    pub fn new(config: TraverseConfig) -> Self {
+    pub fn new(config: TraverseConfig, bootstrap: Option<VecDeque<Candidate>>) -> Self {
         let mut config = config;
         let api = SolanaApi::new(std::mem::take(&mut config.endpoint), config.finalized);
-        Self::new_with_api(api, config)
+        Self::new_with_api(api, config, bootstrap)
     }
 
-    pub(crate) fn new_with_api(api: SolanaApi, config: TraverseConfig) -> Self {
+    pub(crate) fn new_with_api(
+        api: SolanaApi,
+        config: TraverseConfig,
+        bootstrap: Option<VecDeque<Candidate>>,
+    ) -> Self {
         let is_finalized = config.finalized;
         let status_poll_interval = config.status_poll_interval;
-        let mut traverse = InnerTraverseLedger::new_with_api(api.clone(), config.clone());
+        let mut traverse = InnerTraverseLedger::new_with_api(
+            api.clone(),
+            config.clone(),
+            bootstrap.unwrap_or_default(),
+        );
         Self {
             is_finalized,
             status_poll_interval,
@@ -265,10 +274,15 @@ struct InnerTraverseLedger {
     config: TraverseConfig,
     backup_rx: Option<mpsc::Receiver<Vec<Candidate>>>,
     backup_tx: Option<mpsc::Sender<Vec<Candidate>>>,
+    bootstrap: VecDeque<Candidate>,
 }
 
 impl InnerTraverseLedger {
-    fn new_with_api(api: SolanaApi, config: TraverseConfig) -> Self {
+    fn new_with_api(
+        api: SolanaApi,
+        config: TraverseConfig,
+        bootstrap: VecDeque<Candidate>,
+    ) -> Self {
         assert!(config
             .signature_buffer_limit
             .map_or(true, |limit| limit > 1));
@@ -283,6 +297,7 @@ impl InnerTraverseLedger {
             config,
             backup_rx: rx,
             backup_tx: tx,
+            bootstrap,
         }
     }
 
@@ -441,12 +456,25 @@ impl InnerTraverseLedger {
         // the ledger backwards in batches. We store the earliest transaction signature from
         // the last batch (`earliest`), so we can set the upper limit for the next batch.
 
+        let mut new_signatures = mem::take(&mut self.bootstrap);
         // Last observed during this invocation.
-        let mut last_observed = None;
+        let last_observed = new_signatures
+            .back()
+            .map(|candidate| candidate.signature.parse())
+            .transpose();
+        let mut last_observed =
+            ward!([error] last_observed, "could not parse last observed signature from bootstrap");
         // Hash of the earliest transaction in a batch.
-        let mut earliest = None;
-        metrics().traverse.uncommited_buffer_len.set(0);
-        let mut new_signatures = VecDeque::<Candidate>::new();
+        let earliest = new_signatures
+            .front()
+            .map(|candidate| candidate.signature.parse())
+            .transpose();
+        let mut earliest =
+            ward!([error] earliest, "could not parse earliest signature from bootstrap");
+        metrics()
+            .traverse
+            .uncommited_buffer_len
+            .set(new_signatures.len() as i64);
 
         let final_sign = self.last_observed.as_ref().map(Signature::to_string);
         let mut prev_len = None;
@@ -600,6 +628,5 @@ impl InnerTraverseLedger {
 
         self.buffer.extend(new_signatures);
         metrics().traverse.buffer_len.set(self.buffer.len() as i64);
-        metrics().traverse.uncommited_buffer_len.set(0);
     }
 }

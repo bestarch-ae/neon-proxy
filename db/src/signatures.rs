@@ -97,4 +97,25 @@ impl SolanaSignaturesRepo {
         .await?;
         Ok(())
     }
+
+    pub async fn fetch_candidates(&self, limit: Option<i64>) -> Result<Vec<Candidate>, Error> {
+        sqlx::query!(
+            r#"
+            SELECT block_slot, tx_idx, signature
+            FROM solana_transaction_signatures
+            WHERE is_processed = FALSE
+            ORDER BY (block_slot, tx_idx) ASC
+            LIMIT $1
+            "#,
+            limit.unwrap_or(i64::MAX)
+        )
+        .map(|row| Candidate {
+            signature: row.signature,
+            slot: row.block_slot as u64,
+            idx: row.block_slot as usize,
+        })
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Into::into)
+    }
 }

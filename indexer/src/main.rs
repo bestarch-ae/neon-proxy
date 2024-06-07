@@ -61,9 +61,6 @@ async fn main() -> Result<()> {
 
     let last_signature = sig_repo.get_latest().await?;
     let from = opts.from.or(last_signature);
-
-    tracing::info!("starting traversal from {:?}", from);
-
     let traverse_config = TraverseConfig {
         endpoint: opts.url,
         rps_limit_sleep: opts.rps_limit_sleep.map(Duration::from_secs),
@@ -74,7 +71,15 @@ async fn main() -> Result<()> {
         backup_channel_capacity: Some(512),
         ..Default::default()
     };
-    let mut traverse = TraverseLedger::new(traverse_config);
+    let bootstrap = if let Some(limit) = traverse_config.signature_buffer_limit {
+        Some(sig_repo.fetch_candidates(Some(limit as i64)).await?)
+    } else {
+        None
+    };
+
+    tracing::info!("starting traversal from {:?}", from);
+
+    let mut traverse = TraverseLedger::new(traverse_config, bootstrap.map(Into::into));
     let mut traverse_backup = traverse
         .take_backup_stream()
         .expect("cannot get backup stream");
