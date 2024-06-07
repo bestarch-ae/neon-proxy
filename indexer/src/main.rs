@@ -316,12 +316,7 @@ mod accountsdb {
             self.tx_idx = tx_idx;
         }
 
-        pub fn get_from_db(
-            db: HolderRepo,
-            pubkey: &Pubkey,
-            slot: u64,
-            tx_idx: u32,
-        ) -> Option<Vec<u8>> {
+        fn get_from_db(db: HolderRepo, pubkey: &Pubkey, slot: u64, tx_idx: u32) -> Option<Data> {
             let data = tokio::task::block_in_place(move || {
                 let timer = metrics().holder_fetch_time.start_timer();
                 let res = Handle::current()
@@ -333,7 +328,7 @@ mod accountsdb {
             match data {
                 Ok(Some(data)) => {
                     tracing::info!(%pubkey, "holder data found");
-                    Some(data)
+                    Some(Data { data, lamports: 0 })
                 }
                 Ok(None) => {
                     tracing::info!(%pubkey, "holder not found in db");
@@ -345,12 +340,20 @@ mod accountsdb {
                 }
             }
         }
+
+        fn try_load_data(&mut self, db: HolderRepo, pubkey: &Pubkey, slot: u64, tx_idx: u32) {
+            if let Some(data) = Self::get_from_db(db.clone(), pubkey, slot, tx_idx) {
+                self.map.insert(*pubkey, data);
+            }
+        }
     }
 
     impl AccountsDb for DummyAdb {
         fn get_by_key<'a>(&'a mut self, pubkey: &'a Pubkey) -> Option<AccountInfo<'a>> {
             tracing::debug!(%pubkey, "getting data for account");
-            self.init_account(*pubkey);
+
+            self.try_load_data(self.db.clone(), pubkey, self.slot, self.tx_idx);
+
             let data = self.map.get_mut(pubkey)?;
 
             let account_info = AccountInfo {
@@ -380,10 +383,13 @@ mod accountsdb {
                 use common::evm_loader::account::TAG_HOLDER;
 
                 let data = Self::get_from_db(db, &pubkey, slot, tx_idx);
-                let mut data = data.unwrap_or_else(|| vec![0; 1024 * 1024]);
-                data[0] = TAG_HOLDER;
+                let mut data = data.unwrap_or_else(|| Data {
+                    data: vec![0; 1024 * 1024],
+                    lamports: 0,
+                });
+                data.data[0] = TAG_HOLDER;
 
-                Data { data, lamports: 0 }
+                data
             });
         }
 

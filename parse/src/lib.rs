@@ -333,6 +333,9 @@ mod tests {
     impl AccountsDb for DummyAdb {
         fn get_by_key<'a>(&'a mut self, pubkey: &'a Pubkey) -> Option<AccountInfo<'a>> {
             tracing::debug!(%pubkey, "getting data for account");
+            if !self.map.contains_key(pubkey) {
+                self.init_account(*pubkey);
+            }
             let data = self.map.get_mut(pubkey)?;
 
             let account_info = AccountInfo {
@@ -349,10 +352,16 @@ mod tests {
         }
 
         fn init_account(&mut self, pubkey: Pubkey) {
+            use common::evm_loader::account::TAG_HOLDER;
             tracing::debug!(%pubkey, "init account");
-            self.map.entry(pubkey).or_insert_with(|| Data {
-                data: vec![0; 1024 * 1024],
-                lamports: 0,
+
+            self.map.entry(pubkey).or_insert_with(|| {
+                let mut data = Data {
+                    data: vec![0; 1024 * 1024],
+                    lamports: 0,
+                };
+                data.data[0] = TAG_HOLDER;
+                data
             });
         }
     }

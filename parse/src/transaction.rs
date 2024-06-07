@@ -182,7 +182,7 @@ fn decode_holder_create(
     let holder_pubkey = accounts[0];
 
     adb.init_account(holder_pubkey);
-    let account = adb.get_by_key(&holder_pubkey).unwrap();
+    let account = adb.get_by_key(&holder_pubkey).unwrap(); // we just did init
     account.data.borrow_mut()[0] = TAG_HOLDER;
     let mut holder = Holder::from_account(&neon_pubkey, account).unwrap();
     holder.clear();
@@ -198,8 +198,9 @@ fn decode_holder_delete(
 ) -> Result<HolderOperation, Error> {
     let holder_pubkey = accounts[0];
 
-    if let Some(holder) = adb.get_by_key(&holder_pubkey) {
-        let mut data = holder.data.borrow_mut();
+    tracing::debug!(pubkey = %holder_pubkey, "holder delete");
+    if let Some(account) = adb.get_by_key(&holder_pubkey) {
+        let mut data = account.data.borrow_mut();
         data.fill(0);
     }
     Ok(HolderOperation::Delete(holder_pubkey))
@@ -225,8 +226,9 @@ fn decode_holder_write(
             holder
         }
         None => {
-            adb.init_account(accounts[0]);
-            let account = adb.get_by_key(&holder_pubkey).unwrap();
+            /* we haven't seen this account yet, but let's create it and hope for the best */
+            adb.init_account(holder_pubkey);
+            let account = adb.get_by_key(&holder_pubkey).unwrap(); // we just did init
             account.data.borrow_mut()[0] = TAG_HOLDER;
             let mut holder = Holder::from_account(&neon_pubkey, account).unwrap();
             holder.clear();
