@@ -1,10 +1,11 @@
 use std::str::FromStr;
 
 use anyhow::Context;
-use common::solana_sdk::signature::Signature;
+use common::{solana_sdk::signature::Signature, types::Candidate};
 
 use super::Error;
 
+#[derive(Debug, Clone)]
 pub struct SolanaSignaturesRepo {
     pool: sqlx::PgPool,
 }
@@ -59,5 +60,41 @@ impl SolanaSignaturesRepo {
             )),
             None => Ok(None),
         }
+    }
+
+    pub async fn insert_candidates(&self, candidates: Vec<Candidate>) -> Result<(), Error> {
+        let slots: Vec<_> = candidates
+            .iter()
+            .map(|candidate| candidate.slot as i64)
+            .collect();
+        let idxs: Vec<_> = candidates
+            .iter()
+            .map(|candidate| candidate.idx as i32)
+            .collect();
+        let signs: Vec<_> = candidates
+            .into_iter()
+            .map(|candidate| candidate.signature)
+            .collect();
+        sqlx::query!(
+            r#"
+            INSERT INTO solana_transaction_signatures (
+                block_slot,
+                tx_idx,
+                signature,
+                is_processed
+            ) VALUES (
+                UNNEST($1::bigint[]),
+                UNNEST($2::int[]),
+                UNNEST($3::text[]),
+                FALSE
+            )
+            "#,
+            &slots,
+            &idxs,
+            &signs
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }

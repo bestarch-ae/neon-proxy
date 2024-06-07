@@ -71,9 +71,13 @@ async fn main() -> Result<()> {
         last_observed: from,
         finalized: !opts.confirmed,
         only_success: true,
+        backup_channel_capacity: Some(512),
         ..Default::default()
     };
     let mut traverse = TraverseLedger::new(traverse_config);
+    let mut traverse_backup = traverse
+        .take_backup_stream()
+        .expect("cannot get backup stream");
     let mut adb = accountsdb::DummyAdb::new(opts.target, holder_repo.clone());
 
     if let Some(addr) = opts.metrics_addr {
@@ -94,6 +98,17 @@ async fn main() -> Result<()> {
                 .set(tx.capacity() as i64);
         }
         tracing::info!("traverse stopped");
+    });
+
+    let signature_repo = sig_repo.clone();
+    let backup_handle = tokio::spawn(async move {
+        while let Some(candidates) = traverse_backup.recv().await {
+            if let Err(err) = signature_repo.insert_candidates(candidates).await {
+                tracing::error!(%err, "could not save new candidates to db, ending backup");
+                break;
+            }
+        }
+        tracing::info!("backup task stopped");
     });
 
     /* TODO: we should always start from the start of the block otherwise these would be wrong */
@@ -229,6 +244,10 @@ async fn main() -> Result<()> {
 
     if let Err(err) = traverse_handle.await {
         tracing::error!(?err, "traverse task failed");
+    };
+
+    if let Err(err) = backup_handle.await {
+        tracing::error!(?err, "backup task failed");
     };
 
     Ok(())

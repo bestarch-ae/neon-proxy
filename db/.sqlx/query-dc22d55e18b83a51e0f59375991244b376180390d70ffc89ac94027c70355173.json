@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO solana_transaction_signatures (\n                block_slot,\n                tx_idx,\n                signature,\n                is_processed\n            ) VALUES (\n                UNNEST($1::bigint[]),\n                UNNEST($2::int[]),\n                UNNEST($3::text[]),\n                FALSE\n            )\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Int4Array",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dc22d55e18b83a51e0f59375991244b376180390d70ffc89ac94027c70355173"
+}
