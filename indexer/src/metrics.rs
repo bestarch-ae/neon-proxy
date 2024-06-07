@@ -1,4 +1,6 @@
-use prometheus::{register_int_counter, register_int_gauge, IntCounter, IntGauge};
+use prometheus::{
+    register_histogram, register_int_counter, register_int_gauge, Histogram, IntCounter, IntGauge,
+};
 use std::sync::OnceLock;
 
 pub struct IndexerMetrics {
@@ -14,6 +16,12 @@ pub struct IndexerMetrics {
     pub current_slot: IntGauge,
     pub holders_in_memory: IntGauge,
     pub traverse_channel_capacity: IntGauge,
+    pub neon_parse_time: Histogram,
+    pub holder_fetch_time: Histogram,
+    pub transaction_processing_time: Histogram,
+    pub block_processing_time: Histogram,
+    pub finalized_block_processing_time: Histogram,
+    pub purged_block_processing_time: Histogram,
 }
 
 impl IndexerMetrics {
@@ -79,6 +87,36 @@ pub fn metrics() -> &'static IndexerMetrics {
         traverse_channel_capacity: register_int_gauge!(
             "indexer_traverse_channel_capacity",
             "Capacity of the traverse channel"
+        )
+        .unwrap(),
+        neon_parse_time: register_histogram!(
+            "indexer_neon_parse_time",
+            "Time taken to parse a neon transaction"
+        )
+        .unwrap(),
+        holder_fetch_time: register_histogram!(
+            "indexer_holder_fetch_time",
+            "Time taken to fetch a holder from the database"
+        )
+        .unwrap(),
+        transaction_processing_time: register_histogram!(
+            "indexer_transaction_processing_time",
+            "Time taken to process a solana transaction"
+        )
+        .unwrap(),
+        block_processing_time: register_histogram!(
+            "indexer_block_processing_time",
+            "Time taken to process a block"
+        )
+        .unwrap(),
+        finalized_block_processing_time: register_histogram!(
+            "indexer_finalized_block_processing_time",
+            "Time taken to process a finalized block"
+        )
+        .unwrap(),
+        purged_block_processing_time: register_histogram!(
+            "indexer_purged_block_processing_time",
+            "Time taken to process a purged block"
         )
         .unwrap(),
     })
