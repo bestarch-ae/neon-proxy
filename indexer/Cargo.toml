@@ -12,6 +12,7 @@ neon_parse = { path = "../parse", package = "parse" }
 tracing = "0.1"
 anyhow = "1"
 tokio = { version = "1.37.0", features = ["full"] }
+lru = "0.12"
 
 common = { path = "../common", package = "neon-proxy-common" }
 solana = { path = "../solana-api", package = "solana-api" }
