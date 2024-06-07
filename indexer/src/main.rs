@@ -106,6 +106,7 @@ async fn main() -> Result<()> {
 
         match result {
             Ok(LedgerItem::Transaction(tx)) => {
+                let _tx_timer = metrics().transaction_processing_time.start_timer();
                 let signature = tx.tx.signatures[0];
                 let tx_idx = tx.tx_idx as u32;
                 let slot = tx.slot;
@@ -118,6 +119,7 @@ async fn main() -> Result<()> {
 
                 adb.set_slot_idx(slot, tx_idx);
 
+                let parse_timer = metrics().neon_parse_time.start_timer();
                 let actions = match neon_parse::parse(tx, &mut adb) {
                     Ok(actions) => actions,
                     Err(err) => {
@@ -126,6 +128,7 @@ async fn main() -> Result<()> {
                         continue;
                     }
                 };
+                drop(parse_timer);
                 tracing::debug!("parsed transactions");
                 for action in actions {
                     match action {
@@ -182,6 +185,7 @@ async fn main() -> Result<()> {
                 }
             }
             Ok(LedgerItem::Block(block)) => {
+                let _blk_timer = metrics().block_processing_time.start_timer();
                 neon_tx_idx = 0;
                 block_gas_used = U256::new(0);
                 block_log_idx = 0;
@@ -196,6 +200,7 @@ async fn main() -> Result<()> {
                 }
             }
             Ok(LedgerItem::FinalizedBlock(slot)) => {
+                let _blk_timer = metrics().finalized_block_processing_time.start_timer();
                 if let Err(err) = block_repo.finalize(slot).await {
                     tracing::warn!(%err, slot, "failed finalizing block in db");
                     metrics().database_errors.inc();
@@ -205,12 +210,13 @@ async fn main() -> Result<()> {
                 tracing::info!(slot, "block was finalized");
             }
             Ok(LedgerItem::PurgedBlock(slot)) => {
+                let _blk_timer = metrics().purged_block_processing_time.start_timer();
+                metrics().purged_blocks_processed.inc();
                 if let Err(err) = block_repo.purge(slot).await {
                     tracing::warn!(%err, slot, "failed purging block in db");
                     metrics().database_errors.inc();
                     continue;
                 }
-                metrics().purged_blocks_processed.inc();
                 tracing::info!(slot, "block was purged");
             }
             Err(err) => {
@@ -272,6 +278,7 @@ mod accountsdb {
     use std::collections::HashMap;
     use std::rc::Rc;
 
+    use super::metrics;
     use common::solana_sdk::account_info::AccountInfo;
     use common::solana_sdk::pubkey::Pubkey;
     use db::HolderRepo;
@@ -316,8 +323,11 @@ mod accountsdb {
             tx_idx: u32,
         ) -> Option<Vec<u8>> {
             let data = tokio::task::block_in_place(move || {
-                Handle::current()
-                    .block_on(async move { db.get_by_pubkey(pubkey, slot, tx_idx).await })
+                let timer = metrics().holder_fetch_time.start_timer();
+                let res = Handle::current()
+                    .block_on(async move { db.get_by_pubkey(pubkey, slot, tx_idx).await });
+                timer.stop_and_record();
+                res
             });
 
             match data {
