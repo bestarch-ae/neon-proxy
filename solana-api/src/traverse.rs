@@ -19,7 +19,7 @@ use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::{ParseSignatureError, Signature};
 use common::solana_sdk::slot_history::Slot;
 use common::solana_transaction_status::UiConfirmedBlock;
-use common::types::{SolanaBlock, SolanaTransaction};
+use common::types::{Candidate, SolanaBlock, SolanaTransaction};
 
 use crate::convert::{decode_ui_transaction, TxDecodeError};
 use crate::metrics::metrics;
@@ -39,13 +39,6 @@ pub enum TraverseError {
     TxDecodeError(#[from] TxDecodeError),
     #[error("invalid signature: {0}")]
     InvalidSignature(#[from] ParseSignatureError),
-}
-
-#[derive(Debug, Clone)]
-pub struct Candidate {
-    pub signature: String,
-    pub slot: Slot,
-    pub idx: usize,
 }
 
 #[derive(Debug)]
