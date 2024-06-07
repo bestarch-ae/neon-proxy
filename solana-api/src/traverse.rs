@@ -481,7 +481,7 @@ impl InnerTraverseLedger {
                 tracing::debug!("stopping traverse, empty response");
                 break 'outer;
             }
-            empty_retries = 5;
+            empty_retries = 0;
 
             if let Some(prev) = prev_len.replace(txs.len()) {
                 if prev < SIGNATURES_LIMIT {
