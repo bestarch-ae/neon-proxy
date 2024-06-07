@@ -226,6 +226,7 @@ fn decode_holder_write(
             holder
         }
         None => {
+            tracing::warn!(pubkey = %holder_pubkey, "creating holder account implicitly on HOLDER_WRITE");
             /* we haven't seen this account yet, but let's create it and hope for the best */
             adb.init_account(holder_pubkey);
             let account = adb.get_by_key(&holder_pubkey).unwrap(); // we just did init
