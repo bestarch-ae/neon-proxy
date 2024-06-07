@@ -49,7 +49,7 @@ impl SolanaSignaturesRepo {
         Self { pool }
     }
 
-    pub async fn insert(
+    pub async fn insert_processed(
         &self,
         slot: u64,
         tx_idx: u32,
@@ -61,9 +61,11 @@ impl SolanaSignaturesRepo {
             (
                 block_slot,
                 tx_idx,
-                signature
-            ) VALUES($1, $2, $3)
-            ON CONFLICT DO NOTHING
+                signature,
+                is_processed
+            ) VALUES($1, $2, $3, TRUE)
+            ON CONFLICT (block_slot, tx_idx)
+            DO UPDATE SET is_processed = TRUE
             "#,
             slot as i64,
             tx_idx as i32,
@@ -77,8 +79,10 @@ impl SolanaSignaturesRepo {
     pub async fn get_latest(&self) -> Result<Option<Signature>, Error> {
         let row = sqlx::query!(
             r#"
-            SELECT signature as "signature!" FROM solana_transaction_signatures
-            ORDER BY block_slot DESC, tx_idx DESC
+            SELECT signature as "signature!"
+            FROM solana_transaction_signatures
+            WHERE is_processed
+            ORDER BY (block_slot, tx_idx) DESC
             LIMIT 1
             "#
         )

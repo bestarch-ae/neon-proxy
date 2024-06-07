@@ -179,7 +179,7 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
-                if let Err(err) = sig_repo.insert(slot, tx_idx, signature).await {
+                if let Err(err) = sig_repo.insert_processed(slot, tx_idx, signature).await {
                     tracing::warn!(?err, "failed to save solana transaction");
                     metrics().database_errors.inc();
                 }

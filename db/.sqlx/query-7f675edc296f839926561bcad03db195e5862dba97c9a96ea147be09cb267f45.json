@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT signature as \"signature!\"\n            FROM solana_transaction_signatures\n            WHERE is_processed\n            ORDER BY (block_slot, tx_idx) DESC\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "signature!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7f675edc296f839926561bcad03db195e5862dba97c9a96ea147be09cb267f45"
+}
