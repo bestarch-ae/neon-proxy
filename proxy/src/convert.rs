@@ -40,8 +40,24 @@ fn neon_extra_fields(tx: &NeonTxInfo) -> Result<OtherFields, Error> {
     Ok(OtherFields::new(neon_fields))
 }
 
+fn add_checksum_fields(other: &mut OtherFields, tx: &NeonTxInfo) -> Result<(), Error> {
+    other.insert(
+        "from".to_string(),
+        serde_json::to_value(Address::new(tx.from.0).to_string())?,
+    );
+    if let Some(to) = tx.transaction.target() {
+        other.insert(
+            "to".to_string(),
+            serde_json::to_value(Address::new(to.0).to_string())?,
+        );
+    }
+
+    Ok(())
+}
+
 pub fn neon_to_eth(tx: NeonTxInfo, blockhash: Option<Hash>) -> Result<Transaction, Error> {
-    let other = neon_extra_fields(&tx)?;
+    let mut other = neon_extra_fields(&tx)?;
+    add_checksum_fields(&mut other, &tx)?;
 
     Ok(Transaction {
         hash: B256::from(&tx.neon_signature),
@@ -98,6 +114,8 @@ pub fn neon_to_eth_receipt(
         r#type: tx.tx_type,
     };
 
+    let mut other = OtherFields::default();
+    add_checksum_fields(&mut other, &tx)?;
     let receipt = TransactionReceipt {
         inner: envelope,
         transaction_hash: B256::from(&tx.neon_signature),
@@ -115,7 +133,10 @@ pub fn neon_to_eth_receipt(
         state_root: None,
     };
 
-    Ok(WithOtherFields::new(receipt))
+    Ok(WithOtherFields {
+        inner: receipt,
+        other,
+    })
 }
 
 pub fn neon_event_to_log(event: &EventLog) -> PrimitiveLog {
