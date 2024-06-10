@@ -271,7 +271,9 @@ impl TransactionRepo {
                status = $17,
                tx_idx = $8,
                sol_ix_idx = $5,
-               sol_ix_inner_idx = $6
+               sol_ix_inner_idx = $6,
+               gas_used = $13,
+               sum_gas_used = $14
             "#,
             &tx_hash,                                                          // 1
             tx.tx_type as i32,                                                 // 2
