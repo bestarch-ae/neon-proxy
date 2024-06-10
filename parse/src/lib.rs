@@ -152,20 +152,17 @@ fn add_log(meta: TransactionMeta, log_info: &NeonLogInfo, slot: u64) -> NeonTxIn
         None
     };
 
-    let gas_used = log_info
-        .ret
-        .as_ref()
-        .map(|r| r.gas_used)
-        .unwrap_or_default();
+    let gas_used = log_info.gas_used();
 
     let has_returned = log_info.ret.is_some();
 
-    tracing::info!(
-        "tx {:?} returned? {:?} completed? {} cancelled? {}",
+    tracing::debug!(
+        "tx {:?} returned? {:?} completed? {} cancelled? {} gas_used: {}",
         hex::encode(neon_sig),
         has_returned,
         is_completed,
-        is_cancelled
+        is_cancelled,
+        gas_used
     );
 
     NeonTxInfo {

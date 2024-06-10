@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            INSERT INTO neon_transactions\n            (\n                neon_sig,\n                tx_type,\n                from_addr,\n                sol_sig,\n                sol_ix_idx,\n                sol_ix_inner_idx,\n                block_slot,\n                tx_idx,\n                nonce,\n                gas_price,\n                gas_limit,\n                value,\n                gas_used,\n                sum_gas_used,\n                to_addr,\n                contract,\n                status,\n                is_canceled,\n                is_completed,\n                v, r, s,\n                chain_id,\n                calldata,\n                logs\n            )\n            VALUES($1, $2, $3, $4, $5, $6,\n                   $7, $8, $9, $10, $11, $12,\n                   $13, $14, $15, $16, $17, $18,\n                   $19, $20, $21, $22, $23, $24, $25)\n            ON CONFLICT (neon_sig)\n            DO UPDATE SET\n               block_slot = $7,\n               is_completed = $19,\n               is_canceled = $18,\n               status = $17,\n               tx_idx = $8,\n               sol_ix_idx = $5,\n               sol_ix_inner_idx = $6\n            ",
+  "query": "\n            INSERT INTO neon_transactions\n            (\n                neon_sig,\n                tx_type,\n                from_addr,\n                sol_sig,\n                sol_ix_idx,\n                sol_ix_inner_idx,\n                block_slot,\n                tx_idx,\n                nonce,\n                gas_price,\n                gas_limit,\n                value,\n                gas_used,\n                sum_gas_used,\n                to_addr,\n                contract,\n                status,\n                is_canceled,\n                is_completed,\n                v, r, s,\n                chain_id,\n                calldata,\n                logs\n            )\n            VALUES($1, $2, $3, $4, $5, $6,\n                   $7, $8, $9, $10, $11, $12,\n                   $13, $14, $15, $16, $17, $18,\n                   $19, $20, $21, $22, $23, $24, $25)\n            ON CONFLICT (neon_sig)\n            DO UPDATE SET\n               block_slot = $7,\n               is_completed = $19,\n               is_canceled = $18,\n               status = $17,\n               tx_idx = $8,\n               sol_ix_idx = $5,\n               sol_ix_inner_idx = $6,\n               gas_used = $13,\n               sum_gas_used = $14\n            ",
   "describe": {
     "columns": [],
     "parameters": {
@@ -111,5 +111,5 @@
     },
     "nullable": []
   },
-  "hash": "56e8842048e2902787ac52e4c3ae36641a7bc1a47ff464ca181a4bfb6ddf5f6e"
+  "hash": "26ed5d16fe9a639da85b9ccef3b2e0200b4547cea362c1b096eedd2c0c1f6ebe"
 }

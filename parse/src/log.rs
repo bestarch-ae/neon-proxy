@@ -41,6 +41,18 @@ pub struct NeonLogInfo {
     pub is_already_finalized: bool,
 }
 
+impl NeonLogInfo {
+    pub fn gas_used(&self) -> U256 {
+        if let Some(gas) = self.ret.as_ref().map(|ret| ret.gas_used) {
+            tracing::info!("returning gas_used from ret: {}", gas);
+            return gas;
+        }
+        let gas = self.ix.as_ref().map(|ix| ix.gas_used).unwrap_or_default();
+        tracing::info!("ix gas_used: {}", gas);
+        gas
+    }
+}
+
 #[derive(Debug)]
 pub struct NeonLogTxReturn {
     pub gas_used: U256,
@@ -245,6 +257,8 @@ impl Mnemonic {
 
         let _len = BASE64.decode_slice_unchecked(parts[1].as_bytes(), &mut buf)?;
         let total_gas_used = U256::from_le_bytes(buf);
+
+        tracing::debug!("gas decoded {} {}", gas_used, total_gas_used);
 
         Ok(NeonLogTxIx {
             gas_used,
