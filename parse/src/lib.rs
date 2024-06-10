@@ -158,6 +158,16 @@ fn add_log(meta: TransactionMeta, log_info: &NeonLogInfo, slot: u64) -> NeonTxIn
         .map(|r| r.gas_used)
         .unwrap_or_default();
 
+    let has_returned = log_info.ret.is_some();
+
+    tracing::info!(
+        "tx {:?} returned? {:?} completed? {} cancelled? {}",
+        hex::encode(neon_sig),
+        has_returned,
+        is_completed,
+        is_cancelled
+    );
+
     NeonTxInfo {
         tx_type: 0, // TODO
         neon_signature: neon_sig,
@@ -174,7 +184,7 @@ fn add_log(meta: TransactionMeta, log_info: &NeonLogInfo, slot: u64) -> NeonTxIn
         sol_ix_inner_idx: 0, // TODO: what is this?
         status: log_info.ret.as_ref().map(|r| r.status).unwrap_or_default(), // TODO
         is_cancelled,
-        is_completed: is_completed || !is_cancelled, /* TODO */
+        is_completed: is_completed || has_returned,
     }
 }
 
