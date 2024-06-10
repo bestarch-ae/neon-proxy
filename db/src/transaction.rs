@@ -144,8 +144,7 @@ impl TransactionRepo {
             UPDATE neon_transactions
             SET 
                is_canceled = true,
-               block_slot = $1,
-               is_completed = true
+               block_slot = $1
             WHERE neon_sig = $2 AND is_completed = false
             "#,
             slot as i64,
