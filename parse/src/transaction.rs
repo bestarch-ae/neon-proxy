@@ -3,6 +3,7 @@ use common::evm_loader::account::Holder;
 use common::evm_loader::error::Error as NeonError;
 use common::evm_loader::types::Transaction;
 use common::solana_sdk::pubkey::Pubkey;
+use common::types::HolderOperation;
 
 use super::AccountsDb;
 use arrayref::array_ref;
@@ -43,28 +44,6 @@ pub enum Error {
     AccountNotFound(Pubkey),
     #[error("unknown instruction tag: 0x{:x}", .0)]
     UnknownTag(u8),
-}
-
-#[derive(Debug)]
-pub enum HolderOperation {
-    Create(Pubkey),
-    Delete(Pubkey),
-    Write {
-        pubkey: Pubkey,
-        tx_hash: [u8; 32],
-        offset: usize,
-        data: Vec<u8>,
-    },
-}
-
-impl HolderOperation {
-    pub fn pubkey(&self) -> Pubkey {
-        match self {
-            Self::Create(pubkey) => *pubkey,
-            Self::Delete(pubkey) => *pubkey,
-            Self::Write { pubkey, .. } => *pubkey,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -220,24 +199,29 @@ fn decode_holder_write(
 
     tracing::debug!(pubkey = %holder_pubkey, ?transaction_hash, ?offset, ?data, "holder write");
 
-    let mut holder = match adb.get_by_key(&holder_pubkey) {
+    let (mut holder, acc) = match adb.get_by_key(&holder_pubkey) {
         Some(account) => {
+            let acc = account.clone();
             let holder = Holder::from_account(&neon_pubkey, account).unwrap();
-            holder
+
+            (holder, acc)
         }
         None => {
             tracing::warn!(pubkey = %holder_pubkey, "creating holder account implicitly on HOLDER_WRITE");
             /* we haven't seen this account yet, but let's create it and hope for the best */
             adb.init_account(holder_pubkey);
             let account = adb.get_by_key(&holder_pubkey).unwrap(); // we just did init
+            let acc = account.clone();
             account.data.borrow_mut()[0] = TAG_HOLDER;
             let mut holder = Holder::from_account(&neon_pubkey, account).unwrap();
             holder.clear();
-            holder
+            (holder, acc)
         }
     };
     holder.update_transaction_hash(transaction_hash);
     holder.write(offset, data)?;
+
+    tracing::info!(pubkey = %holder_pubkey, data = %common::solana_sdk::hash::hash(&acc.data.borrow()), "holder account after write");
 
     Ok(HolderOperation::Write {
         pubkey: holder_pubkey,

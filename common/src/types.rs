@@ -4,6 +4,7 @@ use evm_loader::types::{Address, Transaction};
 use solana_sdk::clock::UnixTimestamp;
 use solana_sdk::hash::Hash;
 use solana_sdk::message::v0::LoadedAddresses;
+use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 use solana_sdk::slot_history::Slot;
 use solana_sdk::transaction::{Result as TransactionResult, VersionedTransaction};
@@ -204,4 +205,26 @@ pub struct EventLog {
     pub log_idx: u64,
     pub level: u64,
     pub order: u64,
+}
+
+#[derive(Debug)]
+pub enum HolderOperation {
+    Create(Pubkey),
+    Delete(Pubkey),
+    Write {
+        pubkey: Pubkey,
+        tx_hash: [u8; 32],
+        offset: usize,
+        data: Vec<u8>,
+    },
+}
+
+impl HolderOperation {
+    pub fn pubkey(&self) -> Pubkey {
+        match self {
+            Self::Create(pubkey) => *pubkey,
+            Self::Delete(pubkey) => *pubkey,
+            Self::Write { pubkey, .. } => *pubkey,
+        }
+    }
 }

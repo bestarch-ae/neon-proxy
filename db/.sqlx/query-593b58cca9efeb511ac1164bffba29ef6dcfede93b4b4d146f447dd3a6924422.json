@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT\n                 block_slot, start_block_slot, last_block_slot,\n                 is_stuck, neon_sig, pubkey, data_offset,\n                 data\n             FROM neon_holder_log\n             WHERE\n              pubkey = $1 AND\n              block_slot <= $2 AND\n              tx_idx <= $3",
+  "query": "SELECT\n                 block_slot, start_block_slot, last_block_slot,\n                 is_stuck, neon_sig, pubkey, data_offset,\n                 data\n             FROM neon_holder_log\n             WHERE\n              pubkey = $1 AND\n              ((block_slot < $2) OR (block_slot = $2 AND tx_idx <= $3))\n             ORDER BY block_slot",
   "describe": {
     "columns": [
       {
@@ -62,5 +62,5 @@
       true
     ]
   },
-  "hash": "45ec3784a116982f580a24473a1d6e03a5c29abb9388fad6db7d22fac6b8ad1b"
+  "hash": "593b58cca9efeb511ac1164bffba29ef6dcfede93b4b4d146f447dd3a6924422"
 }

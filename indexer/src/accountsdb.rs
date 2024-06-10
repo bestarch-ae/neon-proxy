@@ -2,8 +2,10 @@ use std::cell::RefCell;
 use std::num::NonZeroUsize;
 use std::rc::Rc;
 
+use common::evm_loader::account::Holder;
 use common::solana_sdk::account_info::AccountInfo;
 use common::solana_sdk::pubkey::Pubkey;
+use common::types::HolderOperation;
 use db::HolderRepo;
 use lru::LruCache;
 use neon_parse::AccountsDb;
@@ -29,7 +31,7 @@ pub struct DummyAdb {
 impl DummyAdb {
     pub fn new(neon: Pubkey, db: HolderRepo) -> Self {
         DummyAdb {
-            map: LruCache::new(NonZeroUsize::new(1000).unwrap()),
+            map: LruCache::new(NonZeroUsize::new(1_000).unwrap()),
             neon_pubkey: neon,
             db,
             slot: 0,
@@ -42,7 +44,12 @@ impl DummyAdb {
         self.tx_idx = tx_idx;
     }
 
-    fn get_from_db(db: HolderRepo, pubkey: &Pubkey, slot: u64, tx_idx: u32) -> Option<Data> {
+    fn get_from_db(
+        db: HolderRepo,
+        pubkey: &Pubkey,
+        slot: u64,
+        tx_idx: u32,
+    ) -> Option<Vec<HolderOperation>> {
         let data = tokio::task::block_in_place(move || {
             let timer = metrics().holder_fetch_time.start_timer();
             let res = Handle::current()
@@ -52,24 +59,18 @@ impl DummyAdb {
         });
 
         match data {
-            Ok(Some(data)) => {
-                tracing::info!(%pubkey, "holder data found");
-                Some(Data { data, lamports: 0 })
-            }
-            Ok(None) => {
+            Ok(ops) if ops.is_empty() => {
                 tracing::info!(%pubkey, "holder not found in db");
                 None
+            }
+            Ok(ops) => {
+                tracing::info!(%pubkey, "holder data found");
+                Some(ops)
             }
             Err(err) => {
                 tracing::warn!(%err, "db error");
                 None
             }
-        }
-    }
-
-    fn try_load_data(&mut self, db: HolderRepo, pubkey: &Pubkey, slot: u64, tx_idx: u32) {
-        if let Some(data) = Self::get_from_db(db.clone(), pubkey, slot, tx_idx) {
-            self.map.put(*pubkey, data);
         }
     }
 }
@@ -78,28 +79,65 @@ impl AccountsDb for DummyAdb {
     fn get_by_key<'a>(&'a mut self, pubkey: &'a Pubkey) -> Option<AccountInfo<'a>> {
         tracing::debug!(%pubkey, "getting data for account");
 
-        self.try_load_data(self.db.clone(), pubkey, self.slot, self.tx_idx);
+        if self.map.contains(pubkey) {
+            let data = self.map.get_mut(pubkey)?;
 
-        let data = self.map.get_mut(pubkey)?;
+            let account_info = AccountInfo {
+                key: pubkey,
+                owner: &self.neon_pubkey,
+                data: Rc::new(RefCell::new(data.data.as_mut())),
+                lamports: Rc::new(RefCell::new(&mut data.lamports)),
+                is_signer: false,
+                is_writable: false,
+                executable: false,
+                rent_epoch: 0,
+            };
+            return Some(account_info);
+        }
 
-        let account_info = AccountInfo {
-            key: pubkey,
-            owner: &self.neon_pubkey,
-            data: Rc::new(RefCell::new(data.data.as_mut())),
-            lamports: Rc::new(RefCell::new(&mut data.lamports)),
-            is_signer: false,
-            is_writable: false,
-            executable: false,
-            rent_epoch: 0,
-        };
-        Some(account_info)
+        if let Some(ops) = Self::get_from_db(self.db.clone(), pubkey, self.slot, self.tx_idx) {
+            self.init_account(*pubkey);
+
+            let data = self.map.get_mut(pubkey)?;
+
+            let account_info = AccountInfo {
+                key: pubkey,
+                owner: &self.neon_pubkey,
+                data: Rc::new(RefCell::new(data.data.as_mut())),
+                lamports: Rc::new(RefCell::new(&mut data.lamports)),
+                is_signer: false,
+                is_writable: false,
+                executable: false,
+                rent_epoch: 0,
+            };
+            let account_info_2 = account_info.clone();
+            let mut holder = Holder::from_account(&self.neon_pubkey, account_info).unwrap();
+            for op in ops {
+                match op {
+                    HolderOperation::Write {
+                        pubkey: _,
+                        tx_hash,
+                        offset,
+                        data,
+                    } => {
+                        holder.update_transaction_hash(tx_hash);
+                        holder.write(offset, &data).unwrap();
+                    }
+                    HolderOperation::Create(_pubkey) => {
+                        holder.clear();
+                    }
+                    HolderOperation::Delete(_pubkey) => holder.clear(),
+                }
+            }
+            tracing::info!(%pubkey, data = %common::solana_sdk::hash::hash(&account_info_2.data.borrow()), "holder data loaded");
+            return Some(account_info_2);
+        }
+
+        None
     }
 
     fn init_account(&mut self, pubkey: Pubkey) {
         tracing::debug!(%pubkey, "init account");
-        let db = self.db.clone();
-        let slot = self.slot;
-        let tx_idx = self.tx_idx;
 
         super::metrics()
             .holders_in_memory
@@ -108,11 +146,10 @@ impl AccountsDb for DummyAdb {
         self.map.get_or_insert(pubkey, move || {
             use common::evm_loader::account::TAG_HOLDER;
 
-            let data = Self::get_from_db(db, &pubkey, slot, tx_idx);
-            let mut data = data.unwrap_or_else(|| Data {
+            let mut data = Data {
                 data: vec![0; 1024 * 1024],
                 lamports: 0,
-            });
+            };
             data.data[0] = TAG_HOLDER;
 
             data
