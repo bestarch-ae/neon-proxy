@@ -62,9 +62,6 @@ async fn main() -> Result<()> {
 
     let last_signature = sig_repo.get_latest().await?;
     let from = opts.from.or(last_signature);
-
-    tracing::info!("starting traversal from {:?}", from);
-
     let traverse_config = TraverseConfig {
         endpoint: opts.url,
         rps_limit_sleep: opts.rps_limit_sleep.map(Duration::from_secs),
@@ -72,9 +69,21 @@ async fn main() -> Result<()> {
         last_observed: from,
         finalized: !opts.confirmed,
         only_success: true,
+        backup_channel_capacity: Some(512),
         ..Default::default()
     };
-    let mut traverse = TraverseLedger::new(traverse_config);
+    let bootstrap = if let Some(limit) = traverse_config.signature_buffer_limit {
+        Some(sig_repo.fetch_candidates(Some(limit as i64)).await?)
+    } else {
+        None
+    };
+
+    tracing::info!("starting traversal from {:?}", from);
+
+    let mut traverse = TraverseLedger::new(traverse_config, bootstrap.map(Into::into));
+    let mut traverse_backup = traverse
+        .take_backup_stream()
+        .expect("cannot get backup stream");
     let mut adb = accountsdb::DummyAdb::new(opts.target, holder_repo.clone());
 
     if let Some(addr) = opts.metrics_addr {
@@ -95,6 +104,17 @@ async fn main() -> Result<()> {
                 .set(tx.capacity() as i64);
         }
         tracing::info!("traverse stopped");
+    });
+
+    let signature_repo = sig_repo.clone();
+    let backup_handle = tokio::spawn(async move {
+        while let Some(candidates) = traverse_backup.recv().await {
+            if let Err(err) = signature_repo.insert_candidates(candidates).await {
+                tracing::error!(%err, "could not save new candidates to db, ending backup");
+                break;
+            }
+        }
+        tracing::info!("backup task stopped");
     });
 
     /* TODO: we should always start from the start of the block otherwise these would be wrong */
@@ -180,7 +200,7 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
-                if let Err(err) = sig_repo.insert(slot, tx_idx, signature).await {
+                if let Err(err) = sig_repo.insert_processed(slot, tx_idx, signature).await {
                     tracing::warn!(?err, "failed to save solana transaction");
                     metrics().database_errors.inc();
                 }
@@ -230,6 +250,10 @@ async fn main() -> Result<()> {
 
     if let Err(err) = traverse_handle.await {
         tracing::error!(?err, "traverse task failed");
+    };
+
+    if let Err(err) = backup_handle.await {
+        tracing::error!(?err, "backup task failed");
     };
 
     Ok(())

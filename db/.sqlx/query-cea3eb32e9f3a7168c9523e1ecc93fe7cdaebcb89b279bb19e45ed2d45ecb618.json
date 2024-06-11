@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT block_slot, tx_idx, signature\n            FROM solana_transaction_signatures\n            WHERE is_processed = FALSE\n            ORDER BY (block_slot, tx_idx) ASC\n            LIMIT $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "block_slot",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "tx_idx",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "signature",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "cea3eb32e9f3a7168c9523e1ecc93fe7cdaebcb89b279bb19e45ed2d45ecb618"
+}

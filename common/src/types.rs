@@ -205,3 +205,10 @@ pub struct EventLog {
     pub level: u64,
     pub order: u64,
 }
+
+#[derive(Debug, Clone)]
+pub struct Candidate {
+    pub signature: String,
+    pub slot: Slot,
+    pub idx: usize,
+}

@@ -3,6 +3,7 @@ mod finalization_tracker;
 mod tests;
 
 use std::collections::{HashSet, VecDeque};
+use std::mem;
 use std::str::FromStr;
 use std::sync::Once;
 use std::time::Duration;
@@ -12,13 +13,14 @@ use futures_util::{Stream, StreamExt};
 use solana_client::client_error::{ClientError, ClientErrorKind};
 use solana_client::rpc_response::RpcConfirmedTransactionStatusWithSignature;
 use thiserror::Error;
+use tokio::sync::mpsc;
 use tokio::time::{sleep, sleep_until, Instant};
 
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::{ParseSignatureError, Signature};
 use common::solana_sdk::slot_history::Slot;
 use common::solana_transaction_status::UiConfirmedBlock;
-use common::types::{SolanaBlock, SolanaTransaction};
+use common::types::{Candidate, SolanaBlock, SolanaTransaction};
 
 use crate::convert::{decode_ui_transaction, TxDecodeError};
 use crate::metrics::metrics;
@@ -38,12 +40,6 @@ pub enum TraverseError {
     TxDecodeError(#[from] TxDecodeError),
     #[error("invalid signature: {0}")]
     InvalidSignature(#[from] ParseSignatureError),
-}
-
-#[derive(Debug, Clone)]
-struct Candidate {
-    signature: String,
-    slot: Slot,
 }
 
 #[derive(Debug)]
@@ -131,6 +127,7 @@ pub struct TraverseConfig {
     pub target_key: Pubkey,
     pub last_observed: Option<Signature>,
     pub signature_buffer_limit: Option<usize>,
+    pub backup_channel_capacity: Option<usize>,
 }
 
 impl TraverseConfig {
@@ -155,6 +152,7 @@ impl Default for TraverseConfig {
             signature_buffer_limit: Some(Self::signature_limit_size_mb_to_len(
                 Self::DEFAULT_SIGNATURE_BUFFER_SIZE_CAP_MB,
             )),
+            backup_channel_capacity: None,
         }
     }
 }
@@ -165,27 +163,42 @@ pub struct TraverseLedger {
     tracker: Option<FinalizationTracker>,
     status_poll_interval: Duration,
     purged_block: Option<u64>,
+    backup_rx: Option<mpsc::Receiver<Vec<Candidate>>>,
     is_finalized: bool,
 }
 
 impl TraverseLedger {
-    pub fn new(config: TraverseConfig) -> Self {
+    pub fn new(config: TraverseConfig, bootstrap: Option<VecDeque<Candidate>>) -> Self {
         let mut config = config;
         let api = SolanaApi::new(std::mem::take(&mut config.endpoint), config.finalized);
-        Self::new_with_api(api, config)
+        Self::new_with_api(api, config, bootstrap)
     }
 
-    pub(crate) fn new_with_api(api: SolanaApi, config: TraverseConfig) -> Self {
+    pub(crate) fn new_with_api(
+        api: SolanaApi,
+        config: TraverseConfig,
+        bootstrap: Option<VecDeque<Candidate>>,
+    ) -> Self {
+        let is_finalized = config.finalized;
+        let status_poll_interval = config.status_poll_interval;
+        let mut traverse = InnerTraverseLedger::new_with_api(
+            api.clone(),
+            config.clone(),
+            bootstrap.unwrap_or_default(),
+        );
         Self {
-            is_finalized: config.finalized,
-            status_poll_interval: config.status_poll_interval,
-            traverse: Box::pin(
-                InnerTraverseLedger::new_with_api(api.clone(), config).into_stream(),
-            ),
+            is_finalized,
+            status_poll_interval,
+            backup_rx: traverse.take_backup_stream(),
+            traverse: Box::pin(traverse.into_stream()),
             api,
             tracker: None,
             purged_block: None,
         }
+    }
+
+    pub fn take_backup_stream(&mut self) -> Option<mpsc::Receiver<Vec<Candidate>>> {
+        self.backup_rx.take()
     }
 
     pub async fn next(&mut self) -> Option<Result<LedgerItem, TraverseError>> {
@@ -259,13 +272,22 @@ struct InnerTraverseLedger {
     cached_block: Option<CachedBlock>,
     next_request: Instant,
     config: TraverseConfig,
+    backup_rx: Option<mpsc::Receiver<Vec<Candidate>>>,
+    backup_tx: Option<mpsc::Sender<Vec<Candidate>>>,
+    bootstrap: VecDeque<Candidate>,
 }
 
 impl InnerTraverseLedger {
-    fn new_with_api(api: SolanaApi, config: TraverseConfig) -> Self {
+    fn new_with_api(
+        api: SolanaApi,
+        config: TraverseConfig,
+        bootstrap: VecDeque<Candidate>,
+    ) -> Self {
         assert!(config
             .signature_buffer_limit
             .map_or(true, |limit| limit > 1));
+        let (tx, rx) = config.backup_channel_capacity.map(mpsc::channel).unzip();
+
         Self {
             api,
             last_observed: config.last_observed,
@@ -273,6 +295,9 @@ impl InnerTraverseLedger {
             cached_block: None,
             next_request: Instant::now(),
             config,
+            backup_rx: rx,
+            backup_tx: tx,
+            bootstrap,
         }
     }
 
@@ -281,6 +306,10 @@ impl InnerTraverseLedger {
             let value = this.try_next().await;
             Some((value, this))
         })
+    }
+
+    fn take_backup_stream(&mut self) -> Option<mpsc::Receiver<Vec<Candidate>>> {
+        self.backup_rx.take()
     }
 
     async fn try_next(&mut self) -> Result<InnerLedgerItem, TraverseError> {
@@ -427,12 +456,25 @@ impl InnerTraverseLedger {
         // the ledger backwards in batches. We store the earliest transaction signature from
         // the last batch (`earliest`), so we can set the upper limit for the next batch.
 
+        let mut new_signatures = mem::take(&mut self.bootstrap);
         // Last observed during this invocation.
-        let mut last_observed = None;
+        let last_observed = new_signatures
+            .back()
+            .map(|candidate| candidate.signature.parse())
+            .transpose();
+        let mut last_observed =
+            ward!([error] last_observed, "could not parse last observed signature from bootstrap");
         // Hash of the earliest transaction in a batch.
-        let mut earliest = None;
-        metrics().traverse.uncommited_buffer_len.set(0);
-        let mut new_signatures = VecDeque::<Candidate>::new();
+        let earliest = new_signatures
+            .front()
+            .map(|candidate| candidate.signature.parse())
+            .transpose();
+        let mut earliest =
+            ward!([error] earliest, "could not parse earliest signature from bootstrap");
+        metrics()
+            .traverse
+            .uncommited_buffer_len
+            .set(new_signatures.len() as i64);
 
         let final_sign = self.last_observed.as_ref().map(Signature::to_string);
         let mut prev_len = None;
@@ -507,6 +549,7 @@ impl InnerTraverseLedger {
             earliest = Some(ward!([error] sign, "could not parse earliest signature in a batch"));
             metrics().traverse.earliest_slot.set(last.slot as i64);
 
+            let added_until = txs.len();
             for item in txs {
                 // let sign = ward!(
                 //     [error] Signature::from_str(&item.signature),
@@ -546,8 +589,30 @@ impl InnerTraverseLedger {
                         metrics().traverse.uncommited_buffer_len.inc();
                     }
 
-                    let sign = Candidate { signature, slot };
+                    let sign = Candidate {
+                        signature,
+                        slot,
+                        idx: 0,
+                    };
                     new_signatures.push_front(sign);
+                }
+            }
+            if let Some(tx) = self.backup_tx.as_ref() {
+                new_signatures
+                    .iter_mut()
+                    .take(added_until)
+                    .fold(None, |prev_slot, candidate| match prev_slot {
+                        Some((slot, idx)) if slot == candidate.slot => {
+                            candidate.idx = idx;
+                            Some((slot, idx + 1))
+                        }
+                        None | Some((_, _)) => Some((candidate.slot, 0)),
+                    });
+                let to_store = new_signatures.iter().take(added_until).cloned().collect();
+                if let Err(err) = tx.send_timeout(to_store, RECHECK_INTERVAL).await {
+                    tracing::warn!(%err, "error while sending signatures to backup, stopping backup");
+                    self.backup_rx.take();
+                    self.backup_tx.take();
                 }
             }
         }
@@ -563,6 +628,5 @@ impl InnerTraverseLedger {
 
         self.buffer.extend(new_signatures);
         metrics().traverse.buffer_len.set(self.buffer.len() as i64);
-        metrics().traverse.uncommited_buffer_len.set(0);
     }
 }

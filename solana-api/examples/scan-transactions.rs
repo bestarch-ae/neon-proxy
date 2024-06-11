@@ -62,7 +62,7 @@ async fn main() -> Result<()> {
         only_success: opts.no_fail,
         ..Default::default()
     };
-    let mut traverse = TraverseLedger::new(traverse_config);
+    let mut traverse = TraverseLedger::new(traverse_config, None);
 
     while let Some(result) = traverse.next().await {
         match result? {
