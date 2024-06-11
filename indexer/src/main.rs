@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 use common::ethnum::U256;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
+use common::types::HolderOperation;
 use metrics::metrics;
 use neon_parse::Action;
 
@@ -172,7 +173,7 @@ async fn main() -> Result<()> {
                             if let Err(err) =
                                 process_holder(&holder_repo, slot, tx_idx, &op, &mut adb).await
                             {
-                                tracing::warn!(?err, "failed to save neon holder");
+                                tracing::warn!(?err, pubkey = %op.pubkey(), "failed to save neon holder");
                                 metrics().database_errors.inc();
                             } else {
                                 metrics().holders_saved.inc();
@@ -239,37 +240,12 @@ async fn process_holder(
     repo: &db::HolderRepo,
     slot: u64,
     tx_idx: u32,
-    op: &neon_parse::HolderOperation,
+    op: &HolderOperation,
     adb: &mut impl neon_parse::AccountsDb,
 ) -> Result<(), anyhow::Error> {
-    use neon_parse::HolderOperation;
-    match op {
-        HolderOperation::Create(pubkey) => {
-            repo.insert(slot, tx_idx, false, None, pubkey, None, None)
-                .await?
-        }
-        HolderOperation::Write {
-            pubkey,
-            tx_hash,
-            offset,
-            data,
-        } => {
-            repo.insert(
-                slot,
-                tx_idx,
-                false,
-                Some(&hex::encode(tx_hash)),
-                pubkey,
-                Some(*offset as u64),
-                Some(data),
-            )
-            .await?
-        }
-        HolderOperation::Delete(pubkey) => {
-            adb.delete_account(*pubkey);
-            repo.insert(slot, tx_idx, false, None, pubkey, None, None)
-                .await?
-        }
+    if let HolderOperation::Delete(pubkey) = op {
+        adb.delete_account(*pubkey);
     }
+    repo.insert(slot, tx_idx, false, op).await?;
     Ok(())
 }

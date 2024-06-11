@@ -6,6 +6,7 @@ use std::str::FromStr;
 use anyhow::Context;
 use common::solana_sdk::signature::Signature;
 use common::solana_sdk::{hash::Hash, pubkey::Pubkey};
+use common::types::HolderOperation;
 use sqlx::PgPool;
 use thiserror::Error;
 
@@ -120,7 +121,8 @@ impl HolderRepo {
         pubkey: &Pubkey,
         before_slot: u64,
         tx_idx: u32,
-    ) -> Result<Option<Vec<u8>>, sqlx::Error> {
+    ) -> Result<Vec<HolderOperation>, sqlx::Error> {
+        tracing::info!(%pubkey, before_slot, tx_idx, "looking for holder");
         let rows = sqlx::query_as!(
             HolderRow,
             "SELECT
@@ -130,30 +132,41 @@ impl HolderRepo {
              FROM neon_holder_log
              WHERE
               pubkey = $1 AND
-              block_slot <= $2 AND
-              tx_idx <= $3",
+              ((block_slot < $2) OR (block_slot = $2 AND tx_idx <= $3))
+             ORDER BY block_slot",
             pubkey.to_string(),
             before_slot as i64,
             tx_idx as i32
         )
         .fetch_all(&self.pool)
         .await?;
+
         if rows.is_empty() {
-            return Ok(None);
+            tracing::info!(%pubkey, before_slot, tx_idx, "holder not found");
+            return Ok(Vec::new());
         }
-        let mut holder_data = Vec::new();
+        let mut operations = Vec::new();
         for row in rows {
-            if let (Some(offset), Some(data)) = (row.data_offset, row.data) {
+            let pubkey = row.pubkey.parse().unwrap();
+            if let (Some(offset), Some(data), Some(neon_sig)) =
+                (row.data_offset, row.data, row.neon_sig)
+            {
+                let mut tx_hash = [0; 32];
+                hex::decode_to_slice(neon_sig, &mut tx_hash).unwrap();
                 let offset = offset as usize;
-                if offset + data.len() > holder_data.len() {
-                    holder_data.resize(offset + data.len(), 0);
-                }
-                holder_data[offset..offset + data.len()].copy_from_slice(&data);
+                let op = HolderOperation::Write {
+                    pubkey,
+                    tx_hash,
+                    offset,
+                    data,
+                };
+                operations.push(op);
             } else {
-                holder_data.clear();
+                let op = HolderOperation::Create(pubkey); // TODO: how to distinguish create/delete
+                operations.push(op);
             }
         }
-        Ok(None)
+        Ok(operations)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -162,12 +175,18 @@ impl HolderRepo {
         slot: u64,
         tx_idx: u32,
         is_stuck: bool,
-        neon_sig: Option<&str>,
-        pubkey: &Pubkey,
-        offset: Option<u64>,
-        data: Option<&[u8]>,
+        op: &HolderOperation,
     ) -> Result<(), sqlx::Error> {
-        let mut txn = self.pool.begin().await?;
+        let (pubkey, neon_sig, offset, data) = match op {
+            HolderOperation::Create(pubkey) => (pubkey, None, None, None),
+            HolderOperation::Delete(pubkey) => (pubkey, None, None, None),
+            HolderOperation::Write {
+                pubkey,
+                tx_hash,
+                offset,
+                data,
+            } => (pubkey, Some(tx_hash), Some(offset), Some(data)),
+        };
         sqlx::query!(
             r#"
             INSERT INTO neon_holder_log
@@ -183,15 +202,14 @@ impl HolderRepo {
             "#,
             slot as i64,
             tx_idx as i32,
-            neon_sig,
+            neon_sig.map(hex::encode),
             pubkey.to_string(),
             is_stuck,
-            offset.map(|o| o as i64),
+            offset.map(|o| *o as i64),
             data
         )
-        .execute(&mut *txn)
+        .execute(&self.pool)
         .await?;
-        txn.commit().await?;
         Ok(())
     }
 }

@@ -7,14 +7,12 @@ use common::solana_sdk::message::AccountKeys;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
 use common::solana_sdk::transaction::VersionedTransaction;
-use common::types::{NeonTxInfo, SolanaTransaction};
+use common::types::{HolderOperation, NeonTxInfo, SolanaTransaction};
 
 use self::log::NeonLogInfo;
 
 mod log;
 mod transaction;
-
-pub use transaction::HolderOperation;
 
 pub trait AccountsDb {
     fn init_account(&mut self, _pubkey: Pubkey) {}
