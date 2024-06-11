@@ -16,6 +16,7 @@ thiserror = "1"
 tracing = "0.1"
 futures-util = "0.3.30"
 prometheus = { version = "0.13", default-features = false }
+stream_generator = "0.1"
 
 [dev-dependencies]
 anyhow = "1.0.82"

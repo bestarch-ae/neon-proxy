@@ -5327,6 +5327,7 @@ dependencies = [
  "serde_json",
  "solana-client",
  "solana-rpc-client",
+ "stream_generator",
  "thiserror",
  "tokio",
  "tracing",
@@ -6511,6 +6512,15 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "stream_generator"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3eef07b08bf0ff7aa7d8f0f35f632344d69c4fc2b49e3887cd0c08ee4de82d26"
+dependencies = [
+ "futures",
+]
 
 [[package]]
 name = "stringprep"

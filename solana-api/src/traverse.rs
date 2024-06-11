@@ -5,7 +5,8 @@ mod tests;
 use std::collections::{HashSet, VecDeque};
 use std::mem;
 use std::str::FromStr;
-use std::sync::Once;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Once};
 use std::time::Duration;
 
 use futures_util::stream::{self, BoxStream};
@@ -158,13 +159,14 @@ impl Default for TraverseConfig {
 }
 
 pub struct TraverseLedger {
-    traverse: BoxStream<'static, Result<InnerLedgerItem, TraverseError>>,
+    traverse: InnerTraverseLedger,
     api: SolanaApi,
     tracker: Option<FinalizationTracker>,
     status_poll_interval: Duration,
     purged_block: Option<u64>,
     backup_rx: Option<mpsc::Receiver<Vec<Candidate>>>,
     is_finalized: bool,
+    recover_complete: Arc<AtomicBool>,
 }
 
 impl TraverseLedger {
@@ -181,23 +183,42 @@ impl TraverseLedger {
     ) -> Self {
         let is_finalized = config.finalized;
         let status_poll_interval = config.status_poll_interval;
+
+        let recover_complete = Arc::new(AtomicBool::default());
         let mut traverse = InnerTraverseLedger::new_with_api(
             api.clone(),
             config.clone(),
             bootstrap.unwrap_or_default(),
+            recover_complete.clone(),
         );
         Self {
             is_finalized,
             status_poll_interval,
             backup_rx: traverse.take_backup_stream(),
-            traverse: Box::pin(traverse.into_stream()),
+            traverse,
             api,
             tracker: None,
             purged_block: None,
+            recover_complete,
         }
     }
 
-    pub fn take_backup_stream(&mut self) -> Option<mpsc::Receiver<Vec<Candidate>>> {
+    pub fn recover<'a>(&'a mut self) -> impl Stream<Item = Vec<Candidate>> + 'a {
+        let mut rx = self.take_backup_stream().unwrap();
+        let traverse = &mut self.traverse;
+        let recover_complete = Arc::clone(&self.recover_complete);
+
+        stream_generator::generate_stream(|mut stream| async move {
+            while !recover_complete.load(Ordering::Relaxed) {
+                if let Some(c) = rx.recv().await {
+                    stream.send(c).await;
+                }
+                traverse.try_next().await;
+            }
+        })
+    }
+
+    fn take_backup_stream(&mut self) -> Option<mpsc::Receiver<Vec<Candidate>>> {
         self.backup_rx.take()
     }
 
@@ -275,6 +296,7 @@ struct InnerTraverseLedger {
     backup_rx: Option<mpsc::Receiver<Vec<Candidate>>>,
     backup_tx: Option<mpsc::Sender<Vec<Candidate>>>,
     bootstrap: VecDeque<Candidate>,
+    recover_complete: Arc<AtomicBool>,
 }
 
 impl InnerTraverseLedger {
@@ -282,6 +304,7 @@ impl InnerTraverseLedger {
         api: SolanaApi,
         config: TraverseConfig,
         bootstrap: VecDeque<Candidate>,
+        recover_complete: Arc<AtomicBool>,
     ) -> Self {
         assert!(config
             .signature_buffer_limit
@@ -298,6 +321,7 @@ impl InnerTraverseLedger {
             backup_rx: rx,
             backup_tx: tx,
             bootstrap,
+            recover_complete,
         }
     }
 
@@ -521,6 +545,8 @@ impl InnerTraverseLedger {
                     continue;
                 }
                 tracing::debug!("stopping traverse, empty response");
+                self.recover_complete
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 break 'outer;
             }
             empty_retries = 0;
