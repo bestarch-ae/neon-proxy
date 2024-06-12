@@ -140,6 +140,7 @@ impl Mnemonic {
         Ok(NeonLogTxEvent {
             event_type: EventKind::Log,
             is_hidden: false,
+            is_reverted: false,
             address: Some(address),
             topic_list,
             data,
@@ -192,6 +193,7 @@ impl Mnemonic {
         Ok(NeonLogTxEvent {
             event_type: event_kind,
             is_hidden: true,
+            is_reverted: false,
             address: Some(address),
             topic_list: Vec::new(),
             data: Vec::new(),
@@ -232,6 +234,7 @@ impl Mnemonic {
         Ok(NeonLogTxEvent {
             event_type: event_kind,
             is_hidden: true,
+            is_reverted: false,
             address: None,
             topic_list: Vec::new(),
             data,
@@ -447,6 +450,26 @@ pub fn parse(lines: impl IntoIterator<Item = impl AsRef<str>>) -> Result<NeonLog
         event.level = event_level;
         event.order = current_order;
         event.address = event.address.or(event_addr);
+    }
+
+    let mut revert_level = None;
+    let is_failed = neon_tx_return
+        .as_ref()
+        .map(|ret| ret.status == 0)
+        .unwrap_or(false);
+
+    for event in event_list.iter_mut().rev() {
+        if event.event_type.is_start() {
+            if revert_level == Some(event.level) {
+                revert_level = None;
+            }
+        }
+        if event.event_type == EventKind::ExitRevert && revert_level.is_none() {
+            revert_level = Some(event.level);
+        }
+        let is_reverted = revert_level.is_some() || is_failed;
+        event.is_reverted = is_reverted;
+        event.is_hidden |= is_reverted;
     }
 
     let log_info = NeonLogInfo {

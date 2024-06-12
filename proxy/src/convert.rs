@@ -109,8 +109,13 @@ pub fn neon_to_eth_receipt(
             .collect::<Result<Vec<_>, Error>>()?,
     };
 
+    let mut bloom = Bloom::default();
+    for log in &receipt.logs {
+        bloom.accrue_log(&log.inner);
+    }
+
     let envelope = AnyReceiptEnvelope {
-        inner: ReceiptWithBloom::new(receipt, Default::default()),
+        inner: ReceiptWithBloom::new(receipt, bloom),
         r#type: tx.tx_type,
     };
 
