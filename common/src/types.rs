@@ -86,7 +86,7 @@ pub struct NeonTxInfo {
 }
 
 /// Event kinds can be logged to solana transaction logs.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 #[repr(u32)]
 pub enum EventKind {
     Log = 1,
@@ -196,6 +196,7 @@ impl EventKind {
 pub struct EventLog {
     pub event_type: EventKind,
     pub is_hidden: bool, // TODO: WTF? Do we store hidden events?
+    pub is_reverted: bool,
 
     pub address: Option<Address>,
     // TODO: capped at 4, maybe use smallvec or array

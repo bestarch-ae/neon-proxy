@@ -648,6 +648,7 @@ impl TryFrom<NeonTransactionLogRow> for EventLog {
             Result::<_, Self::Error>::Ok(EventLog {
                 event_type: EventKind::Log, // TODO: insert to DB
                 is_hidden: false,
+                is_reverted: false,
                 address,
                 topic_list: topics,
                 data: hex::decode(value.log_data).context("data")?,
