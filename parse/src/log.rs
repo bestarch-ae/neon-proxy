@@ -459,10 +459,8 @@ pub fn parse(lines: impl IntoIterator<Item = impl AsRef<str>>) -> Result<NeonLog
         .unwrap_or(false);
 
     for event in event_list.iter_mut().rev() {
-        if event.event_type.is_start() {
-            if revert_level == Some(event.level) {
-                revert_level = None;
-            }
+        if event.event_type.is_start() && revert_level == Some(event.level) {
+            revert_level = None;
         }
         if event.event_type == EventKind::ExitRevert && revert_level.is_none() {
             revert_level = Some(event.level);
