@@ -171,8 +171,6 @@ impl TransactionRepo {
 
         let mut txn = self.pool.begin().await?;
 
-        let mut tx_log_idx = 0;
-
         for log in &tx.events {
             /* not a real eth event */
             if log.is_hidden || log.topic_list.is_empty() {
@@ -207,28 +205,26 @@ impl TransactionRepo {
                 log_data
             ) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
             "#,
-                log.address.map(PgAddress::from).unwrap_or_default() as PgAddress,
-                block_slot,
-                &tx_hash,
-                tx_idx,
-                tx_log_idx,
-                log.log_idx as i64,
-                log.level as i64,
-                log.order as i64,
-                sol_sig.as_ref(), /* TODO */
-                sol_idx,
-                sol_inner_idx,
-                topic1.as_ref().map(|x| x.as_slice()),
-                topic2.as_ref().map(|x| x.as_slice()),
-                topic3.as_ref().map(|x| x.as_slice()),
-                topic4.as_ref().map(|x| x.as_slice()),
-                log.topic_list.len() as i32,
-                hex::encode(&log.data)
+                log.address.map(PgAddress::from).unwrap_or_default() as PgAddress, // 1
+                block_slot,                                                        // 2
+                &tx_hash,                                                          // 3
+                tx_idx,                                                            // 4
+                log.tx_log_idx as i64,                                             // 5
+                log.blk_log_idx as i64,                                            // 6
+                log.level as i64,                                                  // 7
+                log.order as i64,                                                  // 8
+                sol_sig.as_ref(),                                                  // 9
+                sol_idx,                                                           // 10
+                sol_inner_idx,                                                     // 11
+                topic1.as_ref().map(|x| x.as_slice()),                             // 12
+                topic2.as_ref().map(|x| x.as_slice()),                             // 13
+                topic3.as_ref().map(|x| x.as_slice()),                             // 14
+                topic4.as_ref().map(|x| x.as_slice()),                             // 15
+                log.topic_list.len() as i32,                                       // 16
+                hex::encode(&log.data)                                             // 17
             )
             .execute(&mut *txn)
             .await?;
-
-            tx_log_idx += 1;
         }
 
         sqlx::query!(
@@ -340,6 +336,20 @@ impl TransactionRepo {
         .map(|res| Ok(res??))
     }
 
+    pub async fn fetch_last_log_idx(&self, by: [u8; 32]) -> Result<Option<i32>, sqlx::Error> {
+        sqlx::query!(
+            r#"
+            SELECT MAX(tx_log_idx) as "log_idx?"
+            FROM neon_transaction_logs
+            WHERE tx_hash = $1
+            "#,
+            by.as_ref()
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map(|row| row.log_idx)
+    }
+
     fn fetch_logs(
         &self,
         by: TransactionBy,
@@ -350,7 +360,7 @@ impl TransactionRepo {
             NeonTransactionLogRow,
             r#"SELECT
                 address as "address?: PgAddress", tx_hash as "tx_hash!",
-                log_idx as "log_idx!",
+                log_idx as "log_idx!", tx_log_idx as "tx_log_idx!",
                 event_level as "event_level!", event_order as "event_order!",
                 log_topic1 as "log_topic1?", log_topic2 as "log_topic2?",
                 log_topic3 as "log_topic3?", log_topic4 as "log_topic4?",
@@ -390,7 +400,7 @@ impl TransactionRepo {
             NeonRichLogRow,
             r#"SELECT
                 address as "address?: PgAddress", tx_hash as "tx_hash!",
-                log_idx as "log_idx!", L.block_slot as "block_slot!",
+                log_idx as "log_idx!", tx_log_idx as "tx_log_idx!", L.block_slot as "block_slot!",
                 event_level as "event_level!", event_order as "event_order!",
                 log_topic1 as "log_topic1?", log_topic2 as "log_topic2?",
                 log_topic3 as "log_topic3?", log_topic4 as "log_topic4?",
@@ -608,6 +618,7 @@ impl NeonTransactionRow {
 struct NeonTransactionLogRow {
     address: Option<PgAddress>,
     tx_hash: Vec<u8>,
+    tx_log_idx: i32,
     log_idx: i32,
 
     event_level: i32,
@@ -652,7 +663,8 @@ impl TryFrom<NeonTransactionLogRow> for EventLog {
                 address,
                 topic_list: topics,
                 data: hex::decode(value.log_data).context("data")?,
-                log_idx: value.log_idx.try_into().context("log_idx")?,
+                tx_log_idx: value.tx_log_idx.try_into().context("tx_log_idx")?,
+                blk_log_idx: value.log_idx.try_into().context("blk_log_idx")?,
                 level: value.event_level.try_into().context("event_level")?,
                 order: value.event_order.try_into().context("event_order")?,
             })
@@ -670,6 +682,7 @@ struct NeonRichLogRow {
     // NeonTransactionLogRow
     address: Option<PgAddress>,
     tx_hash: Vec<u8>,
+    tx_log_idx: i32,
     log_idx: i32,
 
     event_level: i32,
@@ -692,6 +705,7 @@ impl TryFrom<NeonRichLogRow> for RichLog {
         let log = NeonTransactionLogRow {
             address: value.address,
             tx_hash: value.tx_hash.clone(),
+            tx_log_idx: value.tx_log_idx,
             log_idx: value.log_idx,
             event_level: value.event_level,
             event_order: value.event_order,

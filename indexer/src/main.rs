@@ -77,6 +77,7 @@ async fn main() -> Result<()> {
     };
     let mut traverse = TraverseLedger::new(traverse_config);
     let mut adb = accountsdb::DummyAdb::new(opts.target, holder_repo.clone());
+    let mut tx_log_idx = TxLogIdx::new(tx_repo.clone());
 
     if let Some(addr) = opts.metrics_addr {
         metrics().expose(addr)?;
@@ -145,9 +146,19 @@ async fn main() -> Result<()> {
 
                                 for log in &mut tx.events {
                                     if !log.is_hidden {
-                                        log.log_idx = block_log_idx;
+                                        log.blk_log_idx = block_log_idx;
                                         block_log_idx += 1;
                                     }
+                                }
+                            }
+
+                            // all transactions increment tx_log_idx
+                            for log in &mut tx.events {
+                                if !log.is_hidden {
+                                    log.tx_log_idx = tx_log_idx.next(&tx.neon_signature).await;
+                                    tracing::debug!(tx = %hex::encode(tx.neon_signature),
+                                                    blk_log_idx = %log.blk_log_idx,
+                                                    tx_log_idx = %log.tx_log_idx, "log");
                                 }
                             }
 
@@ -248,4 +259,39 @@ async fn process_holder(
     }
     repo.insert(slot, tx_idx, false, op).await?;
     Ok(())
+}
+
+struct TxLogIdx {
+    repo: db::TransactionRepo,
+    cache: lru::LruCache<[u8; 32], u64>,
+}
+
+impl TxLogIdx {
+    fn new(repo: db::TransactionRepo) -> Self {
+        Self {
+            repo,
+            cache: lru::LruCache::new(512.try_into().expect("512 > 0")),
+        }
+    }
+
+    async fn next(&mut self, hash: &[u8; 32]) -> u64 {
+        if let Some(idx) = self.cache.get_mut(hash) {
+            *idx += 1;
+            return *idx;
+        }
+
+        loop {
+            match self.repo.fetch_last_log_idx(*hash).await {
+                Ok(idx) => {
+                    let idx = idx.map(|idx| idx + 1).unwrap_or(0) as u32 as u64;
+                    self.cache.put(*hash, idx);
+                    return idx;
+                }
+                Err(err) => {
+                    tracing::warn!(?err, "failed to fetch log idx");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
+        }
+    }
 }

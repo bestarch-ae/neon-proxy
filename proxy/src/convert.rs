@@ -108,7 +108,7 @@ pub fn neon_to_eth_receipt(
                     block_number: Some(tx.sol_slot),
                     block_timestamp: None,
                     transaction_hash: Some(B256::from(&tx.neon_signature)),
-                    log_index: Some(event.log_idx),
+                    log_index: Some(event.tx_log_idx),
                     removed: false,
                 })
             })
@@ -260,7 +260,7 @@ pub fn convert_rich_log(log: RichLog) -> Result<Log, Error> {
         block_number: Some(log.slot),
         block_timestamp: None,
         transaction_hash: Some(B256::try_from(log.tx_hash.as_slice()).context("transaction hash")?),
-        log_index: Some(log.event.log_idx),
+        log_index: Some(log.event.blk_log_idx),
         removed: false,
     })
 }
