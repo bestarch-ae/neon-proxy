@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT\n                address as \"address?: PgAddress\", tx_hash as \"tx_hash!\",\n                log_idx as \"log_idx!\",\n                event_level as \"event_level!\", event_order as \"event_order!\",\n                log_topic1 as \"log_topic1?\", log_topic2 as \"log_topic2?\",\n                log_topic3 as \"log_topic3?\", log_topic4 as \"log_topic4?\",\n                log_topic_cnt as \"log_topic_cnt!\", log_data as \"log_data!\"\n               FROM neon_transaction_logs\n               WHERE (tx_hash = $1 OR $2) AND (block_slot = $3 OR $4)\n               ORDER BY (block_slot, tx_idx, tx_log_idx) ASC\n            ",
+  "query": "SELECT\n                address as \"address?: PgAddress\", tx_hash as \"tx_hash!\",\n                log_idx as \"log_idx!\", tx_log_idx as \"tx_log_idx!\",\n                event_level as \"event_level!\", event_order as \"event_order!\",\n                log_topic1 as \"log_topic1?\", log_topic2 as \"log_topic2?\",\n                log_topic3 as \"log_topic3?\", log_topic4 as \"log_topic4?\",\n                log_topic_cnt as \"log_topic_cnt!\", log_data as \"log_data!\"\n               FROM neon_transaction_logs\n               WHERE (tx_hash = $1 OR $2) AND (block_slot = $3 OR $4)\n               ORDER BY (block_slot, tx_idx, tx_log_idx) ASC\n            ",
   "describe": {
     "columns": [
       {
@@ -20,41 +20,46 @@
       },
       {
         "ordinal": 3,
-        "name": "event_level!",
+        "name": "tx_log_idx!",
         "type_info": "Int4"
       },
       {
         "ordinal": 4,
-        "name": "event_order!",
+        "name": "event_level!",
         "type_info": "Int4"
       },
       {
         "ordinal": 5,
+        "name": "event_order!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
         "name": "log_topic1?",
         "type_info": "Bytea"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "log_topic2?",
         "type_info": "Bytea"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "log_topic3?",
         "type_info": "Bytea"
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "log_topic4?",
         "type_info": "Bytea"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "log_topic_cnt!",
         "type_info": "Int4"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "log_data!",
         "type_info": "Text"
       }
@@ -73,6 +78,7 @@
       false,
       false,
       false,
+      false,
       true,
       true,
       true,
@@ -81,5 +87,5 @@
       false
     ]
   },
-  "hash": "142341eee2709894dd7e1c4f80655136fd6423ec9e70ec0fe8e1e2a7789f94af"
+  "hash": "0d1af76fc5390a37019d9623325835dae5860adb3b2570faf1bb817e5e52f8c8"
 }

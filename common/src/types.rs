@@ -203,7 +203,8 @@ pub struct EventLog {
     pub topic_list: Vec<U256>,
     pub data: Vec<u8>, // TODO: HexBytes?
 
-    pub log_idx: u64,
+    pub tx_log_idx: u64,  /* transaction log idx */
+    pub blk_log_idx: u64, /* block log idx */
     pub level: u64,
     pub order: u64,
 }

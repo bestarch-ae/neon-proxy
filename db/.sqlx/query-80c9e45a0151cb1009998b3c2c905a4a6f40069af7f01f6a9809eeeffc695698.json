@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT MAX(tx_log_idx) as \"log_idx?\"\n            FROM neon_transaction_logs\n            WHERE tx_hash = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "log_idx?",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "80c9e45a0151cb1009998b3c2c905a4a6f40069af7f01f6a9809eeeffc695698"
+}
