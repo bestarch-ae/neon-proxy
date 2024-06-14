@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use futures_util::stream::{self, BoxStream};
 use futures_util::{Stream, StreamExt};
-use solana_client::client_error::{ClientError, ClientErrorKind};
+use solana_client::client_error::ClientError;
 use solana_client::rpc_response::RpcConfirmedTransactionStatusWithSignature;
 use thiserror::Error;
 use tokio::time::{sleep, sleep_until, Instant};
@@ -444,6 +444,7 @@ impl InnerTraverseLedger {
                 ?earliest, ?self.last_observed, target = %self.config.target_key,
                 "requesting signatures for address"
             );
+            // Sorted from the most recent to the oldest
             let txs = loop {
                 let res = self
                     .api
@@ -454,22 +455,16 @@ impl InnerTraverseLedger {
                     )
                     .await;
 
-                if let Some(sleep_duration) = self.config.rps_limit_sleep {
-                    if matches!(
-                        res,
-                        Err(ClientError {
-                            kind: ClientErrorKind::Reqwest(ref err),
-                            ..
-                        }) if err.status().map_or(false, |code| code == 429),
-                    ) {
-                        sleep(sleep_duration).await;
+                match (res, self.config.rps_limit_sleep) {
+                    (Ok(txs), _) => break txs,
+                    (Err(err), duration) => {
+                        let duration = duration.unwrap_or(RECHECK_INTERVAL);
+                        tracing::error!(%err, "could not request signatures, retry in {duration:?}");
+                        sleep(duration).await;
                         continue;
                     }
                 }
-                break res;
             };
-            // Sorted from the most recent to the oldest
-            let txs = ward!([error] txs, "could not request signatures");
 
             if txs.is_empty() {
                 if empty_retries < 5 {
