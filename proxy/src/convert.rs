@@ -51,6 +51,12 @@ fn add_checksum_fields(other: &mut OtherFields, tx: &NeonTxInfo) -> Result<(), E
             serde_json::to_value(Address::new(to.0).to_string())?,
         );
     }
+    if let Some(contract) = tx.contract {
+        other.insert(
+            "contractAddress".to_string(),
+            serde_json::to_value(Address::new(contract.0).to_string())?,
+        );
+    }
 
     Ok(())
 }
