@@ -23,6 +23,8 @@ pub mod tag {
     pub const TX_STEP_FROM_ACCOUNT: u8 = 0x35;
     pub const TX_STEP_FROM_ACCOUNT_NO_CHAINID: u8 = 0x36;
     pub const CANCEL: u8 = 0x37;
+    pub const TX_EXEC_FROM_DATA_SOLANA_CALL: u8 = 0x38;
+    pub const TX_EXEC_FROM_ACCOUNT_SOLANA_CALL: u8 = 0x39;
 
     pub const DEPOSIT_DEPRECATED: u8 = 0x27;
     pub const TX_EXEC_FROM_DATA_DEPRECATED: u8 = 0x1f;
@@ -68,7 +70,12 @@ pub fn parse(
             ParseResult::Deposit
         }
         tag::TX_EXEC_FROM_DATA => {
-            tracing::info!("found deprecated tx exec from data");
+            tracing::info!("found tx exec from data");
+            let tx = decode_execute_from_ix(&bytes[1..])?;
+            ParseResult::TransactionExecuted(tx)
+        }
+        tag::TX_EXEC_FROM_DATA_SOLANA_CALL => {
+            tracing::info!("found tx exec from data with solana call");
             let tx = decode_execute_from_ix(&bytes[1..])?;
             ParseResult::TransactionExecuted(tx)
         }
@@ -84,6 +91,11 @@ pub fn parse(
         }
         tag::TX_EXEC_FROM_ACCOUNT => {
             tracing::info!("found tx exec from account");
+            let tx = decode_exec_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
+            ParseResult::TransactionExecuted(tx)
+        }
+        tag::TX_EXEC_FROM_ACCOUNT_SOLANA_CALL => {
+            tracing::info!("found tx exec from account with solana call");
             let tx = decode_exec_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
             ParseResult::TransactionExecuted(tx)
         }
