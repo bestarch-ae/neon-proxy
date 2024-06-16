@@ -152,6 +152,7 @@ async fn main() -> Result<()> {
                                 }
                             }
 
+                            tracing::debug!(?tx, "adding transaction");
                             // all transactions increment tx_log_idx
                             for log in &mut tx.events {
                                 if !log.is_hidden {

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT\n                address as \"address?: PgAddress\", tx_hash as \"tx_hash!\",\n                log_idx as \"log_idx!\", tx_log_idx as \"tx_log_idx!\",\n                event_level as \"event_level!\", event_order as \"event_order!\",\n                log_topic1 as \"log_topic1?\", log_topic2 as \"log_topic2?\",\n                log_topic3 as \"log_topic3?\", log_topic4 as \"log_topic4?\",\n                log_topic_cnt as \"log_topic_cnt!\", log_data as \"log_data!\"\n               FROM neon_transaction_logs\n               WHERE (tx_hash = $1 OR $2) AND (block_slot = $3 OR $4)\n               ORDER BY (block_slot, tx_idx, tx_log_idx) ASC\n            ",
+  "query": "SELECT\n                address as \"address?: PgAddress\", tx_hash as \"tx_hash!\",\n                log_idx as \"log_idx!\", tx_log_idx as \"tx_log_idx!\",\n                event_level as \"event_level!\", event_order as \"event_order!\",\n                log_topic1 as \"log_topic1?\", log_topic2 as \"log_topic2?\",\n                log_topic3 as \"log_topic3?\", log_topic4 as \"log_topic4?\",\n                log_topic_cnt as \"log_topic_cnt!\", log_data as \"log_data!\"\n               FROM neon_transaction_logs\n               WHERE tx_hash = ANY($1)\n               ORDER BY (tx_hash, block_slot, tx_idx, tx_log_idx) ASC\n            ",
   "describe": {
     "columns": [
       {
@@ -66,10 +66,7 @@
     ],
     "parameters": {
       "Left": [
-        "Bytea",
-        "Bool",
-        "Int8",
-        "Bool"
+        "ByteaArray"
       ]
     },
     "nullable": [
@@ -87,5 +84,5 @@
       false
     ]
   },
-  "hash": "0d1af76fc5390a37019d9623325835dae5860adb3b2570faf1bb817e5e52f8c8"
+  "hash": "4130473b7cfbd3699042680e0d73ee839a0ca034b3b70160f94de78d6abd0679"
 }
