@@ -1,28 +1,40 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::read_to_string;
+use std::iter;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use anyhow::{Context, Error};
 use clap::Parser;
-use common::solana_sdk::message::v0::LoadedAddresses;
-use common::types::{EventLog, NeonTxInfo, SolanaTransaction};
+use common::evm_loader::account::{Holder, TAG_HOLDER};
+use serde::Serialize;
 
 use common::solana_sdk::account_info::AccountInfo;
+use common::solana_sdk::message::v0::LoadedAddresses;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_transaction_status::{
     option_serializer::OptionSerializer, EncodedTransactionWithStatusMeta,
 };
-
-use neon_parse::parse;
+use common::types::{EventLog, HolderOperation, NeonTxInfo, SolanaTransaction};
 use neon_parse::AccountsDb;
-use serde::Serialize;
+use neon_parse::{parse, Action};
+use solana_api::solana_api::SolanaApi;
 
 #[derive(Parser, Debug)]
 struct Args {
-    #[arg(short, long)]
+    #[arg(short, long, default_value = "")]
     transaction_path: String,
     previous_transactions: Vec<String>,
+    #[arg(long)]
+    tx_chain: Option<PathBuf>,
+    #[arg(
+        short,
+        long,
+        default_value = "https://api.mainnet-beta.solana.com",
+        value_name = "URL"
+    )]
+    url: String,
     #[arg(
         short,
         long,
@@ -232,35 +244,106 @@ impl From<EncodedTransactionWithStatusMeta> for Wrapped<SolanaTransaction> {
     }
 }
 
-fn main() -> Result<(), Error> {
+#[tokio::main]
+async fn main() -> Result<(), Error> {
     tracing_subscriber::fmt::init();
 
     let args = Args::parse();
     let mut accounts_db = DummyAdb::new(args.neon_pubkey);
 
-    let mut txs = args.previous_transactions.clone();
-    txs.push(args.transaction_path);
+    let txs = if let Some(chain_path) = args.tx_chain {
+        println!("transaction chain");
+        let rpc = SolanaApi::new(args.url, true);
+        let signs: Vec<String> = serde_json::from_str(&read_to_string(&chain_path)?)?;
+        let mut res = Vec::new();
+        for sign in signs {
+            let encoded = rpc.get_transaction(&sign.parse()?).await?.transaction;
+            res.push(encoded);
+        }
+        res
+    } else {
+        let mut res = Vec::new();
+        for tx in args
+            .previous_transactions
+            .into_iter()
+            .chain(iter::once(args.transaction_path))
+        {
+            let encoded: EncodedTransactionWithStatusMeta = serde_json::from_str(
+                &read_to_string(&tx).with_context(|| format!("reading file: {}", &tx))?,
+            )
+            .with_context(|| format!("deserializing json: {}", tx))?;
+            res.push(encoded);
+        }
+        res
+    };
+
+    let mut logs = 0;
+    let mut reverted = 0;
+    let mut hidden = 0;
+    let mut reverted_and_hidden = 0;
 
     for tx in txs {
-        let encoded: EncodedTransactionWithStatusMeta = serde_json::from_str(
-            &read_to_string(&tx).with_context(|| format!("reading file: {}", &tx))?,
-        )
-        .with_context(|| format!("deserializing json: {}", tx))?;
-        let transaction: Wrapped<SolanaTransaction> = encoded.into();
+        let transaction: Wrapped<SolanaTransaction> = tx.into();
         let transaction = transaction.0;
         let signature = transaction.tx.signatures[0];
-        let tx_infos = parse(transaction, &mut accounts_db)
-            .with_context(|| format!("parsing transaction {}", signature))?
-            .filter_map(|action| match action {
-                neon_parse::Action::AddTransaction(tx) => Some(tx),
-                _ => None,
-            });
 
-        for tx_info in tx_infos {
-            let tx_info: DbRow = tx_info.into();
-            println!("{}", serde_json::to_string_pretty(&tx_info).unwrap());
+        println!();
+        println!("===== parsing {signature} =====");
+        println!("tx status: {:?}", transaction.status);
+        for action in parse(transaction, &mut accounts_db)
+            .with_context(|| format!("parsing signature: {signature}"))?
+        {
+            match action {
+                Action::AddTransaction(tx) => {
+                    let tx_info: DbRow = tx.into();
+                    tx_info.logs.iter().for_each(|event| {
+                        logs += 1;
+                        if event.is_hidden {
+                            hidden += 1;
+                        }
+                        if event.is_reverted {
+                            reverted += 1;
+                        }
+                        if event.is_hidden && event.is_reverted {
+                            reverted_and_hidden += 1;
+                        }
+                    });
+
+                    // println!("{}", serde_json::to_string_pretty(&tx_info).unwrap());
+                    println!(
+                        "add trx: {}, status: {}, is_cancelled: {}, is_completed: {}, logs: {}",
+                        tx_info.neon_sig,
+                        tx_info.status,
+                        tx_info.is_canceled,
+                        tx_info.is_completed,
+                        tx_info.logs.len(),
+                    );
+                }
+                Action::WriteHolder(HolderOperation::Create(key)) => {
+                    assert!(!accounts_db.map.contains_key(&key));
+                    accounts_db.init_account(key);
+                    accounts_db.map.get_mut(&key).unwrap().data[0] = TAG_HOLDER;
+                }
+                Action::WriteHolder(HolderOperation::Delete(..)) => (),
+                Action::WriteHolder(HolderOperation::Write {
+                    pubkey,
+                    offset,
+                    data,
+                    ..
+                }) => {
+                    let neon_pubkey = accounts_db.neon_pubkey;
+                    let acc = accounts_db.get_by_key(&pubkey).unwrap();
+                    let mut holder = Holder::from_account(&neon_pubkey, acc).unwrap();
+                    holder.write(offset, &data).unwrap();
+                }
+                Action::CancelTransaction(hash) => {
+                    println!("tx canceled: {}", hex::encode(hash));
+                }
+            }
         }
     }
+
+    println!("logs: {logs}, reverted: {reverted}, hidden: {hidden}, both {reverted_and_hidden}");
 
     Ok(())
 }
