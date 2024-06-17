@@ -123,7 +123,7 @@ async fn main() -> Result<()> {
                 adb.set_slot_idx(slot, tx_idx);
 
                 let parse_timer = metrics().neon_parse_time.start_timer();
-                let actions = match neon_parse::parse(tx, &mut adb) {
+                let actions = match neon_parse::parse(tx, &mut adb, opts.target) {
                     Ok(actions) => actions,
                     Err(err) => {
                         tracing::warn!(?err, "failed to parse solana transaction");

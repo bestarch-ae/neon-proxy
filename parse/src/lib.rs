@@ -28,15 +28,6 @@ impl<T: AccountsDb> AccountsDb for Option<T> {
     }
 }
 
-fn is_neon_pubkey(pk: Pubkey) -> bool {
-    use std::str::FromStr;
-
-    let neon_dev_pubkey = Pubkey::from_str("eeLSJgWzzxrqKv1UxtRVVH8FX3qCQWUs9QuAjJpETGU").unwrap();
-    let neon_main_pubkey = Pubkey::from_str("NeonVMyRX5GbCrsAHnUwx1nYYoJAtskU1bWUo6JGNyG").unwrap();
-
-    pk == neon_dev_pubkey || pk == neon_main_pubkey
-}
-
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Failed to decode solana")]
@@ -71,6 +62,7 @@ fn parse_transactions(
     tx: VersionedTransaction,
     accountsdb: &mut impl AccountsDb,
     loaded: &LoadedAddresses,
+    neon_pubkey: Pubkey,
 ) -> Result<Vec<Action<TransactionMeta>>, Error> {
     use transaction::ParseResult;
 
@@ -81,7 +73,7 @@ fn parse_transactions(
         "accounts"
     );
     let pubkeys = AccountKeys::new(tx.message.static_account_keys(), Some(loaded));
-    let neon_idx = pubkeys.iter().position(|x| is_neon_pubkey(*x));
+    let neon_idx = pubkeys.iter().position(|x| *x == neon_pubkey);
     let Some(neon_idx) = neon_idx else {
         tracing::warn!("not a neon transaction");
         return Ok(Default::default());
@@ -203,6 +195,7 @@ impl<T> Action<T> {
 pub fn parse(
     transaction: SolanaTransaction,
     accountsdb: &mut impl AccountsDb,
+    neon_pubkey: Pubkey,
 ) -> Result<impl Iterator<Item = Action<NeonTxInfo>>, Error> {
     let SolanaTransaction { slot, tx, .. } = transaction;
     let sig_slot_info = SolTxSigSlotInfo {
@@ -213,7 +206,7 @@ pub fn parse(
         ident: sig_slot_info,
     };
     let loaded = &transaction.loaded_addresses;
-    let actions = parse_transactions(tx, accountsdb, loaded)?;
+    let actions = parse_transactions(tx, accountsdb, loaded, neon_pubkey)?;
 
     let log_info = log::parse(transaction.log_messages)?;
     let iter = actions
@@ -463,6 +456,9 @@ mod tests {
         reference_path: Option<impl AsRef<Path>>,
         adb: &mut impl AccountsDb,
     ) {
+        let neon_pubkey = "eeLSJgWzzxrqKv1UxtRVVH8FX3qCQWUs9QuAjJpETGU"
+            .parse()
+            .unwrap();
         let encoded: EncodedTransactionWithStatusMeta =
             serde_json::from_str(&std::fs::read_to_string(transaction_path).unwrap()).unwrap();
         let meta = encoded.meta.unwrap();
@@ -479,7 +475,7 @@ mod tests {
 
         let pubkeys = tx.message.static_account_keys();
         tracing::info!(?pubkeys);
-        let actions = parse_transactions(tx, adb, &loaded).unwrap();
+        let actions = parse_transactions(tx, adb, &loaded, neon_pubkey).unwrap();
         let logs = match meta.log_messages {
             common::solana_transaction_status::option_serializer::OptionSerializer::Some(logs) => {
                 logs
