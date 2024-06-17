@@ -403,17 +403,19 @@ impl TransactionRepo {
                 log_topic3 as "log_topic3?", log_topic4 as "log_topic4?",
                 log_topic_cnt as "log_topic_cnt!", log_data as "log_data!",
                 block_hash as "block_hash!: PgSolanaBlockHash", block_time as "block_time!",
-                tx_idx as "tx_idx!"
-               FROM neon_transaction_logs L
-               LEFT JOIN solana_blocks B ON B.block_slot = L.block_slot
-               WHERE (L.block_slot >= $1) AND (L.block_slot <= $2)
+                T.tx_idx as "tx_idx!"
+               FROM neon_transactions T 
+               LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
+               INNER JOIN neon_transaction_logs L ON tx_hash = neon_sig
+               WHERE T.is_completed
+                   AND (T.block_slot >= $1) AND (T.block_slot <= $2)
                    AND (block_hash = $3 OR $4)
                    AND (address = ANY($5) OR $6)
                    AND (log_topic1 = ANY($7) OR $8)
                    AND (log_topic2 = ANY($9) OR $10)
                    AND (log_topic3 = ANY($11) OR $12)
                    AND (log_topic4 = ANY($13) OR $14)
-               ORDER BY (L.block_slot, tx_idx, tx_log_idx) ASC
+               ORDER BY (T.block_slot, T.tx_idx, tx_log_idx) ASC
             "#,
             from.unwrap_or(0) as i64,                // 1
             to.map_or(i64::MAX, |to| to as i64),     // 2

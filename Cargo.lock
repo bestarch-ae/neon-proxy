@@ -5272,6 +5272,8 @@ dependencies = [
  "parse",
  "serde",
  "serde_json",
+ "solana-api",
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]

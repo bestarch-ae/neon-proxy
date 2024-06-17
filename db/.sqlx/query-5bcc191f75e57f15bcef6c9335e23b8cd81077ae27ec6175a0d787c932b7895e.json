@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT\n                address as \"address?: PgAddress\", tx_hash as \"tx_hash!\",\n                log_idx as \"log_idx!\", tx_log_idx as \"tx_log_idx!\", L.block_slot as \"block_slot!\",\n                event_level as \"event_level!\", event_order as \"event_order!\",\n                log_topic1 as \"log_topic1?\", log_topic2 as \"log_topic2?\",\n                log_topic3 as \"log_topic3?\", log_topic4 as \"log_topic4?\",\n                log_topic_cnt as \"log_topic_cnt!\", log_data as \"log_data!\",\n                block_hash as \"block_hash!: PgSolanaBlockHash\", block_time as \"block_time!\",\n                tx_idx as \"tx_idx!\"\n               FROM neon_transaction_logs L\n               LEFT JOIN solana_blocks B ON B.block_slot = L.block_slot\n               WHERE (L.block_slot >= $1) AND (L.block_slot <= $2)\n                   AND (block_hash = $3 OR $4)\n                   AND (address = ANY($5) OR $6)\n                   AND (log_topic1 = ANY($7) OR $8)\n                   AND (log_topic2 = ANY($9) OR $10)\n                   AND (log_topic3 = ANY($11) OR $12)\n                   AND (log_topic4 = ANY($13) OR $14)\n               ORDER BY (L.block_slot, tx_idx, tx_log_idx) ASC\n            ",
+  "query": "SELECT\n                address as \"address?: PgAddress\", tx_hash as \"tx_hash!\",\n                log_idx as \"log_idx!\", tx_log_idx as \"tx_log_idx!\", L.block_slot as \"block_slot!\",\n                event_level as \"event_level!\", event_order as \"event_order!\",\n                log_topic1 as \"log_topic1?\", log_topic2 as \"log_topic2?\",\n                log_topic3 as \"log_topic3?\", log_topic4 as \"log_topic4?\",\n                log_topic_cnt as \"log_topic_cnt!\", log_data as \"log_data!\",\n                block_hash as \"block_hash!: PgSolanaBlockHash\", block_time as \"block_time!\",\n                T.tx_idx as \"tx_idx!\"\n               FROM neon_transactions T \n               LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot\n               INNER JOIN neon_transaction_logs L ON tx_hash = neon_sig\n               WHERE T.is_completed\n                   AND (T.block_slot >= $1) AND (T.block_slot <= $2)\n                   AND (block_hash = $3 OR $4)\n                   AND (address = ANY($5) OR $6)\n                   AND (log_topic1 = ANY($7) OR $8)\n                   AND (log_topic2 = ANY($9) OR $10)\n                   AND (log_topic3 = ANY($11) OR $12)\n                   AND (log_topic4 = ANY($13) OR $14)\n               ORDER BY (T.block_slot, T.tx_idx, tx_log_idx) ASC\n            ",
   "describe": {
     "columns": [
       {
@@ -121,5 +121,5 @@
       false
     ]
   },
-  "hash": "a9985f907316230e8f0d93ebb656635fdaef8f0e5e45446bbc2f938fc0f7769b"
+  "hash": "5bcc191f75e57f15bcef6c9335e23b8cd81077ae27ec6175a0d787c932b7895e"
 }
