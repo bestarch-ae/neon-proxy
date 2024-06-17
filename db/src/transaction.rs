@@ -352,10 +352,10 @@ impl TransactionRepo {
 
     fn fetch_logs(
         &self,
-        by: TransactionBy,
+        by: Vec<[u8; 32]>,
     ) -> impl Stream<Item = Result<([u8; 32], EventLog), Error>> + '_ {
         tracing::info!(?by, "fetching logs");
-        let (slot, hash) = by.slot_hash();
+        let by_ref = by.iter().map(|x| x.to_vec()).collect::<Vec<_>>();
         sqlx::query_as!(
             NeonTransactionLogRow,
             r#"SELECT
@@ -366,13 +366,10 @@ impl TransactionRepo {
                 log_topic3 as "log_topic3?", log_topic4 as "log_topic4?",
                 log_topic_cnt as "log_topic_cnt!", log_data as "log_data!"
                FROM neon_transaction_logs
-               WHERE (tx_hash = $1 OR $2) AND (block_slot = $3 OR $4)
-               ORDER BY (block_slot, tx_idx, tx_log_idx) ASC
+               WHERE tx_hash = ANY($1)
+               ORDER BY (tx_hash, block_slot, tx_idx, tx_log_idx) ASC
             "#,
-            hash.as_ref().map(|x| x.as_slice()).unwrap_or_default(),
-            hash.is_none(),
-            slot.unwrap_or(0) as i64,
-            slot.is_none(),
+            by_ref.as_slice()
         )
         .map(|row| {
             let hash = row
@@ -444,6 +441,10 @@ impl TransactionRepo {
         if transactions.is_empty() {
             return Ok(transactions);
         }
+        let by = transactions
+            .iter()
+            .map(|tx| tx.inner.neon_signature)
+            .collect::<Vec<_>>();
         let mut tx_iter = transactions.iter_mut();
         let mut current_tx = tx_iter.next().expect("checked not empty");
 
