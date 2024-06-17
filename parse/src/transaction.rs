@@ -70,38 +70,66 @@ pub fn parse(
             ParseResult::Deposit
         }
         tag::TX_EXEC_FROM_DATA => {
-            tracing::info!("found tx exec from data");
+            tracing::debug!("found tx exec from data");
             let tx = decode_execute_from_ix(&bytes[1..])?;
+            tracing::info!(
+                tx = hex::encode(tx.hash),
+                "non-iterative execution from instruction data"
+            );
             ParseResult::TransactionExecuted(tx)
         }
         tag::TX_EXEC_FROM_DATA_SOLANA_CALL => {
-            tracing::info!("found tx exec from data with solana call");
+            tracing::debug!("found tx exec from data with solana call");
             let tx = decode_execute_from_ix(&bytes[1..])?;
+            tracing::info!(
+                tx = hex::encode(tx.hash),
+                "non-iterative execution from instruction data (solana call)"
+            );
             ParseResult::TransactionExecuted(tx)
         }
         tag::TX_STEP_FROM_DATA => {
-            tracing::info!("found tx step from data");
+            tracing::debug!("found tx step from data");
             let tx = decode_step_from_ix(&bytes[1..], accounts, adb, neon_pubkey)?;
+            tracing::info!(
+                tx = hex::encode(tx.hash),
+                "iterative execution from instruction data"
+            );
             ParseResult::TransactionStep(tx)
         }
         tag::TX_STEP_FROM_ACCOUNT => {
-            tracing::info!("found tx step from account");
+            tracing::debug!("found tx step from account");
             let tx = decode_step_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
+            tracing::info!(
+                tx = hex::encode(tx.hash),
+                "iterative execution from holder account"
+            );
             ParseResult::TransactionStep(tx)
         }
         tag::TX_EXEC_FROM_ACCOUNT => {
-            tracing::info!("found tx exec from account");
+            tracing::debug!("found tx exec from account");
             let tx = decode_exec_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
+            tracing::info!(
+                tx = hex::encode(tx.hash),
+                "non-iterative execution from holder account"
+            );
             ParseResult::TransactionExecuted(tx)
         }
         tag::TX_EXEC_FROM_ACCOUNT_SOLANA_CALL => {
-            tracing::info!("found tx exec from account with solana call");
+            tracing::debug!("found tx exec from account with solana call");
             let tx = decode_exec_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
+            tracing::info!(
+                tx = hex::encode(tx.hash),
+                "non-iterative execution from holder account (solana call)"
+            );
             ParseResult::TransactionExecuted(tx)
         }
         tag::TX_STEP_FROM_ACCOUNT_NO_CHAINID => {
-            tracing::info!("found tx step from account no chain_id");
+            tracing::debug!("found tx step from account no chain_id");
             let tx = decode_step_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
+            tracing::info!(
+                tx = hex::encode(tx.hash),
+                "iterative execution from holder account (before EIP155)"
+            );
             ParseResult::TransactionStep(tx)
         }
         tag::HOLDER_CREATE => {
