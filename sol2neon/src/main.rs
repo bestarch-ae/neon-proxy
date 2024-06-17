@@ -290,7 +290,7 @@ async fn main() -> Result<(), Error> {
         println!();
         println!("===== parsing {signature} =====");
         println!("tx status: {:?}", transaction.status);
-        for action in parse(transaction, &mut accounts_db)
+        for action in parse(transaction, &mut accounts_db, args.neon_pubkey)
             .with_context(|| format!("parsing signature: {signature}"))?
         {
             match action {
