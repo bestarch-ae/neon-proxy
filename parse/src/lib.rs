@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn parse_2f() {
-        let mut adb = main_adb();
+        let mut adb = dev_adb();
 
         let transaction_path = "tests/data/2FSmsnCJYenPWsbrK1vFpkhgeFGKXC13gB3wDwqqyUfEnZmWpEJ6iUSjtLrtNn5QZh54bz5brWMonccG7WHA4Wp5.json";
         let reference_path = "tests/data/reference/2FSmsnCJYenPWsbrK1vFpkhgeFGKXC13gB3wDwqqyUfEnZmWpEJ6iUSjtLrtNn5QZh54bz5brWMonccG7WHA4Wp5.json";
@@ -439,7 +439,7 @@ mod tests {
         for entry in std::fs::read_dir(tx_path).unwrap() {
             let entry = entry.unwrap();
             if entry.metadata().unwrap().is_file() {
-                let mut adb = main_adb();
+                let mut adb = dev_adb();
                 let fname = entry.file_name();
                 let mut ref_file_name = PathBuf::new();
                 ref_file_name.push(ref_path);
@@ -454,11 +454,9 @@ mod tests {
     fn parse_tx(
         transaction_path: impl AsRef<Path>,
         reference_path: Option<impl AsRef<Path>>,
-        adb: &mut impl AccountsDb,
+        adb: &mut DummyAdb,
     ) {
-        let neon_pubkey = "eeLSJgWzzxrqKv1UxtRVVH8FX3qCQWUs9QuAjJpETGU"
-            .parse()
-            .unwrap();
+        let neon_pubkey = adb.neon_pubkey;
         let encoded: EncodedTransactionWithStatusMeta =
             serde_json::from_str(&std::fs::read_to_string(transaction_path).unwrap()).unwrap();
         let meta = encoded.meta.unwrap();
@@ -482,7 +480,7 @@ mod tests {
             }
             _ => panic!("no logs"),
         };
-        let logs = log::parse(logs).unwrap();
+        let logs = log::parse(logs, neon_pubkey).unwrap();
 
         let neon_tx_infos = actions
             .into_iter()

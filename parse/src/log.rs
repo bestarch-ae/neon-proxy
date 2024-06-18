@@ -521,6 +521,9 @@ mod tests {
 
     #[test]
     fn parse_logs() {
+        let neon_pubkey = "eeLSJgWzzxrqKv1UxtRVVH8FX3qCQWUs9QuAjJpETGU"
+            .parse()
+            .unwrap();
         let path = "tests/data/";
         for entry in std::fs::read_dir(path).unwrap() {
             let entry = entry.unwrap();
@@ -528,7 +531,7 @@ mod tests {
                 println!("Parsing: {:?}", entry.path());
                 let buf = std::fs::read(entry.path()).unwrap();
                 let tx: DumbTx = serde_json::from_slice(&buf).unwrap();
-                let log_info = super::parse(tx.meta.log_messages).unwrap();
+                let log_info = super::parse(tx.meta.log_messages, neon_pubkey).unwrap();
                 println!("Parsed: {:?} got {:#?}", entry.path(), log_info);
             }
         }
