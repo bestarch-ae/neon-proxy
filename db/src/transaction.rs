@@ -445,6 +445,7 @@ impl TransactionRepo {
         }
         let by = transactions
             .iter()
+            .filter(|tx| !tx.inner.is_cancelled)
             .map(|tx| tx.inner.neon_signature)
             .collect::<Vec<_>>();
         let mut tx_iter = transactions.iter_mut();
