@@ -493,7 +493,8 @@ mod tests {
                 println!("Parsing: {:?}", entry.path());
                 let buf = std::fs::read(entry.path()).unwrap();
                 let tx: DumbTx = serde_json::from_slice(&buf).unwrap();
-                super::parse(tx.meta.log_messages).unwrap();
+                let log_info = super::parse(tx.meta.log_messages).unwrap();
+                println!("Parsed: {:?} got {:#?}", entry.path(), log_info);
             }
         }
     }

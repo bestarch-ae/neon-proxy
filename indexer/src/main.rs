@@ -137,6 +137,7 @@ async fn main() -> Result<()> {
                     match action {
                         Action::AddTransaction(mut tx) => {
                             tx.tx_idx = neon_tx_idx;
+                            tx.sol_signature = signature;
 
                             // only completed transactions increment gas and idx
                             if tx.is_completed {
