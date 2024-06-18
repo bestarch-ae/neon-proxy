@@ -175,8 +175,8 @@ async fn main() -> Result<()> {
                                 );
                             }
                         }
-                        Action::CancelTransaction(hash) => {
-                            if let Err(err) = tx_repo.set_canceled(&hash, slot).await {
+                        Action::CancelTransaction { hash, total_gas } => {
+                            if let Err(err) = tx_repo.set_canceled(&hash, total_gas, slot).await {
                                 tracing::warn!(?err, "failed to cancel neon transaction");
                                 metrics().database_errors.inc();
                             }
