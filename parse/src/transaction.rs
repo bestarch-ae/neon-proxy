@@ -74,6 +74,7 @@ pub enum ParseResult {
     AccountCreateBalance,
     CollectTreasure,
     CreateMainTreasury,
+    #[allow(dead_code)]
     OperatorOperation(BalanceOperation),
 }
 

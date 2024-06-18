@@ -12,5 +12,5 @@ solana-transaction-status = "1.16.18"
 [dependencies.evm-loader]
 git = "https://github.com/neonlabsorg/neon-evm.git"
 rev = "v1.7.0"
-default_features = false
+default-features = false
 features = ["async-trait", "no-entrypoint", "serde_json"] 

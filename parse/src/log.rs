@@ -34,6 +34,7 @@ pub enum Error {
 }
 
 // Copy-paste from evm_log_decoder.py
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct NeonLogInfo {
     pub sig: Option<NeonLogSignature>,
@@ -56,6 +57,7 @@ impl NeonLogInfo {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct NeonLogTxReturn {
     pub gas_used: U256,
