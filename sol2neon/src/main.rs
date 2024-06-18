@@ -336,7 +336,7 @@ async fn main() -> Result<(), Error> {
                     let mut holder = Holder::from_account(&neon_pubkey, acc).unwrap();
                     holder.write(offset, &data).unwrap();
                 }
-                Action::CancelTransaction(hash) => {
+                Action::CancelTransaction { hash, .. } => {
                     println!("tx canceled: {}", hex::encode(hash));
                 }
             }

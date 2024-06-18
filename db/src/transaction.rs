@@ -138,16 +138,24 @@ impl TransactionRepo {
         Self { pool }
     }
 
-    pub async fn set_canceled(&self, hash: &[u8; 32], slot: u64) -> Result<(), sqlx::Error> {
+    pub async fn set_canceled(
+        &self,
+        hash: &[u8; 32],
+        gas_used: U256,
+        slot: u64,
+    ) -> Result<(), sqlx::Error> {
         sqlx::query!(
             r#"
             UPDATE neon_transactions
             SET 
                is_canceled = true,
-               block_slot = $1
-            WHERE neon_sig = $2 AND is_completed = false
+               block_slot = $1,
+               gas_used = $2, 
+               sum_gas_used = $2 
+            WHERE neon_sig = $3 AND is_completed = false
             "#,
             slot as i64,
+            PgU256::from(gas_used) as PgU256,
             hash.as_ref()
         )
         .execute(&self.pool)

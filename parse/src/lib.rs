@@ -10,6 +10,7 @@ use common::solana_sdk::transaction::VersionedTransaction;
 use common::types::{HolderOperation, NeonTxInfo, SolanaTransaction};
 
 use self::log::NeonLogInfo;
+use common::ethnum::U256;
 
 mod log;
 mod transaction;
@@ -111,7 +112,10 @@ fn parse_transactions(
                 }));
             }
             ParseResult::TransactionCancel(hash) => {
-                actions.push(Action::CancelTransaction(hash));
+                actions.push(Action::CancelTransaction {
+                    hash,
+                    total_gas: U256::ZERO,
+                });
             }
             ParseResult::HolderOperation(op) => actions.push(Action::WriteHolder(op)),
             res => {
@@ -178,7 +182,7 @@ fn add_log(meta: TransactionMeta, log_info: &NeonLogInfo, slot: u64) -> NeonTxIn
 pub enum Action<T> {
     AddTransaction(T),
     WriteHolder(HolderOperation),
-    CancelTransaction([u8; 32]),
+    CancelTransaction { hash: [u8; 32], total_gas: U256 },
 }
 
 impl<T> Action<T> {
@@ -186,7 +190,20 @@ impl<T> Action<T> {
         match self {
             Action::AddTransaction(tx) => Action::AddTransaction(f(tx)),
             Action::WriteHolder(op) => Action::WriteHolder(op),
-            Action::CancelTransaction(hash) => Action::CancelTransaction(hash),
+            Action::CancelTransaction { hash, total_gas } => {
+                Action::CancelTransaction { hash, total_gas }
+            }
+        }
+    }
+
+    fn set_canceled_gas(self, gas: U256) -> Action<T> {
+        match self {
+            Action::AddTransaction(tx) => Action::AddTransaction(tx),
+            Action::WriteHolder(op) => Action::WriteHolder(op),
+            Action::CancelTransaction { hash, .. } => Action::CancelTransaction {
+                hash,
+                total_gas: gas,
+            },
         }
     }
 }
@@ -209,10 +226,18 @@ pub fn parse(
     let actions = parse_transactions(tx, accountsdb, loaded, neon_pubkey)?;
 
     let log_info = log::parse(transaction.log_messages, neon_pubkey)?;
-    let iter = actions
-        .into_iter()
-        .map(move |action| action.map_transaction(|tx| add_log(tx, &log_info, slot)));
-    // let tx_infos = merge_logs_transactions(actions, log_info, slot);
+    let iter = actions.into_iter().map(move |action| {
+        action
+            .map_transaction(|tx| add_log(tx, &log_info, slot))
+            .set_canceled_gas(
+                log_info
+                    .ix
+                    .as_ref()
+                    .map(|ix| ix.total_gas_used)
+                    .clone()
+                    .unwrap_or_default(),
+            )
+    });
     Ok(iter)
 }
 
