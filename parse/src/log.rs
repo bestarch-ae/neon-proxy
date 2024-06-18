@@ -3,6 +3,7 @@ use std::str::Utf8Error;
 
 use arrayref::array_ref;
 use base64::prelude::{Engine, BASE64_STANDARD as BASE64};
+use common::solana_sdk::pubkey::Pubkey;
 use thiserror::Error;
 use tracing::{error, warn};
 
@@ -28,6 +29,8 @@ pub enum Error {
     InvalidEvent,
     #[error("Invalid hash")]
     InvalidHash,
+    #[error("Invalid log line")]
+    InvalidLog,
 }
 
 // Copy-paste from evm_log_decoder.py
@@ -44,11 +47,11 @@ pub struct NeonLogInfo {
 impl NeonLogInfo {
     pub fn gas_used(&self) -> U256 {
         if let Some(gas) = self.ret.as_ref().map(|ret| ret.gas_used) {
-            tracing::info!("returning gas_used from ret: {}", gas);
+            tracing::debug!("returning gas_used from ret: {}", gas);
             return gas;
         }
         let gas = self.ix.as_ref().map(|ix| ix.gas_used).unwrap_or_default();
-        tracing::info!("ix gas_used: {}", gas);
+        tracing::debug!("ix gas_used: {}", gas);
         gas
     }
 }
@@ -330,13 +333,21 @@ impl FromStr for Mnemonic {
 }
 
 fn parse_mnemonic(line: &str) -> Result<(Mnemonic, &str), Error> {
+    tracing::debug!(?line, "parsing mnemonic");
+
     let (mnemonic, rest) = line.split_once(' ').unwrap();
     let mnemonic = BASE64.decode(mnemonic.as_bytes())?;
     let mnemonic = std::str::from_utf8(&mnemonic)?.parse()?;
     Ok((mnemonic, rest))
 }
 
-pub fn parse(lines: impl IntoIterator<Item = impl AsRef<str>>) -> Result<NeonLogInfo, Error> {
+pub fn parse(
+    lines: impl IntoIterator<Item = impl AsRef<str>>,
+    neon_pubkey: Pubkey,
+) -> Result<NeonLogInfo, Error> {
+    tracing::debug!("parsing log");
+    let neon_pubkey = neon_pubkey.to_string();
+
     let mut is_truncated = false;
     let mut is_already_finalized = false;
 
@@ -344,6 +355,9 @@ pub fn parse(lines: impl IntoIterator<Item = impl AsRef<str>>) -> Result<NeonLog
     let mut neon_tx_ix = None;
     let mut neon_tx_return = None;
     let mut event_list = Vec::new();
+    let mut inside_neon = false;
+    let mut invoke_depth = 0;
+    let mut neon_depth = 0;
 
     for line in lines {
         let line = line.as_ref();
@@ -358,7 +372,28 @@ pub fn parse(lines: impl IntoIterator<Item = impl AsRef<str>>) -> Result<NeonLog
             }
             _ => {}
         }
-        if line.starts_with("Program data: ") {
+
+        // deal with programs called from inside the neon program
+        {
+            let words: Vec<_> = line.splitn(4, ' ').collect(); // TODO: smallvec
+            if words.len() >= 3 {
+                if words[0] == "Program" && words[2] == "invoke" {
+                    tracing::debug!("invoke {}", words[1]);
+                    invoke_depth += 1;
+                    if words[1] == neon_pubkey {
+                        inside_neon = true;
+                        neon_depth = invoke_depth;
+                    }
+                }
+
+                if words[0] == "Program" && words[2] == "success" {
+                    tracing::debug!("invoked {} return", words[1]);
+                    invoke_depth -= 1;
+                }
+            }
+        }
+
+        if inside_neon && neon_depth == invoke_depth && line.starts_with("Program data: ") {
             let line = line.strip_prefix("Program data: ").unwrap();
             let (mnemonic, rest) = parse_mnemonic(line)?;
             tracing::debug!(?mnemonic, "parsing mnemonic");
@@ -486,6 +521,9 @@ mod tests {
 
     #[test]
     fn parse_logs() {
+        let neon_pubkey = "eeLSJgWzzxrqKv1UxtRVVH8FX3qCQWUs9QuAjJpETGU"
+            .parse()
+            .unwrap();
         let path = "tests/data/";
         for entry in std::fs::read_dir(path).unwrap() {
             let entry = entry.unwrap();
@@ -493,7 +531,7 @@ mod tests {
                 println!("Parsing: {:?}", entry.path());
                 let buf = std::fs::read(entry.path()).unwrap();
                 let tx: DumbTx = serde_json::from_slice(&buf).unwrap();
-                let log_info = super::parse(tx.meta.log_messages).unwrap();
+                let log_info = super::parse(tx.meta.log_messages, neon_pubkey).unwrap();
                 println!("Parsed: {:?} got {:#?}", entry.path(), log_info);
             }
         }
