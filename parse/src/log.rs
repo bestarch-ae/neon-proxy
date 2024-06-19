@@ -8,9 +8,7 @@ use thiserror::Error;
 use tracing::{error, warn};
 
 use common::ethnum::U256;
-use common::types::{EventKind, EventLog as NeonLogTxEvent};
-
-type NeonLogSignature = [u8; 32];
+use common::types::{EventKind, EventLog as NeonLogTxEvent, TxHash};
 
 const LOG_TRUNCATED_MSG: &str = "Log truncated";
 const ALREADY_FINALIZED_MSG: &str = "Program log: Storage Account is finalized";
@@ -37,7 +35,7 @@ pub enum Error {
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct NeonLogInfo {
-    pub sig: Option<NeonLogSignature>,
+    pub sig: Option<TxHash>,
     pub ix: Option<NeonLogTxIx>,
     pub ret: Option<NeonLogTxReturn>,
     pub event_list: Vec<NeonLogTxEvent>,
@@ -90,7 +88,7 @@ enum Mnemonic {
 }
 
 impl Mnemonic {
-    fn decode_hash(s: &str) -> Result<[u8; 32], Error> {
+    fn decode_hash(s: &str) -> Result<TxHash, Error> {
         // TODO: figure it out, seems weird.
         // With 32 byte buf it reports OutputSliceTooSmall
         let mut buf = [0u8; 33];
@@ -100,7 +98,7 @@ impl Mnemonic {
         }
         let mut hash = [0u8; 32];
         hash.copy_from_slice(&buf[0..32]);
-        Ok(hash)
+        Ok(hash.into())
     }
 
     /// Unpacks base64-encoded event data:

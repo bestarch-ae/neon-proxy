@@ -253,7 +253,7 @@ impl EthApiServer for EthApiImpl {
     /// Returns the information about a transaction requested by transaction hash.
     async fn transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction>> {
         let tx = self
-            .get_transaction(db::TransactionBy::Hash(hash.0))
+            .get_transaction(db::TransactionBy::Hash(hash.0.into()))
             .await?
             .map(|tx| neon_to_eth(tx.inner, tx.blockhash).map_err(Error::from))
             .transpose()?;
@@ -300,7 +300,7 @@ impl EthApiServer for EthApiImpl {
     /// Returns the receipt of a transaction by transaction hash.
     async fn transaction_receipt(&self, hash: B256) -> RpcResult<Option<AnyTransactionReceipt>> {
         let receipt = self
-            .get_transaction(db::TransactionBy::Hash(hash.0))
+            .get_transaction(db::TransactionBy::Hash(hash.0.into()))
             .await?
             .map(|tx| neon_to_eth_receipt(tx.inner, tx.blockhash).map_err(Error::from))
             .transpose()?;

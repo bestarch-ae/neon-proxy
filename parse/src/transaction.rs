@@ -3,13 +3,11 @@ use common::evm_loader::account::Holder;
 use common::evm_loader::error::Error as NeonError;
 use common::evm_loader::types::Transaction;
 use common::solana_sdk::pubkey::Pubkey;
-use common::types::HolderOperation;
+use common::types::{HolderOperation, TxHash};
 
 use super::AccountsDb;
 use arrayref::array_ref;
 use thiserror::Error;
-
-pub type TxHash = [u8; 32];
 
 pub mod tag {
     pub const COLLECT_TREASURE: u8 = 0x1e;
@@ -338,8 +336,8 @@ fn decode_cancel(
     _accounts: &[Pubkey],
     _adb: &mut impl AccountsDb,
 ) -> Result<TxHash, Error> {
-    let transaction_hash = array_ref!(instruction, 0, 32);
-    Ok(*transaction_hash)
+    let transaction_hash = *array_ref!(instruction, 0, 32);
+    Ok(transaction_hash.into())
 }
 
 fn decode_step_from_account(

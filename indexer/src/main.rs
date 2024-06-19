@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use common::ethnum::U256;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
-use common::types::HolderOperation;
+use common::types::{HolderOperation, TxHash};
 use metrics::metrics;
 use neon_parse::Action;
 
@@ -158,7 +158,7 @@ async fn main() -> Result<()> {
                             for log in &mut tx.events {
                                 if !log.is_hidden {
                                     log.tx_log_idx = tx_log_idx.next(&tx.neon_signature).await;
-                                    tracing::debug!(tx = %hex::encode(tx.neon_signature),
+                                    tracing::debug!(tx = %tx.neon_signature,
                                                     blk_log_idx = %log.blk_log_idx,
                                                     tx_log_idx = %log.tx_log_idx, "log");
                                 }
@@ -170,7 +170,7 @@ async fn main() -> Result<()> {
                             } else {
                                 metrics().neon_transactions_saved.inc();
                                 tracing::info!(
-                                    signature = hex::encode(tx.neon_signature),
+                                    signature = %tx.neon_signature,
                                     "saved transaction"
                                 );
                             }
@@ -265,7 +265,7 @@ async fn process_holder(
 
 struct TxLogIdx {
     repo: db::TransactionRepo,
-    cache: lru::LruCache<[u8; 32], u64>,
+    cache: lru::LruCache<TxHash, u64>,
 }
 
 impl TxLogIdx {
@@ -276,7 +276,7 @@ impl TxLogIdx {
         }
     }
 
-    async fn next(&mut self, hash: &[u8; 32]) -> u64 {
+    async fn next(&mut self, hash: &TxHash) -> u64 {
         if let Some(idx) = self.cache.get_mut(hash) {
             *idx += 1;
             return *idx;

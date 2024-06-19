@@ -3192,6 +3192,7 @@ version = "0.0.0"
 dependencies = [
  "ethnum",
  "evm-loader",
+ "hex",
  "solana-sdk",
  "solana-transaction-status",
 ]

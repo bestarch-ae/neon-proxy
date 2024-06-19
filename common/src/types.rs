@@ -1,3 +1,5 @@
+use std::fmt::{Display, Formatter};
+
 use ethnum::U256;
 use evm_loader::types::{Address, Transaction};
 
@@ -9,6 +11,39 @@ use solana_sdk::signature::Signature;
 use solana_sdk::slot_history::Slot;
 use solana_sdk::transaction::{Result as TransactionResult, VersionedTransaction};
 use solana_transaction_status::InnerInstructions;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash)]
+pub struct TxHash([u8; 32]);
+
+impl TxHash {
+    pub fn as_array(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for TxHash {
+    fn from(value: [u8; 32]) -> Self {
+        Self(value)
+    }
+}
+
+impl TryFrom<Vec<u8>> for TxHash {
+    type Error = Vec<u8>;
+
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+        <[u8; 32]>::try_from(value).map(Self)
+    }
+}
+
+impl Display for TxHash {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "0x{}", hex::encode(self.0))
+    }
+}
 
 /// Solana block info.
 #[derive(Debug, Clone)]
@@ -60,8 +95,7 @@ pub struct NeonIxReceipt {
 pub struct NeonTxInfo {
     // TODO: Remove this line https://github.com/neonlabsorg/neon-evm/blob/4236c916031f9e6385b831769a8539d552299df0/evm_loader/program/src/lib.rs#L30
     pub tx_type: u8,
-    // TODO: Should probably be Arc-ed or Bytes
-    pub neon_signature: [u8; 32],
+    pub neon_signature: TxHash,
     pub from: Address,
     // TODO: This migth be a method
     pub contract: Option<Address>,
