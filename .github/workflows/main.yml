@@ -15,7 +15,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo check 
+      - run: cargo check
+
+  lint:
+    name: Lint
+    runs-on: neon-proxy
+    env:
+      NEON_REVISION: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - run: cargo clippy --all-targets -- -D warnings -D rust_2018_idioms
 
   test:
     name: Test Suite
