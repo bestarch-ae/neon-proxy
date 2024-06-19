@@ -7,7 +7,7 @@ use common::solana_sdk::message::AccountKeys;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
 use common::solana_sdk::transaction::VersionedTransaction;
-use common::types::{HolderOperation, NeonTxInfo, SolanaTransaction};
+use common::types::{HolderOperation, NeonTxInfo, SolanaTransaction, TxHash};
 
 use self::log::NeonLogInfo;
 use common::ethnum::U256;
@@ -161,7 +161,7 @@ fn add_log(meta: TransactionMeta, log_info: &NeonLogInfo, slot: u64) -> NeonTxIn
 
     NeonTxInfo {
         tx_type: 0, // TODO
-        neon_signature: neon_sig,
+        neon_signature: neon_sig.into(),
         from: tx.recover_caller_address().unwrap_or_default(),
         contract,
         transaction: tx,
@@ -182,7 +182,7 @@ fn add_log(meta: TransactionMeta, log_info: &NeonLogInfo, slot: u64) -> NeonTxIn
 pub enum Action<T> {
     AddTransaction(T),
     WriteHolder(HolderOperation),
-    CancelTransaction { hash: [u8; 32], total_gas: U256 },
+    CancelTransaction { hash: TxHash, total_gas: U256 },
 }
 
 impl<T> Action<T> {
@@ -528,8 +528,8 @@ mod tests {
                 .collect();
         assert_eq!(neon_tx_infos.len(), references.len());
         for (info, refr) in neon_tx_infos.iter().zip(references) {
-            let neon_sig = format!("0x{}", hex::encode(info.neon_signature));
-            assert_eq!(refr.neon_sig, neon_sig);
+            let neon_sig = info.neon_signature;
+            assert_eq!(refr.neon_sig, info.neon_signature.to_string());
             assert_eq!(refr.tx_type, info.tx_type);
             // fails as we don't set from address
             //assert_eq!(refr.from_addr, format!("0x{}", info.from));

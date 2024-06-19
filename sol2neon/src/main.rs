@@ -174,7 +174,7 @@ struct DbRow {
 impl From<NeonTxInfo> for DbRow {
     fn from(val: NeonTxInfo) -> Self {
         DbRow {
-            neon_sig: format!("0x{}", hex::encode(val.neon_signature)),
+            neon_sig: val.neon_signature.to_string(),
             tx_type: val.tx_type,
             from_addr: val.from.to_string(),
             sol_sig: String::new(),
@@ -337,7 +337,7 @@ async fn main() -> Result<(), Error> {
                     holder.write(offset, &data).unwrap();
                 }
                 Action::CancelTransaction { hash, .. } => {
-                    println!("tx canceled: {}", hex::encode(hash));
+                    println!("tx canceled: {}", hash);
                 }
             }
         }

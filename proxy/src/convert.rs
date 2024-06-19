@@ -66,7 +66,7 @@ pub fn neon_to_eth(tx: NeonTxInfo, blockhash: Option<Hash>) -> Result<Transactio
     add_checksum_fields(&mut other, &tx)?;
 
     Ok(Transaction {
-        hash: B256::from(&tx.neon_signature),
+        hash: B256::from(tx.neon_signature.as_array()),
         nonce: tx.transaction.nonce(),
         block_hash: blockhash.map(sol_blockhash_into_hex),
         block_number: Some(tx.sol_slot), /* TODO: not sure if correct */
@@ -107,7 +107,7 @@ pub fn neon_to_eth_receipt(
                     block_hash: blockhash.map(sol_blockhash_into_hex),
                     block_number: Some(tx.sol_slot),
                     block_timestamp: None,
-                    transaction_hash: Some(B256::from(&tx.neon_signature)),
+                    transaction_hash: Some(B256::from(tx.neon_signature.as_array())),
                     log_index: Some(event.tx_log_idx),
                     removed: false,
                 })
@@ -129,7 +129,7 @@ pub fn neon_to_eth_receipt(
     add_checksum_fields(&mut other, &tx)?;
     let receipt = TransactionReceipt {
         inner: envelope,
-        transaction_hash: B256::from(&tx.neon_signature),
+        transaction_hash: B256::from(tx.neon_signature.as_array()),
         transaction_index: Some(tx.tx_idx),
         block_hash: blockhash.map(sol_blockhash_into_hex),
         block_number: Some(tx.sol_slot),
@@ -235,7 +235,7 @@ pub fn build_block(block: SolanaBlock, txs: Vec<NeonTxInfo>, full: bool) -> Resu
     } else {
         let txs = txs
             .into_iter()
-            .map(|tx| B256::from(&tx.neon_signature))
+            .map(|tx| B256::from(tx.neon_signature.as_array()))
             .collect();
         BlockTransactions::Hashes(txs)
     };

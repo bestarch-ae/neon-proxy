@@ -5,7 +5,7 @@ use sqlx::FromRow;
 
 use common::ethnum::U256;
 use common::evm_loader::types::{AccessListTx, Address, LegacyTx, Transaction, TransactionPayload};
-use common::types::{EventKind, EventLog, NeonTxInfo};
+use common::types::{EventKind, EventLog, NeonTxInfo, TxHash};
 
 use crate::PgSolanaBlockHash;
 
@@ -109,12 +109,12 @@ fn from_to_256() {
 
 #[derive(Debug, Clone, Copy)]
 pub enum TransactionBy {
-    Hash([u8; 32]),
+    Hash(TxHash),
     Slot(u64),
 }
 
 impl TransactionBy {
-    pub fn slot_hash(self) -> (Option<u64>, Option<[u8; 32]>) {
+    pub fn slot_hash(self) -> (Option<u64>, Option<TxHash>) {
         match self {
             TransactionBy::Hash(hash) => (None, Some(hash)),
             TransactionBy::Slot(slot) => (Some(slot), None),
@@ -140,7 +140,7 @@ impl TransactionRepo {
 
     pub async fn set_canceled(
         &self,
-        hash: &[u8; 32],
+        hash: &TxHash,
         gas_used: U256,
         slot: u64,
     ) -> Result<(), sqlx::Error> {
@@ -156,7 +156,7 @@ impl TransactionRepo {
             "#,
             slot as i64,
             PgU256::from(gas_used) as PgU256,
-            hash.as_ref()
+            hash.as_slice()
         )
         .execute(&self.pool)
         .await?;
@@ -215,7 +215,7 @@ impl TransactionRepo {
             "#,
                 log.address.map(PgAddress::from).unwrap_or_default() as PgAddress, // 1
                 block_slot,                                                        // 2
-                &tx_hash,                                                          // 3
+                tx_hash.as_slice(),                                                // 3
                 tx_idx,                                                            // 4
                 log.tx_log_idx as i64,                                             // 5
                 log.blk_log_idx as i64,                                            // 6
@@ -279,7 +279,7 @@ impl TransactionRepo {
                gas_used = $13,
                sum_gas_used = $14
             "#,
-            &tx_hash,                                                          // 1
+            tx_hash.as_slice(),                                                // 1
             tx.tx_type as i32,                                                 // 2
             PgAddress::from(tx.from) as PgAddress,                             // 3
             sol_sig.as_ref(),                                                  // 4
@@ -344,14 +344,14 @@ impl TransactionRepo {
         .map(|res| Ok(res??))
     }
 
-    pub async fn fetch_last_log_idx(&self, by: [u8; 32]) -> Result<Option<i32>, sqlx::Error> {
+    pub async fn fetch_last_log_idx(&self, by: TxHash) -> Result<Option<i32>, sqlx::Error> {
         sqlx::query!(
             r#"
             SELECT MAX(tx_log_idx) as "log_idx?"
             FROM neon_transaction_logs
             WHERE tx_hash = $1
             "#,
-            by.as_ref()
+            by.as_slice()
         )
         .fetch_one(&self.pool)
         .await
@@ -360,10 +360,10 @@ impl TransactionRepo {
 
     fn fetch_logs(
         &self,
-        by: Vec<[u8; 32]>,
-    ) -> impl Stream<Item = Result<([u8; 32], EventLog), Error>> + '_ {
+        by: Vec<TxHash>,
+    ) -> impl Stream<Item = Result<(TxHash, EventLog), Error>> + '_ {
         tracing::info!(?by, "fetching logs");
-        let by_ref = by.iter().map(|x| x.to_vec()).collect::<Vec<_>>();
+        let by_ref = by.iter().map(|x| x.as_array().to_vec()).collect::<Vec<_>>();
         sqlx::query_as!(
             NeonTransactionLogRow,
             r#"SELECT
