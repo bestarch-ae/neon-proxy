@@ -234,7 +234,6 @@ pub fn parse(
                     .ix
                     .as_ref()
                     .map(|ix| ix.total_gas_used)
-                    .clone()
                     .unwrap_or_default(),
             )
     });
