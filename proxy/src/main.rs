@@ -6,7 +6,7 @@ use thiserror::Error;
 mod convert;
 mod rpc;
 
-use rpc::EthApiImpl;
+use rpc::{EthApiImpl, NeonEthApiServer, NeonFilterApiServer};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -53,8 +53,20 @@ async fn main() {
     module
         .merge(<EthApiImpl as EthApiServer>::into_rpc(eth.clone()))
         .expect("no conflicts");
+
+    module.remove_method("eth_getTransactionReceipt");
+
+    module
+        .merge(<EthApiImpl as NeonEthApiServer>::into_rpc(eth.clone()))
+        .expect("no conflicts");
+
     module
         .merge(<EthApiImpl as EthFilterApiServer>::into_rpc(eth.clone()))
+        .expect("no conflicts");
+
+    module.remove_method("eth_getLogs");
+    module
+        .merge(<EthApiImpl as NeonFilterApiServer>::into_rpc(eth.clone()))
         .expect("no conflicts");
 
     let server = jsonrpsee::server::Server::builder()

@@ -15,6 +15,69 @@ use common::evm_loader::types::{Address as NeonAddress, TransactionPayload};
 use common::solana_sdk::hash::Hash;
 use common::types::{EventLog, NeonTxInfo, SolanaBlock};
 
+pub type NeonTransactionReceipt =
+    WithOtherFields<TransactionReceipt<AnyReceiptEnvelope<Log<NeonLogData>>>>;
+pub type NeonLogData = WithOtherFields<LogData>;
+pub type NeonLog = Log<NeonLogData>;
+
+pub fn to_neon_receipt(rec: AnyTransactionReceipt) -> NeonTransactionReceipt {
+    let WithOtherFields { inner, other } = rec;
+    WithOtherFields {
+        other,
+        inner: inner.map_inner(to_neon_envelope),
+    }
+}
+
+fn to_neon_envelope(env: AnyReceiptEnvelope<Log>) -> AnyReceiptEnvelope<Log<NeonLogData>> {
+    let inner: Vec<Log<_>> = env
+        .inner
+        .receipt
+        .logs
+        .into_iter()
+        .map(to_neon_log)
+        .collect();
+    let receipt = Receipt {
+        status: env.inner.receipt.status,
+        cumulative_gas_used: env.inner.receipt.cumulative_gas_used,
+        logs: inner,
+    };
+    AnyReceiptEnvelope {
+        inner: ReceiptWithBloom {
+            receipt,
+            logs_bloom: env.inner.logs_bloom,
+        },
+        r#type: env.r#type,
+    }
+}
+
+pub fn to_neon_log(log: Log) -> Log<NeonLogData> {
+    Log {
+        inner: to_neon_log_inner(log.inner),
+        transaction_index: log.transaction_index,
+        block_hash: log.block_hash,
+        block_number: log.block_number,
+        block_timestamp: log.block_timestamp,
+        transaction_hash: log.transaction_hash,
+        log_index: log.log_index,
+        removed: log.removed,
+    }
+}
+
+fn to_neon_log_inner(log: PrimitiveLog) -> PrimitiveLog<WithOtherFields<LogData>> {
+    let mut neon_fields = OtherFields::default();
+    neon_fields.insert(
+        "address".to_owned(),
+        serde_json::to_value(log.address.to_string()).unwrap(),
+    );
+    PrimitiveLog {
+        address: log.address,
+        data: WithOtherFields {
+            inner: log.data,
+            other: neon_fields,
+        },
+    }
+}
+
 fn neon_extra_fields(tx: &NeonTxInfo) -> Result<OtherFields, Error> {
     let mut neon_fields = std::collections::BTreeMap::new();
 
@@ -127,6 +190,7 @@ pub fn neon_to_eth_receipt(
 
     let mut other = OtherFields::default();
     add_checksum_fields(&mut other, &tx)?;
+
     let receipt = TransactionReceipt {
         inner: envelope,
         transaction_hash: B256::from(tx.neon_signature.as_array()),
