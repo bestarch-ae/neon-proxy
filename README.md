@@ -33,7 +33,7 @@ Milestone 1 Achievements:
 
 -   Note: The indexer does not index Address Lookup Table (ALT) transactions as per the requirements. Instead, accounts loaded through ALT are obtained from `loaded_addresses` field from Solana RPC.
 
-3.  Development of Ethereum-like RPC Endpoint:
+2.  Development of Ethereum-like RPC Endpoint:
 
 -   Implemented with support for a specific set of methods and integrations:
 
@@ -66,3 +66,33 @@ Milestone 1 Achievements:
 ![](https://lh7-us.googleusercontent.com/docsz/AD_4nXf8B-31zslp0Htws7sOxFISe9wxfdzL7x2uKQ-QBcbHf-oRB2Sz99nDUo5UI1GToMjv6P3ruifkAsdJ36qAW9qdGnXRIzkr5y_bWdurWxTLnh2U29HJMNINCqsAxnIvravie30CDsFMHPUQshDG8hICZ0c?key=viXkXl20VcRQCRR3NYXrag)\
 Data Flow:\
 The data flow from the Client to RPC to Indexer DB to Indexer has been established, with the Indexer constantly communicating with Solana to fetch transactions related to Neon EVM and store them in the Indexer DB.
+
+### Build
+To build local a docker image of the neon-proxy with the name `your-organization/neon-proxy:latest`, set-up environment variables and execute
+```
+export DOCKERHUB_ORG_NAME=your-organization
+export NEON_PROXY_REPO_NAME=neon-proxy
+export NEON_PROXY_TAG=latest
+./build-docker.sh
+```
+
+### Run
+To run the built image on Solana Devnet, set-up environment variables and execute
+```
+export DOCKERHUB_ORG_NAME=your-organization
+export NEON_PROXY_REPO_NAME=neon-proxy
+export NEON_PROXY_TAG=latest
+export NEON_EVM_ADDRESS=eeLSJgWzzxrqKv1UxtRVVH8FX3qCQWUs9QuAjJpETGU
+export SOLANA_URL=http://sol-devnet-01.tt-int.net:8899
+docker-compose up -d
+```
+
+To run the built image on local Solana validator with Neon EVM, set-up environment variables and execute
+```
+export DOCKERHUB_ORG_NAME=your-organization
+export NEON_PROXY_REPO_NAME=neon-proxy
+export NEON_PROXY_TAG=latest
+export NEON_EVM_ADDRESS=53DfF883gyixYNXnM7s5xhdeyV8mVk9T4i2hGV9vG9io
+export NEON_EVM_COMMIT=67d1bd0ef32e5ab6f96393419ae25053080d2a9e
+docker-compose -f docker-compose-evm.yml up -d
+```
