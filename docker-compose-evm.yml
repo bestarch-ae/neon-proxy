@@ -6,6 +6,27 @@ x-logging: &logging
       max-file: "3"
 
 services:
+  solana:
+    container_name: solana
+    image: neonlabsorg/evm_loader:${NEON_EVM_COMMIT}
+    environment:
+      SOLANA_URL: http://127.0.0.1:8899
+    hostname: solana
+    networks:
+      - net
+    expose:
+      - 8899
+    ports:
+      - 8899:8899
+    healthcheck:
+      # Must be available from outside (calling without -u causes premature result)
+      test: [ CMD-SHELL, "./wait-for-neon.sh" ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+    entrypoint: /opt/solana-run-neon.sh
+
   postgres:
     container_name: postgres
     image: postgres:15.3
@@ -15,8 +36,6 @@ services:
       POSTGRES_USER: neon-proxy
       POSTGRES_PASSWORD: neon-proxy-pass
     hostname: postgres
-    volumes:
-      - /opt/docker/psql_data:/var/lib/postgresql/data
     healthcheck:
       test: [ CMD-SHELL, "pg_isready -h postgres -p 5432" ]
       interval: 3s
@@ -77,7 +96,7 @@ services:
     entrypoint: ./indexer
     command: >-
       ${NEON_EVM_ADDRESS}
-      -u ${SOLANA_URL}
+      -u http://solana:8899
       --pg-url postgres://neon-proxy:neon-proxy-pass@postgres:5432/neon-db
       --metrics-addr 0.0.0.0:8317
     environment:
@@ -91,6 +110,8 @@ services:
     depends_on:
       db_migration:
         condition: service_completed_successfully
+      solana:
+        condition: service_healthy
     <<: *logging
 
 networks:
