@@ -368,7 +368,19 @@ impl EthApiServer for EthApiImpl {
         _address: Address,
         _block_number: Option<BlockId>,
     ) -> RpcResult<U256> {
-        unimplemented()
+        use common::evm_loader::types::Address;
+
+        let balance_address = BalanceAddress {
+            address: Address::from(<[u8; 20]>::from(_address.0)),
+            chain_id: CHAIN_ID,
+        };
+        let balance = self
+            .solana
+            .get_transaction_count(balance_address)
+            .await
+            .unwrap(); // TODO: handle error
+
+        Ok(U256::from(balance))
     }
 
     /// Returns code at a given address at given block number.

@@ -17,6 +17,11 @@ enum Task {
         addr: BalanceAddress,
         response: oneshot::Sender<Result<U256, NeonError>>,
     },
+
+    GetTransactionCount {
+        addr: BalanceAddress,
+        response: oneshot::Sender<Result<u64, NeonError>>,
+    },
 }
 
 #[derive(Clone)]
@@ -71,6 +76,15 @@ impl Solana {
         rx.await.unwrap()
     }
 
+    pub async fn get_transaction_count(&self, addr: BalanceAddress) -> Result<u64, NeonError> {
+        let (tx, rx) = oneshot::channel();
+        self.channel
+            .send(Task::GetTransactionCount { addr, response: tx })
+            .await
+            .unwrap();
+        rx.await.unwrap()
+    }
+
     async fn execute(task: Task, ctx: Context) {
         let rpc = RpcEnum::CloneRpcClient(ctx.client.clone());
         match task {
@@ -84,6 +98,23 @@ impl Solana {
                             balance = resp.balance;
                         }
                         Ok(balance)
+                    }
+                    Err(err) => Err(err),
+                };
+                response.send(resp).unwrap();
+            }
+
+            Task::GetTransactionCount { addr, response } => {
+                let resp =
+                    commands::get_balance::execute(&*ctx.client, &ctx.neon_pubkey, &[addr]).await;
+                tracing::info!(?resp, "get_transaction_count");
+                let resp = match resp {
+                    Ok(resp) => {
+                        let mut count = 0;
+                        for resp in resp {
+                            count = resp.trx_count;
+                        }
+                        Ok(count)
                     }
                     Err(err) => Err(err),
                 };
