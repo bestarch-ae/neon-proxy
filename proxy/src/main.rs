@@ -59,6 +59,7 @@ struct Args {
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
+    let _ = tracing_log::LogTracer::init();
 
     let opts = Args::parse();
 

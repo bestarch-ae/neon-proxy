@@ -1,4 +1,4 @@
-use common::neon_lib::types::BalanceAddress;
+use common::neon_lib::types::{BalanceAddress, TxParams};
 use futures_util::StreamExt;
 use futures_util::TryStreamExt;
 use jsonrpsee::core::async_trait;
@@ -6,6 +6,7 @@ use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::types::ErrorCode;
 use jsonrpsee::types::ErrorObjectOwned;
+use reth_primitives::TxKind;
 use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, B256, B64, U256, U64};
 use rpc_api::servers::EthApiServer;
 use rpc_api::EthFilterApiServer;
@@ -198,7 +199,7 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns the chain ID of the current network.
     async fn chain_id(&self) -> RpcResult<Option<U64>> {
-        unimplemented()
+        Ok(Some(U64::from(CHAIN_ID)))
     }
 
     /// Returns information about a block by hash.
@@ -405,12 +406,35 @@ impl EthApiServer for EthApiImpl {
     /// Executes a new message call immediately without creating a transaction on the block chain.
     async fn call(
         &self,
-        _request: TransactionRequest,
+        request: TransactionRequest,
         _block_number: Option<BlockId>,
         _state_overrides: Option<StateOverride>,
         _block_overrides: Option<Box<BlockOverrides>>,
     ) -> RpcResult<Bytes> {
-        unimplemented()
+        use crate::convert::FromReth;
+        tracing::info!("call {:?}", request);
+
+        let tx = TxParams {
+            nonce: request.nonce,
+            from: request.from.map(FromReth::from_reth).unwrap_or_default(),
+            to: match request.to {
+                Some(TxKind::Call(addr)) => Some(FromReth::from_reth(addr)),
+                Some(TxKind::Create) => None,
+                None => None,
+            },
+            data: request.input.data.map(|data| data.to_vec()),
+            value: request.value.map(FromReth::from_reth),
+            gas_limit: request.gas.map(U256::from).map(FromReth::from_reth),
+            gas_price: request.gas_price.map(U256::from).map(FromReth::from_reth),
+            access_list: request
+                .access_list
+                .map(|list| list.0.into_iter().map(FromReth::from_reth).collect()),
+            actual_gas_used: None,
+            chain_id: Some(CHAIN_ID),
+        };
+        // let cfg = self.solana.get_config().await;
+        let data = self.solana.call(tx).await.unwrap(); // TODO: handle error
+        Ok(Bytes::from(data))
     }
 
     /// Simulate arbitrary number of transactions at an arbitrary blockchain index, with the

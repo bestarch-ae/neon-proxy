@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use common::ethnum::U256;
 use common::neon_lib::rpc::{CloneRpcClient, RpcEnum};
-use common::neon_lib::types::BalanceAddress;
+use common::neon_lib::tracing::tracers::TracerTypeEnum;
+use common::neon_lib::types::{BalanceAddress, EmulateRequest, TxParams};
 use common::neon_lib::{commands, NeonError};
 use common::solana_sdk::pubkey::Pubkey;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
@@ -12,15 +13,19 @@ use tokio::sync::oneshot;
 use tokio::task::LocalSet;
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 enum Task {
     GetBalance {
         addr: BalanceAddress,
         response: oneshot::Sender<Result<U256, NeonError>>,
     },
-
     GetTransactionCount {
         addr: BalanceAddress,
         response: oneshot::Sender<Result<u64, NeonError>>,
+    },
+    EmulateCall {
+        tx: TxParams,
+        response: oneshot::Sender<Result<Vec<u8>, NeonError>>,
     },
 }
 
@@ -46,10 +51,13 @@ impl Solana {
 
             local.spawn_local(async move {
                 let client = RpcClient::new(url);
+                let config_key = "BMp6gEnveANdvSvspESJUrNczuHz1GF5UQKjVLCkAZih"
+                    .parse()
+                    .unwrap();
                 let client = CloneRpcClient {
                     rpc: Arc::new(client),
                     max_retries: 10,
-                    key_for_config: neon_pubkey, // TODO: wrong key,
+                    key_for_config: config_key,
                 };
                 let ctx = Context {
                     client,
@@ -85,9 +93,46 @@ impl Solana {
         rx.await.unwrap()
     }
 
+    pub async fn call(&self, params: TxParams) -> Result<Vec<u8>, NeonError> {
+        let (tx, rx) = oneshot::channel();
+        self.channel
+            .send(Task::EmulateCall {
+                tx: params,
+                response: tx,
+            })
+            .await
+            .unwrap();
+        rx.await.unwrap()
+    }
+
     async fn execute(task: Task, ctx: Context) {
         let rpc = RpcEnum::CloneRpcClient(ctx.client.clone());
         match task {
+            Task::EmulateCall { tx, response } => {
+                tracing::info!(?tx, "emulate_call");
+                let config = commands::get_config::execute(&rpc, ctx.neon_pubkey)
+                    .await
+                    .unwrap(); //TODO
+
+                let req = EmulateRequest {
+                    step_limit: None,
+                    chains: Some(config.chains),
+                    trace_config: None,
+                    accounts: Vec::new(),
+                    tx,
+                    solana_overrides: None,
+                };
+                let resp =
+                    commands::emulate::execute(&rpc, ctx.neon_pubkey, req, None::<TracerTypeEnum>)
+                        .await;
+                tracing::info!(?resp, "emulate_call");
+                let resp = match resp {
+                    Ok((resp, _something)) => Ok(resp.result),
+                    Err(err) => Err(err),
+                };
+                response.send(resp).unwrap();
+            }
+
             Task::GetBalance { addr, response } => {
                 let resp = commands::get_balance::execute(&rpc, &ctx.neon_pubkey, &[addr]).await;
                 tracing::info!(?resp, "get_balance");
@@ -105,8 +150,7 @@ impl Solana {
             }
 
             Task::GetTransactionCount { addr, response } => {
-                let resp =
-                    commands::get_balance::execute(&*ctx.client, &ctx.neon_pubkey, &[addr]).await;
+                let resp = commands::get_balance::execute(&rpc, &ctx.neon_pubkey, &[addr]).await;
                 tracing::info!(?resp, "get_transaction_count");
                 let resp = match resp {
                     Ok(resp) => {

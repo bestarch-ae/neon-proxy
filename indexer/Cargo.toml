@@ -7,9 +7,9 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.5.4", features = ["derive"] }
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 neon_parse = { path = "../parse", package = "parse" }
-tracing = "0.1"
 anyhow = "1"
 tokio = { version = "1.37.0", features = ["full"] }
 lru = "0.12"
