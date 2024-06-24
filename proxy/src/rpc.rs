@@ -4,6 +4,7 @@ use futures_util::StreamExt;
 use futures_util::TryStreamExt;
 use jsonrpsee::core::async_trait;
 use jsonrpsee::core::RpcResult;
+use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::types::ErrorCode;
 use jsonrpsee::types::ErrorObjectOwned;
 use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, B256, B64, U256, U64};
@@ -26,7 +27,9 @@ use sqlx::PgPool;
 use crate::convert::convert_filters;
 use crate::convert::convert_rich_log;
 use crate::convert::LogFilters;
-use crate::convert::{build_block, neon_to_eth, neon_to_eth_receipt};
+use crate::convert::{
+    build_block, neon_to_eth, neon_to_eth_receipt, NeonLog, NeonTransactionReceipt,
+};
 use crate::Error;
 
 #[derive(Clone)]
@@ -128,6 +131,27 @@ fn unimplemented<T>() -> RpcResult<T> {
         "method not implemented",
         None,
     ))
+}
+
+#[rpc(server, namespace = "eth")]
+trait NeonEthApi: EthApiServer {
+    #[method(name = "getTransactionReceipt")]
+    async fn neon_transaction_receipt(
+        &self,
+        hash: B256,
+    ) -> RpcResult<Option<NeonTransactionReceipt>>;
+}
+
+#[async_trait]
+impl NeonEthApiServer for EthApiImpl {
+    async fn neon_transaction_receipt(
+        &self,
+        hash: B256,
+    ) -> RpcResult<Option<NeonTransactionReceipt>> {
+        let receipt = <Self as EthApiServer>::transaction_receipt(self, hash).await?;
+        let receipt = receipt.map(crate::convert::to_neon_receipt);
+        Ok(receipt)
+    }
 }
 
 #[async_trait]
@@ -512,6 +536,21 @@ impl EthApiServer for EthApiImpl {
         _block_number: Option<BlockId>,
     ) -> RpcResult<EIP1186AccountProofResponse> {
         unimplemented()
+    }
+}
+
+#[rpc(server, namespace = "eth")]
+trait NeonFilterApi: EthFilterApiServer {
+    #[method(name = "getLogs")]
+    async fn neon_logs(&self, filter: Filter) -> RpcResult<Vec<NeonLog>>;
+}
+
+#[async_trait]
+impl NeonFilterApiServer for EthApiImpl {
+    async fn neon_logs(&self, filter: Filter) -> RpcResult<Vec<NeonLog>> {
+        let logs = <Self as EthFilterApiServer>::logs(self, filter).await?;
+        let logs = logs.into_iter().map(crate::convert::to_neon_log).collect();
+        Ok(logs)
     }
 }
 

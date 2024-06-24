@@ -225,7 +225,7 @@ dependencies = [
  "alloy-serde",
  "alloy-sol-types",
  "itertools 0.12.1",
- "jsonrpsee-types",
+ "jsonrpsee-types 0.22.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
  "serde_json",
  "thiserror",
@@ -264,7 +264,7 @@ dependencies = [
  "alloy-rlp",
  "alloy-rpc-types",
  "alloy-serde",
- "jsonrpsee-types",
+ "jsonrpsee-types 0.22.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "jsonwebtoken",
  "rand 0.8.5",
  "serde",
@@ -2751,13 +2751,12 @@ dependencies = [
 [[package]]
 name = "jsonrpsee"
 version = "0.22.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfdb12a2381ea5b2e68c3469ec604a007b367778cdb14d09612c8069ebd616ad"
+source = "git+https://github.com/polachok/jsonrpsee?branch=v0.22.x-remove#ccc450b2af0c46a734ed0ca96194cf5ab1396564"
 dependencies = [
  "jsonrpsee-core",
  "jsonrpsee-proc-macros",
  "jsonrpsee-server",
- "jsonrpsee-types",
+ "jsonrpsee-types 0.22.5 (git+https://github.com/polachok/jsonrpsee?branch=v0.22.x-remove)",
  "tokio",
  "tracing",
 ]
@@ -2765,15 +2764,14 @@ dependencies = [
 [[package]]
 name = "jsonrpsee-core"
 version = "0.22.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4b257e1ec385e07b0255dde0b933f948b5c8b8c28d42afda9587c3a967b896d"
+source = "git+https://github.com/polachok/jsonrpsee?branch=v0.22.x-remove#ccc450b2af0c46a734ed0ca96194cf5ab1396564"
 dependencies = [
  "anyhow",
  "async-trait",
  "beef",
  "futures-util",
  "hyper",
- "jsonrpsee-types",
+ "jsonrpsee-types 0.22.5 (git+https://github.com/polachok/jsonrpsee?branch=v0.22.x-remove)",
  "parking_lot",
  "rand 0.8.5",
  "rustc-hash",
@@ -2787,8 +2785,7 @@ dependencies = [
 [[package]]
 name = "jsonrpsee-proc-macros"
 version = "0.22.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d0bb047e79a143b32ea03974a6bf59b62c2a4c5f5d42a381c907a8bbb3f75c0"
+source = "git+https://github.com/polachok/jsonrpsee?branch=v0.22.x-remove#ccc450b2af0c46a734ed0ca96194cf5ab1396564"
 dependencies = [
  "heck 0.4.1",
  "proc-macro-crate 3.1.0",
@@ -2800,14 +2797,13 @@ dependencies = [
 [[package]]
 name = "jsonrpsee-server"
 version = "0.22.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12d8b6a9674422a8572e0b0abb12feeb3f2aeda86528c80d0350c2bd0923ab41"
+source = "git+https://github.com/polachok/jsonrpsee?branch=v0.22.x-remove#ccc450b2af0c46a734ed0ca96194cf5ab1396564"
 dependencies = [
  "futures-util",
  "http",
  "hyper",
  "jsonrpsee-core",
- "jsonrpsee-types",
+ "jsonrpsee-types 0.22.5 (git+https://github.com/polachok/jsonrpsee?branch=v0.22.x-remove)",
  "pin-project",
  "route-recognizer",
  "serde",
@@ -2826,6 +2822,18 @@ name = "jsonrpsee-types"
 version = "0.22.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "150d6168405890a7a3231a3c74843f58b8959471f6df76078db2619ddee1d07d"
+dependencies = [
+ "anyhow",
+ "beef",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "jsonrpsee-types"
+version = "0.22.5"
+source = "git+https://github.com/polachok/jsonrpsee?branch=v0.22.x-remove#ccc450b2af0c46a734ed0ca96194cf5ab1396564"
 dependencies = [
  "anyhow",
  "beef",
@@ -4389,7 +4397,7 @@ dependencies = [
  "alloy-rpc-types-beacon",
  "alloy-rpc-types-engine",
  "alloy-rpc-types-trace",
- "jsonrpsee-types",
+ "jsonrpsee-types 0.22.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
  "serde_json",
  "serde_with 3.8.1",
