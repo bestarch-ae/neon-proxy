@@ -1,12 +1,15 @@
 use clap::Parser;
+use common::solana_sdk::pubkey::Pubkey;
 use jsonrpsee::types::ErrorCode;
 use rpc_api::{EthApiServer, EthFilterApiServer};
 use thiserror::Error;
 
 mod convert;
 mod rpc;
+mod solana;
 
 use rpc::{EthApiImpl, NeonEthApiServer, NeonFilterApiServer};
+use solana::Solana;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -38,6 +41,19 @@ struct Args {
         value_name = "LISTEN_ADDR"
     )]
     listen: String,
+
+    #[arg(value_name = "Pubkey")]
+    /// Neon program pubkey
+    neon_pubkey: Pubkey,
+
+    #[arg(
+        short('u'),
+        long,
+        default_value = "https://api.mainnet-beta.solana.com",
+        value_name = "URL"
+    )]
+    /// Solana endpoint
+    solana_url: String,
 }
 
 #[tokio::main]
@@ -48,7 +64,8 @@ async fn main() {
 
     let pool = db::connect(&opts.pg_url).await.unwrap();
 
-    let eth = EthApiImpl::new(pool);
+    let solana = Solana::new(opts.solana_url, opts.neon_pubkey);
+    let eth = EthApiImpl::new(pool, solana);
     let mut module = jsonrpsee::server::RpcModule::new(());
     module
         .merge(<EthApiImpl as EthApiServer>::into_rpc(eth.clone()))

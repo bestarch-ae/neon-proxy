@@ -1,5 +1,4 @@
-use common::types::NeonTxInfo;
-use db::WithBlockhash;
+use common::neon_lib::types::BalanceAddress;
 use futures_util::StreamExt;
 use futures_util::TryStreamExt;
 use jsonrpsee::core::async_trait;
@@ -24,27 +23,36 @@ use rpc_api_types::{
 };
 use sqlx::PgPool;
 
+use common::types::NeonTxInfo;
+use db::WithBlockhash;
+
 use crate::convert::convert_filters;
 use crate::convert::convert_rich_log;
 use crate::convert::LogFilters;
 use crate::convert::{
     build_block, neon_to_eth, neon_to_eth_receipt, NeonLog, NeonTransactionReceipt,
 };
+use crate::solana::Solana;
 use crate::Error;
+
+// TODO: get it from neon config??
+const CHAIN_ID: u64 = 245022926;
 
 #[derive(Clone)]
 pub struct EthApiImpl {
     transactions: ::db::TransactionRepo,
     blocks: ::db::BlockRepo,
+    solana: Solana,
 }
 
 impl EthApiImpl {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool, solana: Solana) -> Self {
         let transactions = ::db::TransactionRepo::new(pool.clone());
         let blocks = ::db::BlockRepo::new(pool);
         Self {
             transactions,
             blocks,
+            solana,
         }
     }
 
@@ -333,7 +341,15 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns the balance of the account of given address.
     async fn balance(&self, _address: Address, _block_number: Option<BlockId>) -> RpcResult<U256> {
-        unimplemented()
+        use common::evm_loader::types::Address;
+
+        let balance_address = BalanceAddress {
+            address: Address::from(<[u8; 20]>::from(_address.0)),
+            chain_id: CHAIN_ID,
+        };
+        let balance = self.solana.get_balance(balance_address).await.unwrap(); // TODO: handle error
+
+        Ok(U256::from_le_bytes(balance.to_le_bytes()))
     }
 
     /// Returns the value from a storage position at a given address

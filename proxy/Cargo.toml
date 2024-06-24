@@ -26,3 +26,5 @@ clap = { version = "4.5.4", features = ["derive"] }
 thiserror = "1.0.60"
 hex-literal = "0.4.1"
 futures-util = "0.3.30"
+solana-client = "1.16.18"
+solana-rpc-client = "1.16.18"

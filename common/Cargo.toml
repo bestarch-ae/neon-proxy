@@ -9,9 +9,14 @@ ethnum = "1.5.0"
 solana-sdk = "1.17.34"
 solana-transaction-status = "1.17.34"
 hex = "0.4"
+build-info = { version = "0.0.31", features = ["serde"] }
 
 [dependencies.evm-loader]
 git = "https://github.com/neonlabsorg/neon-evm.git"
 rev = "v1.14.0"
 default-features = false
 features = ["async-trait", "no-entrypoint", "log"] 
+
+[dependencies.neon-lib]
+git = "https://github.com/neonlabsorg/neon-evm.git"
+rev = "v1.14.0"
