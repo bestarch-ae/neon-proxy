@@ -1,6 +1,7 @@
 use anyhow::{bail, Context};
 use common::solana_sdk::hash::Hash;
 use futures_util::{Stream, StreamExt, TryStreamExt};
+use sqlx::postgres::PgRow;
 use sqlx::FromRow;
 
 use common::ethnum::U256;
@@ -344,6 +345,45 @@ impl TransactionRepo {
         .map(|res| Ok(res??))
     }
 
+    fn fetch_with_events(
+        &self,
+        by: TransactionBy,
+    ) -> impl Stream<Item = Result<WithBlockhash<NeonTxInfo>, Error>> + '_ {
+        let (slot, hash) = by.slot_hash();
+        sqlx::query_as::<_, NeonTransactionRowWithLogs>(
+            r#"SELECT
+                 neon_sig, tx_type, from_addr,
+                 T.sol_sig, sol_ix_idx,
+                 sol_ix_inner_idx, T.block_slot,
+                 T.tx_idx, nonce, gas_price,
+                 gas_limit, value, gas_used,
+                 sum_gas_used, to_addr, contract,
+                 status, is_canceled, is_completed, 
+                 v, r, s, chain_id,
+                 calldata,
+                 B.block_hash,
+
+                 address, log_idx, tx_log_idx,
+                 event_level, event_order,
+                 log_topic1, log_topic2,
+                 log_topic3, log_topic4,
+                 log_topic_cnt, log_data
+               FROM neon_transactions T
+               LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
+               LEFT JOIN neon_transaction_logs L ON L.tx_hash = T.neon_sig
+               WHERE (neon_sig = $1 OR $2) AND (T.block_slot = $3 OR $4)
+               ORDER BY (T.block_slot, T.tx_idx, T.neon_sig, L.tx_log_idx) ASC
+           "#,
+        )
+        .bind(hash.map(|hash| *hash.as_array()).unwrap_or_default())
+        .bind(hash.is_none())
+        .bind(slot.unwrap_or(0) as i64)
+        .bind(slot.is_none())
+        .fetch(&self.pool)
+        .map(move |row| row.map(|row: NeonTransactionRowWithLogs| row.with_logs()))
+        .map(move |res| Ok(res??))
+    }
+
     pub async fn fetch_last_log_idx(&self, by: TxHash) -> Result<Option<i32>, sqlx::Error> {
         sqlx::query!(
             r#"
@@ -356,39 +396,6 @@ impl TransactionRepo {
         .fetch_one(&self.pool)
         .await
         .map(|row| row.log_idx)
-    }
-
-    fn fetch_logs(
-        &self,
-        by: Vec<TxHash>,
-    ) -> impl Stream<Item = Result<(TxHash, EventLog), Error>> + '_ {
-        tracing::info!(?by, "fetching logs");
-        let by_ref = by.iter().map(|x| x.as_array().to_vec()).collect::<Vec<_>>();
-        sqlx::query_as!(
-            NeonTransactionLogRow,
-            r#"SELECT
-                address as "address?: PgAddress", tx_hash as "tx_hash!",
-                log_idx as "log_idx!", tx_log_idx as "tx_log_idx!",
-                event_level as "event_level!", event_order as "event_order!",
-                log_topic1 as "log_topic1?", log_topic2 as "log_topic2?",
-                log_topic3 as "log_topic3?", log_topic4 as "log_topic4?",
-                log_topic_cnt as "log_topic_cnt!", log_data as "log_data!"
-               FROM neon_transaction_logs
-               WHERE tx_hash = ANY($1)
-               ORDER BY (tx_hash, block_slot, tx_idx, tx_log_idx) ASC
-            "#,
-            by_ref.as_slice()
-        )
-        .map(|row| {
-            let hash = row
-                .tx_hash
-                .clone()
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("tx_hash"))?;
-            Ok::<_, Error>(row.try_into().map(|log| (hash, log))?)
-        })
-        .fetch(&self.pool)
-        .map(|res| res?)
     }
 
     pub fn fetch_rich_logs(
@@ -447,33 +454,24 @@ impl TransactionRepo {
 
     pub async fn fetch(&self, by: TransactionBy) -> Result<Vec<WithBlockhash<NeonTxInfo>>, Error> {
         tracing::info!(?by, "fetching transactions");
-        let mut transactions: Vec<_> = self.fetch_without_events(by).try_collect().await?;
-        if transactions.is_empty() {
-            return Ok(transactions);
-        }
-        let by = transactions
-            .iter()
-            .filter(|tx| !tx.inner.is_cancelled)
-            .map(|tx| tx.inner.neon_signature)
-            .collect::<Vec<_>>();
-        let mut tx_iter = transactions.iter_mut();
-        let mut current_tx = tx_iter.next().expect("checked not empty");
 
-        let mut logs = self.fetch_logs(by);
-
-        while let Some((tx_hash, log)) = logs.try_next().await? {
-            while current_tx.inner.neon_signature != tx_hash {
-                current_tx = tx_iter.next().expect("inconsistent log and tx order");
+        let mut transactions: Vec<WithBlockhash<NeonTxInfo>> = Vec::new();
+        let mut stream = self.fetch_with_events(by);
+        while let Some(tx) = stream.try_next().await? {
+            if let Some(current_tx) = transactions.last_mut() {
+                if current_tx.inner.neon_signature == tx.inner.neon_signature {
+                    current_tx.inner.events.extend(tx.inner.events);
+                    continue;
+                }
             }
-
-            current_tx.inner.events.push(log);
+            transactions.push(tx);
         }
 
         Ok(transactions)
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 struct NeonTransactionRow {
     neon_sig: Vec<u8>,
     tx_type: i32,
@@ -506,6 +504,38 @@ struct NeonTransactionRow {
 
     calldata: Vec<u8>,
     block_hash: Option<PgSolanaBlockHash>,
+}
+
+#[derive(Debug)]
+struct NeonTransactionRowWithLogs {
+    transaction: NeonTransactionRow,
+    log: Option<NeonTransactionLogRow>,
+}
+
+impl FromRow<'_, PgRow> for NeonTransactionRowWithLogs {
+    fn from_row(row: &'_ PgRow) -> Result<Self, sqlx::Error> {
+        use sqlx::Row;
+        let transaction = NeonTransactionRow::from_row(row)?;
+        let val: Option<i32> = row.try_get("tx_log_idx")?;
+        let log = if val.is_none() {
+            None
+        } else {
+            Some(NeonTransactionLogRow::from_row(row)?)
+        };
+        Ok(NeonTransactionRowWithLogs { transaction, log })
+    }
+}
+
+impl NeonTransactionRowWithLogs {
+    fn with_logs(self) -> anyhow::Result<WithBlockhash<NeonTxInfo>> {
+        let mut tx = self.transaction.neon_tx_info_with_empty_logs()?;
+        if !tx.inner.is_cancelled {
+            if let Some(log) = self.log {
+                tx.inner.events.push(log.try_into()?);
+            }
+        }
+        Ok(tx)
+    }
 }
 
 impl NeonTransactionRow {
@@ -629,7 +659,6 @@ impl NeonTransactionRow {
 #[derive(Debug, FromRow)]
 struct NeonTransactionLogRow {
     address: Option<PgAddress>,
-    tx_hash: Vec<u8>,
     tx_log_idx: i32,
     log_idx: i32,
 
@@ -716,7 +745,6 @@ impl TryFrom<NeonRichLogRow> for RichLog {
     fn try_from(value: NeonRichLogRow) -> Result<Self, Self::Error> {
         let log = NeonTransactionLogRow {
             address: value.address,
-            tx_hash: value.tx_hash.clone(),
             tx_log_idx: value.tx_log_idx,
             log_idx: value.log_idx,
             event_level: value.event_level,
