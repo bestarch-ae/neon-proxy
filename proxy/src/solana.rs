@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use common::ethnum::U256;
+use common::neon_lib::commands::emulate::EmulateResponse;
 use common::neon_lib::rpc::{CloneRpcClient, RpcEnum};
 use common::neon_lib::tracing::tracers::TracerTypeEnum;
 use common::neon_lib::types::{BalanceAddress, EmulateRequest, TxParams};
@@ -26,6 +27,10 @@ enum Task {
     EmulateCall {
         tx: TxParams,
         response: oneshot::Sender<Result<Vec<u8>, NeonError>>,
+    },
+    EstimateGas {
+        tx: TxParams,
+        response: oneshot::Sender<Result<EmulateResponse, NeonError>>,
     },
 }
 
@@ -105,14 +110,51 @@ impl Solana {
         rx.await.unwrap()
     }
 
+    pub async fn estimate_gas(&self, params: TxParams) -> Result<U256, NeonError> {
+        let (tx, rx) = oneshot::channel();
+        self.channel
+            .send(Task::EstimateGas {
+                tx: params,
+                response: tx,
+            })
+            .await
+            .unwrap();
+        let resp = rx.await.unwrap();
+        // TODO: do actual calculations
+        Ok(U256::from(resp?.used_gas))
+    }
+
     async fn execute(task: Task, ctx: Context) {
         let rpc = RpcEnum::CloneRpcClient(ctx.client.clone());
         match task {
+            Task::EstimateGas { tx, response } => {
+                let config = commands::get_config::execute(&rpc, ctx.neon_pubkey)
+                    .await
+                    .expect("config didnt fail"); // TODO
+
+                let req = EmulateRequest {
+                    step_limit: None,
+                    chains: Some(config.chains),
+                    trace_config: None,
+                    accounts: Vec::new(),
+                    tx,
+                    solana_overrides: None,
+                };
+                let resp =
+                    commands::emulate::execute(&rpc, ctx.neon_pubkey, req, None::<TracerTypeEnum>)
+                        .await;
+                // TODO: actually estimate gas
+                let resp = match resp {
+                    Ok((resp, _something)) => Ok(resp),
+                    Err(err) => Err(err),
+                };
+                response.send(resp).unwrap();
+            }
             Task::EmulateCall { tx, response } => {
                 tracing::info!(?tx, "emulate_call");
                 let config = commands::get_config::execute(&rpc, ctx.neon_pubkey)
                     .await
-                    .unwrap(); //TODO
+                    .expect("config didnt fail"); // TODO
 
                 let req = EmulateRequest {
                     step_limit: None,

@@ -377,34 +377,48 @@ pub fn convert_filters(filters: Filter) -> Result<LogFilters, Error> {
     })
 }
 
-pub trait FromReth {
-    type NeonType;
+pub trait ToReth {
+    type RethType;
 
-    fn from_reth(self) -> Self::NeonType;
+    fn to_reth(self) -> Self::RethType;
 }
 
-impl FromReth for U256 {
+impl ToReth for common::ethnum::U256 {
+    type RethType = U256;
+
+    fn to_reth(self) -> Self::RethType {
+        U256::from_le_bytes(self.to_le_bytes())
+    }
+}
+
+pub trait ToNeon {
+    type NeonType;
+
+    fn to_neon(self) -> Self::NeonType;
+}
+
+impl ToNeon for U256 {
     type NeonType = common::ethnum::U256;
 
-    fn from_reth(self) -> Self::NeonType {
+    fn to_neon(self) -> Self::NeonType {
         common::ethnum::U256::from_le_bytes(self.to_le_bytes())
     }
 }
 
-impl FromReth for Address {
+impl ToNeon for Address {
     type NeonType = NeonAddress;
 
-    fn from_reth(self) -> Self::NeonType {
+    fn to_neon(self) -> Self::NeonType {
         NeonAddress(self.0.into())
     }
 }
 
-impl FromReth for AccessListItem {
+impl ToNeon for AccessListItem {
     type NeonType = common::neon_lib::types::AccessListItem;
 
-    fn from_reth(self) -> Self::NeonType {
+    fn to_neon(self) -> Self::NeonType {
         common::neon_lib::types::AccessListItem {
-            address: FromReth::from_reth(self.address),
+            address: self.address.to_neon(),
             storage_keys: self
                 .storage_keys
                 .into_iter()

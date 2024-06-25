@@ -342,6 +342,7 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns the balance of the account of given address.
     async fn balance(&self, _address: Address, _block_number: Option<BlockId>) -> RpcResult<U256> {
+        use crate::convert::ToReth;
         use common::evm_loader::types::Address;
 
         let balance_address = BalanceAddress {
@@ -350,7 +351,7 @@ impl EthApiServer for EthApiImpl {
         };
         let balance = self.solana.get_balance(balance_address).await.unwrap(); // TODO: handle error
 
-        Ok(U256::from_le_bytes(balance.to_le_bytes()))
+        Ok(balance.to_reth())
     }
 
     /// Returns the value from a storage position at a given address
@@ -411,28 +412,27 @@ impl EthApiServer for EthApiImpl {
         _state_overrides: Option<StateOverride>,
         _block_overrides: Option<Box<BlockOverrides>>,
     ) -> RpcResult<Bytes> {
-        use crate::convert::FromReth;
+        use crate::convert::ToNeon;
         tracing::info!("call {:?}", request);
 
         let tx = TxParams {
             nonce: request.nonce,
-            from: request.from.map(FromReth::from_reth).unwrap_or_default(),
+            from: request.from.map(ToNeon::to_neon).unwrap_or_default(),
             to: match request.to {
-                Some(TxKind::Call(addr)) => Some(FromReth::from_reth(addr)),
+                Some(TxKind::Call(addr)) => Some(ToNeon::to_neon(addr)),
                 Some(TxKind::Create) => None,
                 None => None,
             },
             data: request.input.data.map(|data| data.to_vec()),
-            value: request.value.map(FromReth::from_reth),
-            gas_limit: request.gas.map(U256::from).map(FromReth::from_reth),
-            gas_price: request.gas_price.map(U256::from).map(FromReth::from_reth),
+            value: request.value.map(ToNeon::to_neon),
+            gas_limit: request.gas.map(U256::from).map(ToNeon::to_neon),
+            gas_price: request.gas_price.map(U256::from).map(ToNeon::to_neon),
             access_list: request
                 .access_list
-                .map(|list| list.0.into_iter().map(FromReth::from_reth).collect()),
+                .map(|list| list.0.into_iter().map(ToNeon::to_neon).collect()),
             actual_gas_used: None,
             chain_id: Some(CHAIN_ID),
         };
-        // let cfg = self.solana.get_config().await;
         let data = self.solana.call(tx).await.unwrap(); // TODO: handle error
         Ok(Bytes::from(data))
     }
@@ -474,11 +474,38 @@ impl EthApiServer for EthApiImpl {
     /// complete.
     async fn estimate_gas(
         &self,
-        _request: TransactionRequest,
+        request: TransactionRequest,
         _block_number: Option<BlockId>,
         _state_override: Option<StateOverride>,
     ) -> RpcResult<U256> {
-        unimplemented()
+        use crate::convert::{ToNeon, ToReth};
+        tracing::info!("estimate_gas {:?}", request);
+
+        let tx = TxParams {
+            nonce: request.nonce,
+            from: request.from.map(ToNeon::to_neon).unwrap_or_default(),
+            to: match request.to {
+                Some(TxKind::Call(addr)) => Some(ToNeon::to_neon(addr)),
+                Some(TxKind::Create) => None,
+                None => None,
+            },
+            data: request.input.data.map(|data| data.to_vec()),
+            value: request.value.map(ToNeon::to_neon),
+            gas_limit: request.gas.map(U256::from).map(ToNeon::to_neon),
+            gas_price: request.gas_price.map(U256::from).map(ToNeon::to_neon),
+            access_list: request
+                .access_list
+                .map(|list| list.0.into_iter().map(ToNeon::to_neon).collect()),
+            actual_gas_used: None,
+            chain_id: Some(CHAIN_ID),
+        };
+        let gas = self
+            .solana
+            .estimate_gas(tx)
+            .await
+            .map(ToReth::to_reth)
+            .unwrap();
+        Ok(gas)
     }
 
     /// Returns the current price per gas in wei.
