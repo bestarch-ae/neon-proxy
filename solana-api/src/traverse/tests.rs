@@ -119,7 +119,7 @@ impl RpcSender for TransactionDB {
                     .unwrap_or(UiTransactionEncoding::Json);
                 let encoded = transaction.encode(encoding, None).unwrap();
                 let transaction =
-                    serde_json::to_value(&encoded).expect("cannot serialize transaction");
+                    serde_json::to_value(encoded).expect("cannot serialize transaction");
                 Ok(transaction)
             }
             RpcRequest::GetBlock => {
