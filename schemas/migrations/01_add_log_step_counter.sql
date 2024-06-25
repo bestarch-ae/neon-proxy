@@ -1,0 +1,6 @@
+ALTER TABLE neon_transaction_logs
+ADD COLUMN is_reverted BOOLEAN DEFAULT FALSE NOT NULL,
+ADD COLUMN is_hidden BOOLEAN DEFAULT FALSE NOT NULL; 
+
+ALTER TABLE neon_transactions
+ADD COLUMN neon_step_cnt BIGINT DEFAULT 0 NOT NULL;
