@@ -226,6 +226,8 @@ pub fn parse(
     let actions = parse_transactions(tx, accountsdb, loaded, neon_pubkey)?;
 
     let log_info = log::parse(transaction.log_messages, neon_pubkey)?;
+    tracing::info!(tx_hash = ?log_info.sig, steps = ?log_info.steps, "log");
+
     let iter = actions.into_iter().map(move |action| {
         action
             .map_transaction(|tx| add_log(tx, &log_info, slot))
