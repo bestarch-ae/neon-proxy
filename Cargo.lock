@@ -1985,8 +1985,8 @@ checksum = "0206175f82b8d6bf6652ff7d71a1e27fd2e4efde587fd368662814d6ec1d9ce0"
 
 [[package]]
 name = "evm-loader"
-version = "1.7.0"
-source = "git+https://github.com/neonlabsorg/neon-evm.git?rev=v1.7.0#02d5ab65ce27e67eb13acbb049b62a48f590ffab"
+version = "1.7.2"
+source = "git+https://github.com/neonlabsorg/neon-evm.git?rev=v1.7.2#06e573558e6b6c108014a3f0f9db6619325634ff"
 dependencies = [
  "arrayref",
  "async-trait",
@@ -2014,7 +2014,7 @@ dependencies = [
 [[package]]
 name = "evm-loader-macro"
 version = "1.0.0"
-source = "git+https://github.com/neonlabsorg/neon-evm.git?rev=v1.7.0#02d5ab65ce27e67eb13acbb049b62a48f590ffab"
+source = "git+https://github.com/neonlabsorg/neon-evm.git?rev=v1.7.2#06e573558e6b6c108014a3f0f9db6619325634ff"
 dependencies = [
  "bs58",
  "itertools 0.11.0",
