@@ -1,11 +1,14 @@
 use clap::Parser;
+use common::solana_sdk::pubkey::Pubkey;
 use jsonrpsee::types::ErrorCode;
 use rpc_api::{EthApiServer, EthFilterApiServer};
 use thiserror::Error;
 
 mod convert;
+mod neon_api;
 mod rpc;
 
+use neon_api::NeonApi;
 use rpc::{EthApiImpl, NeonEthApiServer, NeonFilterApiServer};
 
 #[derive(Debug, Error)]
@@ -38,17 +41,44 @@ struct Args {
         value_name = "LISTEN_ADDR"
     )]
     listen: String,
+
+    #[arg(
+        value_name = "NEON_PUBKEY",
+        default_value = "eeLSJgWzzxrqKv1UxtRVVH8FX3qCQWUs9QuAjJpETGU"
+    )]
+    /// Neon program pubkey
+    neon_pubkey: Pubkey,
+
+    #[arg(
+        short('c'),
+        long,
+        value_name = "CONFIG_PUBKEY",
+        default_value = "BMp6gEnveANdvSvspESJUrNczuHz1GF5UQKjVLCkAZih"
+    )]
+    neon_config_pubkey: Pubkey,
+
+    #[arg(
+        short('u'),
+        long,
+        default_value = "https://api.mainnet-beta.solana.com",
+        value_name = "URL"
+    )]
+    /// Solana endpoint
+    solana_url: String,
 }
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
+    let _ = tracing_log::LogTracer::init();
 
     let opts = Args::parse();
 
     let pool = db::connect(&opts.pg_url).await.unwrap();
 
-    let eth = EthApiImpl::new(pool);
+    tracing::info!(%opts.neon_pubkey, %opts.neon_config_pubkey, "starting");
+    let solana = NeonApi::new(opts.solana_url, opts.neon_pubkey, opts.neon_config_pubkey);
+    let eth = EthApiImpl::new(pool, solana);
     let mut module = jsonrpsee::server::RpcModule::new(());
     module
         .merge(<EthApiImpl as EthApiServer>::into_rpc(eth.clone()))

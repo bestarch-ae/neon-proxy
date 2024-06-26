@@ -6,9 +6,9 @@ use reth_primitives::trie::EMPTY_ROOT_HASH;
 use reth_primitives::{Address, Bloom, Bytes, Log as PrimitiveLog, B256, B64, U256};
 use rpc_api_types::other::OtherFields;
 use rpc_api_types::{
-    AnyReceiptEnvelope, AnyTransactionReceipt, Block, BlockNumberOrTag, BlockTransactions, Filter,
-    FilterBlockOption, FilterSet, Header, Log, Receipt, ReceiptWithBloom, Transaction,
-    TransactionReceipt, ValueOrArray, WithOtherFields,
+    AccessListItem, AnyReceiptEnvelope, AnyTransactionReceipt, Block, BlockNumberOrTag,
+    BlockTransactions, Filter, FilterBlockOption, FilterSet, Header, Log, Receipt,
+    ReceiptWithBloom, Transaction, TransactionReceipt, ValueOrArray, WithOtherFields,
 };
 
 use common::evm_loader::types::{Address as NeonAddress, TransactionPayload};
@@ -375,4 +375,57 @@ pub fn convert_filters(filters: Filter) -> Result<LogFilters, Error> {
         address,
         topics,
     })
+}
+
+pub trait ToReth {
+    type RethType;
+
+    fn to_reth(self) -> Self::RethType;
+}
+
+impl ToReth for common::ethnum::U256 {
+    type RethType = U256;
+
+    fn to_reth(self) -> Self::RethType {
+        U256::from_le_bytes(self.to_le_bytes())
+    }
+}
+
+pub trait ToNeon {
+    type NeonType;
+
+    fn to_neon(self) -> Self::NeonType;
+}
+
+impl ToNeon for U256 {
+    type NeonType = common::ethnum::U256;
+
+    fn to_neon(self) -> Self::NeonType {
+        common::ethnum::U256::from_le_bytes(self.to_le_bytes())
+    }
+}
+
+impl ToNeon for Address {
+    type NeonType = NeonAddress;
+
+    fn to_neon(self) -> Self::NeonType {
+        NeonAddress(self.0.into())
+    }
+}
+
+impl ToNeon for AccessListItem {
+    type NeonType = common::neon_lib::types::AccessListItem;
+
+    fn to_neon(self) -> Self::NeonType {
+        common::neon_lib::types::AccessListItem {
+            address: self.address.to_neon(),
+            storage_keys: self
+                .storage_keys
+                .into_iter()
+                .map(|key| key.to_vec())
+                .map(TryFrom::try_from)
+                .map(|x| x.unwrap())
+                .collect(),
+        }
+    }
 }

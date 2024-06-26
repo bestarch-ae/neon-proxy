@@ -1,5 +1,4 @@
-use common::types::NeonTxInfo;
-use db::WithBlockhash;
+use common::neon_lib::types::{BalanceAddress, TxParams};
 use futures_util::StreamExt;
 use futures_util::TryStreamExt;
 use jsonrpsee::core::async_trait;
@@ -7,6 +6,7 @@ use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::types::ErrorCode;
 use jsonrpsee::types::ErrorObjectOwned;
+use reth_primitives::TxKind;
 use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, B256, B64, U256, U64};
 use rpc_api::servers::EthApiServer;
 use rpc_api::EthFilterApiServer;
@@ -24,27 +24,36 @@ use rpc_api_types::{
 };
 use sqlx::PgPool;
 
+use common::types::NeonTxInfo;
+use db::WithBlockhash;
+
 use crate::convert::convert_filters;
 use crate::convert::convert_rich_log;
 use crate::convert::LogFilters;
 use crate::convert::{
     build_block, neon_to_eth, neon_to_eth_receipt, NeonLog, NeonTransactionReceipt,
 };
+use crate::neon_api::NeonApi;
 use crate::Error;
+
+// TODO: get it from neon config??
+const CHAIN_ID: u64 = 245022926;
 
 #[derive(Clone)]
 pub struct EthApiImpl {
     transactions: ::db::TransactionRepo,
     blocks: ::db::BlockRepo,
+    neon_api: NeonApi,
 }
 
 impl EthApiImpl {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool, neon_api: NeonApi) -> Self {
         let transactions = ::db::TransactionRepo::new(pool.clone());
         let blocks = ::db::BlockRepo::new(pool);
         Self {
             transactions,
             blocks,
+            neon_api,
         }
     }
 
@@ -190,7 +199,7 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns the chain ID of the current network.
     async fn chain_id(&self) -> RpcResult<Option<U64>> {
-        unimplemented()
+        Ok(Some(U64::from(CHAIN_ID)))
     }
 
     /// Returns information about a block by hash.
@@ -333,7 +342,16 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns the balance of the account of given address.
     async fn balance(&self, _address: Address, _block_number: Option<BlockId>) -> RpcResult<U256> {
-        unimplemented()
+        use crate::convert::ToReth;
+        use common::evm_loader::types::Address;
+
+        let balance_address = BalanceAddress {
+            address: Address::from(<[u8; 20]>::from(_address.0)),
+            chain_id: CHAIN_ID,
+        };
+        let balance = self.neon_api.get_balance(balance_address).await.unwrap(); // TODO: handle error
+
+        Ok(balance.to_reth())
     }
 
     /// Returns the value from a storage position at a given address
@@ -352,7 +370,19 @@ impl EthApiServer for EthApiImpl {
         _address: Address,
         _block_number: Option<BlockId>,
     ) -> RpcResult<U256> {
-        unimplemented()
+        use common::evm_loader::types::Address;
+
+        let balance_address = BalanceAddress {
+            address: Address::from(<[u8; 20]>::from(_address.0)),
+            chain_id: CHAIN_ID,
+        };
+        let balance = self
+            .neon_api
+            .get_transaction_count(balance_address)
+            .await
+            .unwrap(); // TODO: handle error
+
+        Ok(U256::from(balance))
     }
 
     /// Returns code at a given address at given block number.
@@ -377,12 +407,34 @@ impl EthApiServer for EthApiImpl {
     /// Executes a new message call immediately without creating a transaction on the block chain.
     async fn call(
         &self,
-        _request: TransactionRequest,
+        request: TransactionRequest,
         _block_number: Option<BlockId>,
         _state_overrides: Option<StateOverride>,
         _block_overrides: Option<Box<BlockOverrides>>,
     ) -> RpcResult<Bytes> {
-        unimplemented()
+        use crate::convert::ToNeon;
+        tracing::info!("call {:?}", request);
+
+        let tx = TxParams {
+            nonce: request.nonce,
+            from: request.from.map(ToNeon::to_neon).unwrap_or_default(),
+            to: match request.to {
+                Some(TxKind::Call(addr)) => Some(ToNeon::to_neon(addr)),
+                Some(TxKind::Create) => None,
+                None => None,
+            },
+            data: request.input.data.map(|data| data.to_vec()),
+            value: request.value.map(ToNeon::to_neon),
+            gas_limit: request.gas.map(U256::from).map(ToNeon::to_neon),
+            gas_price: request.gas_price.map(U256::from).map(ToNeon::to_neon),
+            access_list: request
+                .access_list
+                .map(|list| list.0.into_iter().map(ToNeon::to_neon).collect()),
+            actual_gas_used: None,
+            chain_id: Some(CHAIN_ID),
+        };
+        let data = self.neon_api.call(tx).await.unwrap(); // TODO: handle error
+        Ok(Bytes::from(data))
     }
 
     /// Simulate arbitrary number of transactions at an arbitrary blockchain index, with the
@@ -422,11 +474,38 @@ impl EthApiServer for EthApiImpl {
     /// complete.
     async fn estimate_gas(
         &self,
-        _request: TransactionRequest,
+        request: TransactionRequest,
         _block_number: Option<BlockId>,
         _state_override: Option<StateOverride>,
     ) -> RpcResult<U256> {
-        unimplemented()
+        use crate::convert::{ToNeon, ToReth};
+        tracing::info!("estimate_gas {:?}", request);
+
+        let tx = TxParams {
+            nonce: request.nonce,
+            from: request.from.map(ToNeon::to_neon).unwrap_or_default(),
+            to: match request.to {
+                Some(TxKind::Call(addr)) => Some(ToNeon::to_neon(addr)),
+                Some(TxKind::Create) => None,
+                None => None,
+            },
+            data: request.input.data.map(|data| data.to_vec()),
+            value: request.value.map(ToNeon::to_neon),
+            gas_limit: request.gas.map(U256::from).map(ToNeon::to_neon),
+            gas_price: request.gas_price.map(U256::from).map(ToNeon::to_neon),
+            access_list: request
+                .access_list
+                .map(|list| list.0.into_iter().map(ToNeon::to_neon).collect()),
+            actual_gas_used: None,
+            chain_id: Some(CHAIN_ID),
+        };
+        let gas = self
+            .neon_api
+            .estimate_gas(tx)
+            .await
+            .map(ToReth::to_reth)
+            .unwrap();
+        Ok(gas)
     }
 
     /// Returns the current price per gas in wei.
