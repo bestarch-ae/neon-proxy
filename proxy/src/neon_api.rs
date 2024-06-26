@@ -41,11 +41,11 @@ struct Context {
 }
 
 #[derive(Debug, Clone)]
-pub struct Solana {
+pub struct NeonApi {
     channel: Sender<Task>,
 }
 
-impl Solana {
+impl NeonApi {
     pub fn new(url: String, neon_pubkey: Pubkey) -> Self {
         let (tx, mut rx) = mpsc::channel(128);
 
@@ -143,13 +143,13 @@ impl Solana {
                 let resp =
                     commands::emulate::execute(&rpc, ctx.neon_pubkey, req, None::<TracerTypeEnum>)
                         .await;
-                // TODO: actually estimate gas
                 let resp = match resp {
                     Ok((resp, _something)) => Ok(resp),
                     Err(err) => Err(err),
                 };
-                response.send(resp).unwrap();
+                let _ = response.send(resp);
             }
+
             Task::EmulateCall { tx, response } => {
                 tracing::info!(?tx, "emulate_call");
                 let config = commands::get_config::execute(&rpc, ctx.neon_pubkey)
@@ -172,7 +172,7 @@ impl Solana {
                     Ok((resp, _something)) => Ok(resp.result),
                     Err(err) => Err(err),
                 };
-                response.send(resp).unwrap();
+                let _ = response.send(resp);
             }
 
             Task::GetBalance { addr, response } => {
@@ -188,7 +188,7 @@ impl Solana {
                     }
                     Err(err) => Err(err),
                 };
-                response.send(resp).unwrap();
+                let _ = response.send(resp);
             }
 
             Task::GetTransactionCount { addr, response } => {
@@ -204,7 +204,7 @@ impl Solana {
                     }
                     Err(err) => Err(err),
                 };
-                response.send(resp).unwrap();
+                let _ = response.send(resp);
             }
         }
     }

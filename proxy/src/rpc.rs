@@ -33,7 +33,7 @@ use crate::convert::LogFilters;
 use crate::convert::{
     build_block, neon_to_eth, neon_to_eth_receipt, NeonLog, NeonTransactionReceipt,
 };
-use crate::solana::Solana;
+use crate::neon_api::NeonApi;
 use crate::Error;
 
 // TODO: get it from neon config??
@@ -43,17 +43,17 @@ const CHAIN_ID: u64 = 245022926;
 pub struct EthApiImpl {
     transactions: ::db::TransactionRepo,
     blocks: ::db::BlockRepo,
-    solana: Solana,
+    neon_api: NeonApi,
 }
 
 impl EthApiImpl {
-    pub fn new(pool: PgPool, solana: Solana) -> Self {
+    pub fn new(pool: PgPool, neon_api: NeonApi) -> Self {
         let transactions = ::db::TransactionRepo::new(pool.clone());
         let blocks = ::db::BlockRepo::new(pool);
         Self {
             transactions,
             blocks,
-            solana,
+            neon_api,
         }
     }
 
@@ -349,7 +349,7 @@ impl EthApiServer for EthApiImpl {
             address: Address::from(<[u8; 20]>::from(_address.0)),
             chain_id: CHAIN_ID,
         };
-        let balance = self.solana.get_balance(balance_address).await.unwrap(); // TODO: handle error
+        let balance = self.neon_api.get_balance(balance_address).await.unwrap(); // TODO: handle error
 
         Ok(balance.to_reth())
     }
@@ -377,7 +377,7 @@ impl EthApiServer for EthApiImpl {
             chain_id: CHAIN_ID,
         };
         let balance = self
-            .solana
+            .neon_api
             .get_transaction_count(balance_address)
             .await
             .unwrap(); // TODO: handle error
@@ -433,7 +433,7 @@ impl EthApiServer for EthApiImpl {
             actual_gas_used: None,
             chain_id: Some(CHAIN_ID),
         };
-        let data = self.solana.call(tx).await.unwrap(); // TODO: handle error
+        let data = self.neon_api.call(tx).await.unwrap(); // TODO: handle error
         Ok(Bytes::from(data))
     }
 
@@ -500,7 +500,7 @@ impl EthApiServer for EthApiImpl {
             chain_id: Some(CHAIN_ID),
         };
         let gas = self
-            .solana
+            .neon_api
             .estimate_gas(tx)
             .await
             .map(ToReth::to_reth)

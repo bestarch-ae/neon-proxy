@@ -5,11 +5,11 @@ use rpc_api::{EthApiServer, EthFilterApiServer};
 use thiserror::Error;
 
 mod convert;
+mod neon_api;
 mod rpc;
-mod solana;
 
+use neon_api::NeonApi;
 use rpc::{EthApiImpl, NeonEthApiServer, NeonFilterApiServer};
-use solana::Solana;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -65,7 +65,7 @@ async fn main() {
 
     let pool = db::connect(&opts.pg_url).await.unwrap();
 
-    let solana = Solana::new(opts.solana_url, opts.neon_pubkey);
+    let solana = NeonApi::new(opts.solana_url, opts.neon_pubkey);
     let eth = EthApiImpl::new(pool, solana);
     let mut module = jsonrpsee::server::RpcModule::new(());
     module
