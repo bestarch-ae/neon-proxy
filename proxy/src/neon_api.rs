@@ -46,7 +46,7 @@ pub struct NeonApi {
 }
 
 impl NeonApi {
-    pub fn new(url: String, neon_pubkey: Pubkey) -> Self {
+    pub fn new(url: String, neon_pubkey: Pubkey, config_key: Pubkey) -> Self {
         let (tx, mut rx) = mpsc::channel(128);
 
         std::thread::spawn(move || {
@@ -56,9 +56,6 @@ impl NeonApi {
 
             local.spawn_local(async move {
                 let client = RpcClient::new(url);
-                let config_key = "BMp6gEnveANdvSvspESJUrNczuHz1GF5UQKjVLCkAZih"
-                    .parse()
-                    .unwrap();
                 let client = CloneRpcClient {
                     rpc: Arc::new(client),
                     max_retries: 10,

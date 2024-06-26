@@ -42,9 +42,20 @@ struct Args {
     )]
     listen: String,
 
-    #[arg(value_name = "Pubkey")]
+    #[arg(
+        value_name = "NEON_PUBKEY",
+        default_value = "eeLSJgWzzxrqKv1UxtRVVH8FX3qCQWUs9QuAjJpETGU"
+    )]
     /// Neon program pubkey
     neon_pubkey: Pubkey,
+
+    #[arg(
+        short('c'),
+        long,
+        value_name = "CONFIG_PUBKEY",
+        default_value = "BMp6gEnveANdvSvspESJUrNczuHz1GF5UQKjVLCkAZih"
+    )]
+    neon_config_pubkey: Pubkey,
 
     #[arg(
         short('u'),
@@ -65,7 +76,8 @@ async fn main() {
 
     let pool = db::connect(&opts.pg_url).await.unwrap();
 
-    let solana = NeonApi::new(opts.solana_url, opts.neon_pubkey);
+    tracing::info!(%opts.neon_pubkey, %opts.neon_config_pubkey, "starting");
+    let solana = NeonApi::new(opts.solana_url, opts.neon_pubkey, opts.neon_config_pubkey);
     let eth = EthApiImpl::new(pool, solana);
     let mut module = jsonrpsee::server::RpcModule::new(());
     module
