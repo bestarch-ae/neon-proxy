@@ -172,6 +172,7 @@ impl TransactionRepo {
         let sol_idx = tx.sol_ix_idx as i32;
         let sol_inner_idx = tx.sol_ix_inner_idx as i32;
         let neon_step_cnt = tx.neon_steps as i64;
+        let total_gas_used = tx.sum_gas_used;
 
         let v = match &tx.transaction.transaction {
             TransactionPayload::Legacy(legacy) => legacy.v,
@@ -180,6 +181,27 @@ impl TransactionRepo {
         let chain_id = tx.transaction.chain_id();
 
         let mut txn = self.pool.begin().await?;
+
+        sqlx::query!(
+            r#"
+                UPDATE
+                 neon_transaction_logs L
+                SET
+                 is_reverted = TRUE
+                WHERE L.tx_hash IN (
+                    SELECT neon_sig
+                    FROM neon_transactions
+                    WHERE
+                      neon_sig = $1 AND
+                      (neon_step_cnt > $2 OR (neon_step_cnt = $2 AND sum_gas_used > $3))
+                )
+            "#,
+            tx_hash.as_slice(),
+            neon_step_cnt,
+            PgU256::from(total_gas_used) as PgU256,
+        )
+        .execute(&mut *txn)
+        .await?;
 
         for log in &tx.events {
             /* not a real eth event */
@@ -236,24 +258,6 @@ impl TransactionRepo {
             .execute(&mut *txn)
             .await?;
         }
-
-        sqlx::query!(
-            r#"
-                UPDATE
-                 neon_transaction_logs L
-                SET
-                 is_reverted = TRUE
-                WHERE L.tx_hash IN ( 
-                    SELECT neon_sig
-                    FROM neon_transactions
-                    WHERE neon_step_cnt > $1 AND neon_sig = $2
-                )
-            "#,
-            neon_step_cnt,
-            tx_hash.as_slice()
-        )
-        .execute(&mut *txn)
-        .await?;
 
         sqlx::query!(
             r#"
