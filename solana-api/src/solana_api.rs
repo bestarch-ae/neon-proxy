@@ -122,6 +122,10 @@ impl SolanaApi {
             .await
     }
 
+    pub async fn get_slot(&self) -> ClientResult<Slot> {
+        self.client.get_slot().await
+    }
+
     pub async fn get_block(&self, slot: Slot) -> ClientResult<UiConfirmedBlock> {
         metrics().get_block.inc();
         self.client

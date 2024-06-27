@@ -117,6 +117,10 @@ async fn main() -> Result<()> {
                 println!("===== Purged Block {slot} =====");
                 println!();
             }
+            LedgerItem::ReliableLastEmptySlot(slot) => {
+                println!("===== Reliable Last Empty Slot {slot} =====");
+                println!();
+            }
         }
     }
     Ok(())

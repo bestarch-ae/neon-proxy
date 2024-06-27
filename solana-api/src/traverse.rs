@@ -117,6 +117,7 @@ pub enum LedgerItem {
     Block(SolanaBlock),
     FinalizedBlock(u64),
     PurgedBlock(u64),
+    ReliableLastEmptySlot(u64),
 }
 
 #[derive(Debug, Clone)]
@@ -229,6 +230,9 @@ impl TraverseLedger {
                     }
                     Ok(LedgerItem::Block(block))
                 }
+                Ok(InnerLedgerItem::ReliableLastEmptySlot(slot)) => {
+                    Ok(LedgerItem::ReliableLastEmptySlot(slot))
+                }
             })
         }
     }
@@ -239,6 +243,7 @@ impl TraverseLedger {
 enum InnerLedgerItem {
     Transaction(SolanaTransaction),
     Block(SolanaBlock),
+    ReliableLastEmptySlot(u64),
 }
 
 impl From<InnerLedgerItem> for LedgerItem {
@@ -246,12 +251,14 @@ impl From<InnerLedgerItem> for LedgerItem {
         match value {
             InnerLedgerItem::Transaction(tx) => Self::Transaction(tx),
             InnerLedgerItem::Block(block) => Self::Block(block),
+            InnerLedgerItem::ReliableLastEmptySlot(slot) => Self::ReliableLastEmptySlot(slot),
         }
     }
 }
 
 struct InnerTraverseLedger {
     last_observed: Option<Signature>,
+    reliable_last_empty_slot: Option<u64>,
     api: SolanaApi,
     // Sigatures buffer. Starts with the oldest/last processed, ends with the most recent.
     // TODO: Limit this
@@ -269,6 +276,7 @@ impl InnerTraverseLedger {
         Self {
             api,
             last_observed: config.last_observed,
+            reliable_last_empty_slot: None,
             buffer: VecDeque::new(),
             cached_block: None,
             next_request: Instant::now(),
@@ -284,6 +292,9 @@ impl InnerTraverseLedger {
     }
 
     async fn try_next(&mut self) -> Result<InnerLedgerItem, TraverseError> {
+        if let Some(slot) = self.reliable_last_empty_slot.take() {
+            return Ok(InnerLedgerItem::ReliableLastEmptySlot(slot));
+        }
         let (idx, signature) = {
             let block = self.get_block().await?;
             if let Some(result) = block.next_transaction() {
@@ -427,6 +438,8 @@ impl InnerTraverseLedger {
         // the ledger backwards in batches. We store the earliest transaction signature from
         // the last batch (`earliest`), so we can set the upper limit for the next batch.
 
+        self.reliable_last_empty_slot = None;
+        let mut latest_slot = None;
         // Last observed during this invocation.
         let mut last_observed = None;
         // Hash of the earliest transaction in a batch.
@@ -446,6 +459,16 @@ impl InnerTraverseLedger {
             );
             // Sorted from the most recent to the oldest
             let txs = loop {
+                if earliest.is_none() {
+                    match self.api.get_slot().await {
+                        Ok(slot) => {
+                            latest_slot = Some(slot);
+                        }
+                        Err(err) => {
+                            tracing::error!(%err, "could not get latest slot");
+                        }
+                    }
+                }
                 let res = self
                     .api
                     .get_signatures_for_address(
@@ -474,6 +497,9 @@ impl InnerTraverseLedger {
                     continue;
                 }
                 tracing::debug!("stopping traverse, empty response");
+                if let Some(latest_slot) = latest_slot {
+                    self.reliable_last_empty_slot.replace(latest_slot);
+                }
                 break 'outer;
             }
             empty_retries = 0;

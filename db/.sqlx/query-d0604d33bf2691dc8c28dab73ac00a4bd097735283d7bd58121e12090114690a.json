@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT MAX(slot) AS \"slot!\"\n                FROM (\n                    SELECT MAX(block_slot) AS slot\n                    FROM solana_blocks\n                    WHERE is_finalized = $1 OR $2\n                    UNION ALL\n                    SELECT MAX(block_slot) AS slot\n                    FROM reliable_empty_slot\n                ) AS combined_slots\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "slot!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d0604d33bf2691dc8c28dab73ac00a4bd097735283d7bd58121e12090114690a"
+}

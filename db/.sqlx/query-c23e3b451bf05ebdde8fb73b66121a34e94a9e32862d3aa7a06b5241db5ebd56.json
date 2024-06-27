@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM reliable_empty_slot",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "c23e3b451bf05ebdde8fb73b66121a34e94a9e32862d3aa7a06b5241db5ebd56"
+}

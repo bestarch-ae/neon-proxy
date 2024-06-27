@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO reliable_empty_slot (block_slot) VALUES ($1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1dac0f5f9647427104214fa9ee7b8de4fc202f0d47353ee9821f92b595360043"
+}

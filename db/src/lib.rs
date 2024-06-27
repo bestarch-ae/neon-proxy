@@ -1,4 +1,5 @@
 mod block;
+mod reliable_empty_slot;
 mod transaction;
 
 use std::str::FromStr;
@@ -11,6 +12,7 @@ use sqlx::PgPool;
 use thiserror::Error;
 
 pub use block::{BlockBy, BlockRepo};
+pub use reliable_empty_slot::ReliableEmptySlotRepo;
 pub use transaction::{RichLog, RichLogBy, TransactionBy, TransactionRepo, WithBlockhash};
 
 pub async fn connect(url: &str) -> Result<PgPool, sqlx::Error> {

@@ -25,7 +25,7 @@ use rpc_api_types::{
 use sqlx::PgPool;
 
 use common::types::NeonTxInfo;
-use db::WithBlockhash;
+use db::{ReliableEmptySlotRepo, WithBlockhash};
 
 use crate::convert::convert_filters;
 use crate::convert::convert_rich_log;
@@ -44,16 +44,19 @@ pub struct EthApiImpl {
     transactions: ::db::TransactionRepo,
     blocks: ::db::BlockRepo,
     neon_api: NeonApi,
+    reliable_empty_slots: ReliableEmptySlotRepo,
 }
 
 impl EthApiImpl {
     pub fn new(pool: PgPool, neon_api: NeonApi) -> Self {
         let transactions = ::db::TransactionRepo::new(pool.clone());
-        let blocks = ::db::BlockRepo::new(pool);
+        let blocks = ::db::BlockRepo::new(pool.clone());
+        let reliable_empty_slots = ReliableEmptySlotRepo::new(pool);
         Self {
             transactions,
             blocks,
             neon_api,
+            reliable_empty_slots,
         }
     }
 
@@ -188,10 +191,10 @@ impl EthApiServer for EthApiImpl {
     /// Returns the number of most recent block.
     /// TODO: why is this not async?
     fn block_number(&self) -> RpcResult<U256> {
-        let blocks = self.blocks.clone();
+        let reliable_empty_slots = self.reliable_empty_slots.clone();
         let num = tokio::task::block_in_place(move || {
             tokio::runtime::Handle::current()
-                .block_on(async move { blocks.latest_number(false).await })
+                .block_on(async move { reliable_empty_slots.latest_number(false).await })
         })
         .map_err(Error::from)?;
         Ok(U256::from(num))
