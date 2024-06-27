@@ -244,8 +244,4 @@
         data_offset BIGINT,
         data BYTEA
     );
-    CREATE INDEX IF NOT EXISTS pubkey_slot ON neon_holder_log(pubkey, block_slot, tx_idx);
-
-    CREATE TABLE IF NOT EXISTS reliable_empty_slot (
-        block_slot BIGINT PRIMARY KEY
-    );
+    CREATE INDEX IF NOT EXISTS pubkey_slot ON neon_holder_log(pubkey, block_slot, tx_idx);-- Add migration script here
