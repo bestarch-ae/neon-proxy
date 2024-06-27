@@ -122,8 +122,12 @@ impl SolanaApi {
             .await
     }
 
-    pub async fn get_slot(&self) -> ClientResult<Slot> {
-        self.client.get_slot().await
+    pub async fn get_slot_with_commitment(&self) -> ClientResult<Slot> {
+        self.client
+            .get_slot_with_commitment(CommitmentConfig {
+                commitment: self.commitment,
+            })
+            .await
     }
 
     pub async fn get_block(&self, slot: Slot) -> ClientResult<UiConfirmedBlock> {

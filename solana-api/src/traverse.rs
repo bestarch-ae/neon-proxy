@@ -460,7 +460,7 @@ impl InnerTraverseLedger {
             // Sorted from the most recent to the oldest
             let txs = loop {
                 if earliest.is_none() {
-                    match self.api.get_slot().await {
+                    match self.api.get_slot_with_commitment().await {
                         Ok(slot) => {
                             latest_slot = Some(slot);
                         }
