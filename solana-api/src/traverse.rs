@@ -292,8 +292,14 @@ impl InnerTraverseLedger {
     }
 
     async fn try_next(&mut self) -> Result<InnerLedgerItem, TraverseError> {
-        if let Some(slot) = self.reliable_last_empty_slot.take() {
-            return Ok(InnerLedgerItem::ReliableLastEmptySlot(slot));
+        // we need to check this before we call self.get_block(), because it always returns a block
+        // and fills the buffer. we should also make sure that we aren't in the middle of processing
+        // a block, meaning last return value was a block, which means that we don't have a cached
+        // block anymore.
+        if self.buffer.is_empty() && self.cached_block.is_none() {
+            if let Some(slot) = self.reliable_last_empty_slot.take() {
+                return Ok(InnerLedgerItem::ReliableLastEmptySlot(slot));
+            }
         }
         let (idx, signature) = {
             let block = self.get_block().await?;
@@ -579,12 +585,16 @@ impl InnerTraverseLedger {
             "found new signatures"
         );
 
-        self.buffer.extend(new_signatures);
-        if self.buffer.is_empty() {
-            if let Some(latest_slot) = latest_slot {
+        if let Some(latest_slot) = latest_slot {
+            if new_signatures
+                .back()
+                .map_or(true, |first_signature| first_signature.slot < latest_slot)
+            {
                 self.reliable_last_empty_slot.replace(latest_slot);
             }
         }
+
+        self.buffer.extend(new_signatures);
         metrics().traverse.buffer_len.set(self.buffer.len() as i64);
         metrics().traverse.uncommited_buffer_len.set(0);
     }
