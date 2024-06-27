@@ -12,7 +12,7 @@ use solana_sdk::slot_history::Slot;
 use solana_sdk::transaction::{Result as TransactionResult, VersionedTransaction};
 use solana_transaction_status::InnerInstructions;
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub struct TxHash([u8; 32]);
 
 impl TxHash {
@@ -42,6 +42,12 @@ impl TryFrom<Vec<u8>> for TxHash {
 impl Display for TxHash {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "0x{}", hex::encode(self.0))
+    }
+}
+
+impl std::fmt::Debug for TxHash {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.0))
     }
 }
 
@@ -104,6 +110,7 @@ pub struct NeonTxInfo {
 
     pub gas_used: U256,
     pub sum_gas_used: U256, // TODO: What is this?
+    pub neon_steps: u64,
 
     // Solana index
     // TODO: Should probably be Arc-ed or Bytes
@@ -114,7 +121,7 @@ pub struct NeonTxInfo {
     pub sol_ix_idx: u64,
     pub sol_ix_inner_idx: u64,
 
-    pub status: u8, // TODO: Why TEXT in DB?
+    pub status: u8,
     pub is_completed: bool,
     pub is_cancelled: bool,
 }
@@ -229,7 +236,7 @@ impl EventKind {
 #[derive(Debug, Clone)]
 pub struct EventLog {
     pub event_type: EventKind,
-    pub is_hidden: bool, // TODO: WTF? Do we store hidden events?
+    pub is_hidden: bool,
     pub is_reverted: bool,
 
     pub address: Option<Address>,

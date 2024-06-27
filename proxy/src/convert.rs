@@ -171,7 +171,7 @@ pub fn neon_to_eth_receipt(
                     block_number: Some(tx.sol_slot),
                     block_timestamp: None,
                     transaction_hash: Some(B256::from(tx.neon_signature.as_array())),
-                    log_index: Some(event.tx_log_idx),
+                    log_index: Some(event.blk_log_idx),
                     removed: false,
                 })
             })

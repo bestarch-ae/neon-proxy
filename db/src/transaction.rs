@@ -148,11 +148,11 @@ impl TransactionRepo {
         sqlx::query!(
             r#"
             UPDATE neon_transactions
-            SET 
+            SET
                is_canceled = true,
                block_slot = $1,
-               gas_used = $2, 
-               sum_gas_used = $2 
+               gas_used = $2,
+               sum_gas_used = $2
             WHERE neon_sig = $3 AND is_completed = false
             "#,
             slot as i64,
@@ -171,6 +171,8 @@ impl TransactionRepo {
         let sol_sig = &tx.sol_signature;
         let sol_idx = tx.sol_ix_idx as i32;
         let sol_inner_idx = tx.sol_ix_inner_idx as i32;
+        let neon_step_cnt = tx.neon_steps as i64;
+        let total_gas_used = tx.sum_gas_used;
 
         let v = match &tx.transaction.transaction {
             TransactionPayload::Legacy(legacy) => legacy.v,
@@ -179,6 +181,27 @@ impl TransactionRepo {
         let chain_id = tx.transaction.chain_id();
 
         let mut txn = self.pool.begin().await?;
+
+        sqlx::query!(
+            r#"
+                UPDATE
+                 neon_transaction_logs L
+                SET
+                 is_reverted = TRUE
+                WHERE L.tx_hash IN (
+                    SELECT neon_sig
+                    FROM neon_transactions
+                    WHERE
+                      neon_sig = $1 AND
+                      (neon_step_cnt > $2 OR (neon_step_cnt = $2 AND sum_gas_used > $3))
+                )
+            "#,
+            tx_hash.as_slice(),
+            neon_step_cnt,
+            PgU256::from(total_gas_used) as PgU256,
+        )
+        .execute(&mut *txn)
+        .await?;
 
         for log in &tx.events {
             /* not a real eth event */
@@ -262,12 +285,13 @@ impl TransactionRepo {
                 v, r, s,
                 chain_id,
                 calldata,
-                logs
+                logs,
+                neon_step_cnt
             )
             VALUES($1, $2, $3, $4, $5, $6,
                    $7, $8, $9, $10, $11, $12,
                    $13, $14, $15, $16, $17, $18,
-                   $19, $20, $21, $22, $23, $24, $25)
+                   $19, $20, $21, $22, $23, $24, $25, $26)
             ON CONFLICT (neon_sig)
             DO UPDATE SET
                block_slot = $7,
@@ -278,7 +302,8 @@ impl TransactionRepo {
                sol_ix_idx = $5,
                sol_ix_inner_idx = $6,
                gas_used = $13,
-               sum_gas_used = $14
+               sum_gas_used = $14,
+               neon_step_cnt = $26
             "#,
             tx_hash.as_slice(),                                                // 1
             tx.tx_type as i32,                                                 // 2
@@ -304,7 +329,8 @@ impl TransactionRepo {
             PgU256::from(tx.transaction.s()) as PgU256,                        // 22
             chain_id.map(|x| x as i64),                                        // 23
             tx.transaction.call_data(),                                        // 24
-            &[]                                                                /* 25 logs */
+            &[],                                                               /* 25 logs */
+            neon_step_cnt                                                      // 26
         )
         .execute(&mut *txn)
         .await?;
@@ -328,7 +354,7 @@ impl TransactionRepo {
                  sum_gas_used as "sum_gas_used!", to_addr as "to_addr?: PgAddress", contract as "contract?: PgAddress",
                  status "status!", is_canceled as "is_canceled!", is_completed as "is_completed!", 
                  v "v!", r as "r!", s as "s!", chain_id,
-                 calldata as "calldata!",
+                 calldata as "calldata!", neon_step_cnt as "neon_step_cnt!",
                  B.block_hash as "block_hash!: PgSolanaBlockHash"
                FROM neon_transactions T
                LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
@@ -360,7 +386,7 @@ impl TransactionRepo {
                  sum_gas_used, to_addr, contract,
                  status, is_canceled, is_completed, 
                  v, r, s, chain_id,
-                 calldata,
+                 calldata, neon_step_cnt,
                  B.block_hash,
 
                  address, log_idx, tx_log_idx,
@@ -371,7 +397,7 @@ impl TransactionRepo {
                FROM neon_transactions T
                LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
                LEFT JOIN neon_transaction_logs L ON L.tx_hash = T.neon_sig
-               WHERE (neon_sig = $1 OR $2) AND (T.block_slot = $3 OR $4)
+               WHERE (neon_sig = $1 OR $2) AND (T.block_slot = $3 OR $4) AND L.is_reverted = FALSE
                ORDER BY (T.block_slot, T.tx_idx, T.neon_sig, L.tx_log_idx) ASC
            "#,
         )
@@ -503,6 +529,7 @@ struct NeonTransactionRow {
     chain_id: Option<i64>,
 
     calldata: Vec<u8>,
+    neon_step_cnt: i64,
     block_hash: Option<PgSolanaBlockHash>,
 }
 
@@ -647,6 +674,7 @@ impl NeonTransactionRow {
             status: self.status as u8,
             is_completed: self.is_completed,
             is_cancelled: self.is_canceled,
+            neon_steps: self.neon_step_cnt as u64,
         };
 
         Ok(WithBlockhash {

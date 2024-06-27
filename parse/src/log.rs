@@ -38,6 +38,7 @@ pub struct NeonLogInfo {
     pub sig: Option<TxHash>,
     pub ix: Option<NeonLogTxIx>,
     pub ret: Option<NeonLogTxReturn>,
+    pub steps: Option<NeonLogTxSteps>,
     pub event_list: Vec<NeonLogTxEvent>,
     pub is_truncated: bool,
     pub is_already_finalized: bool,
@@ -53,6 +54,13 @@ impl NeonLogInfo {
         tracing::debug!("ix gas_used: {}", gas);
         gas
     }
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct NeonLogTxSteps {
+    pub steps: u64,
+    pub total_steps: u64,
 }
 
 #[allow(dead_code)]
@@ -298,8 +306,25 @@ impl Mnemonic {
         warn!("miner opcode not implemented yet")
     }
 
-    fn decode_steps(_input: &str) {
-        warn!("steps opcode not implemented yet")
+    // Unpacks number of evm steps:
+    // STEP <bytes-le - the number of iteration EVM steps> <bytes-le - the total number of EVM steps>
+    fn decode_steps(input: &str) -> Result<NeonLogTxSteps, Error> {
+        let words = input.split(' ').collect::<Vec<_>>();
+        if words.len() < 2 {
+            error!("Invalid STEPS");
+            return Err(Error::InvalidEvent);
+        }
+        let mut buf = [0u8; 32];
+        let len = BASE64.decode_slice(words[0].as_bytes(), &mut buf)?;
+        assert_eq!(len, 8);
+        let steps = u64::from_le_bytes(*array_ref![buf, 0, 8]);
+
+        let len = BASE64.decode_slice(words[1].as_bytes(), &mut buf)?;
+        assert_eq!(len, 8);
+        let total_steps = u64::from_le_bytes(*array_ref![buf, 0, 8]);
+        tracing::info!("steps: {} {}", steps, total_steps);
+
+        Ok(NeonLogTxSteps { steps, total_steps })
     }
 }
 
@@ -354,6 +379,7 @@ pub fn parse(
     let mut neon_tx_sig = None;
     let mut neon_tx_ix = None;
     let mut neon_tx_return = None;
+    let mut neon_tx_steps = None;
     let mut event_list = Vec::new();
     let mut inside_neon = false;
     let mut invoke_depth = 0;
@@ -436,7 +462,7 @@ pub fn parse(
                     Mnemonic::decode_miner(rest);
                 }
                 Mnemonic::Steps => {
-                    Mnemonic::decode_steps(rest);
+                    neon_tx_steps = Some(Mnemonic::decode_steps(rest)?);
                 }
             }
         }
@@ -496,6 +522,7 @@ pub fn parse(
         sig: neon_tx_sig,
         ix: neon_tx_ix,
         ret: neon_tx_return,
+        steps: neon_tx_steps,
         event_list,
         is_truncated,
         is_already_finalized,

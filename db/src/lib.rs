@@ -14,7 +14,12 @@ pub use block::{BlockBy, BlockRepo};
 pub use transaction::{RichLog, RichLogBy, TransactionBy, TransactionRepo, WithBlockhash};
 
 pub async fn connect(url: &str) -> Result<PgPool, sqlx::Error> {
-    PgPool::connect(url).await
+    let migrations = sqlx::migrate!("../schemas/migrations");
+    let pool = PgPool::connect(url).await?;
+    tracing::info!("running migrations");
+    migrations.run(&pool).await?;
+    tracing::info!("migrations successful");
+    Ok(pool)
 }
 
 #[derive(Debug, Error)]
