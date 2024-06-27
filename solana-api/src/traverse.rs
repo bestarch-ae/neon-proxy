@@ -497,9 +497,6 @@ impl InnerTraverseLedger {
                     continue;
                 }
                 tracing::debug!("stopping traverse, empty response");
-                if let Some(latest_slot) = latest_slot {
-                    self.reliable_last_empty_slot.replace(latest_slot);
-                }
                 break 'outer;
             }
             empty_retries = 0;
@@ -583,6 +580,11 @@ impl InnerTraverseLedger {
         );
 
         self.buffer.extend(new_signatures);
+        if self.buffer.is_empty() {
+            if let Some(latest_slot) = latest_slot {
+                self.reliable_last_empty_slot.replace(latest_slot);
+            }
+        }
         metrics().traverse.buffer_len.set(self.buffer.len() as i64);
         metrics().traverse.uncommited_buffer_len.set(0);
     }
