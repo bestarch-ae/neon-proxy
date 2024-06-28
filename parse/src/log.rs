@@ -233,6 +233,7 @@ impl Mnemonic {
             b"STOP" => EventKind::ExitStop,
             b"RETURN" => EventKind::ExitReturn,
             b"SELFDESTRUCT" => EventKind::ExitSelfDestruct,
+            b"SENDALL" => EventKind::ExitSendAll,
             b"REVERT" => {
                 data = BASE64.decode(split[1])?;
                 EventKind::ExitRevert
