@@ -59,7 +59,8 @@ async fn main() -> Result<()> {
     let tx_repo = db::TransactionRepo::new(pool.clone());
     let sig_repo = db::SolanaSignaturesRepo::new(pool.clone());
     let holder_repo = db::HolderRepo::new(pool.clone());
-    let block_repo = db::BlockRepo::new(pool);
+    let block_repo = db::BlockRepo::new(pool.clone());
+    let reliable_empty_slot_repo = db::ReliableEmptySlotRepo::new(pool);
 
     let last_signature = sig_repo.get_latest().await?;
     let from = opts.from.or(last_signature);
@@ -233,6 +234,14 @@ async fn main() -> Result<()> {
                     continue;
                 }
                 tracing::info!(slot, "block was purged");
+            }
+            Ok(LedgerItem::ReliableLastEmptySlot(slot)) => {
+                if let Err(err) = reliable_empty_slot_repo.update_or_insert(slot).await {
+                    tracing::warn!(%err, slot, "failed updating reliable empty slot");
+                    metrics().database_errors.inc();
+                    continue;
+                }
+                tracing::info!(slot, "reliable empty slot was updated");
             }
             Err(err) => {
                 tracing::warn!(?err, "failed to retrieve transaction");

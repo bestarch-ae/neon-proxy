@@ -117,6 +117,7 @@ pub enum LedgerItem {
     Block(SolanaBlock),
     FinalizedBlock(u64),
     PurgedBlock(u64),
+    ReliableLastEmptySlot(u64),
 }
 
 #[derive(Debug, Clone)]
@@ -229,6 +230,9 @@ impl TraverseLedger {
                     }
                     Ok(LedgerItem::Block(block))
                 }
+                Ok(InnerLedgerItem::ReliableLastEmptySlot(slot)) => {
+                    Ok(LedgerItem::ReliableLastEmptySlot(slot))
+                }
             })
         }
     }
@@ -239,6 +243,7 @@ impl TraverseLedger {
 enum InnerLedgerItem {
     Transaction(SolanaTransaction),
     Block(SolanaBlock),
+    ReliableLastEmptySlot(u64),
 }
 
 impl From<InnerLedgerItem> for LedgerItem {
@@ -246,12 +251,14 @@ impl From<InnerLedgerItem> for LedgerItem {
         match value {
             InnerLedgerItem::Transaction(tx) => Self::Transaction(tx),
             InnerLedgerItem::Block(block) => Self::Block(block),
+            InnerLedgerItem::ReliableLastEmptySlot(slot) => Self::ReliableLastEmptySlot(slot),
         }
     }
 }
 
 struct InnerTraverseLedger {
     last_observed: Option<Signature>,
+    reliable_last_empty_slot: Option<u64>,
     api: SolanaApi,
     // Sigatures buffer. Starts with the oldest/last processed, ends with the most recent.
     // TODO: Limit this
@@ -269,6 +276,7 @@ impl InnerTraverseLedger {
         Self {
             api,
             last_observed: config.last_observed,
+            reliable_last_empty_slot: None,
             buffer: VecDeque::new(),
             cached_block: None,
             next_request: Instant::now(),
@@ -284,6 +292,15 @@ impl InnerTraverseLedger {
     }
 
     async fn try_next(&mut self) -> Result<InnerLedgerItem, TraverseError> {
+        // we need to check this before we call self.get_block(), because it always returns a block
+        // and fills the buffer. we should also make sure that we aren't in the middle of processing
+        // a block, meaning last return value was a block, which means that we don't have a cached
+        // block anymore.
+        if self.buffer.is_empty() && self.cached_block.is_none() {
+            if let Some(slot) = self.reliable_last_empty_slot.take() {
+                return Ok(InnerLedgerItem::ReliableLastEmptySlot(slot));
+            }
+        }
         let (idx, signature) = {
             let block = self.get_block().await?;
             if let Some(result) = block.next_transaction() {
@@ -427,6 +444,8 @@ impl InnerTraverseLedger {
         // the ledger backwards in batches. We store the earliest transaction signature from
         // the last batch (`earliest`), so we can set the upper limit for the next batch.
 
+        self.reliable_last_empty_slot = None;
+        let mut latest_slot = None;
         // Last observed during this invocation.
         let mut last_observed = None;
         // Hash of the earliest transaction in a batch.
@@ -446,6 +465,16 @@ impl InnerTraverseLedger {
             );
             // Sorted from the most recent to the oldest
             let txs = loop {
+                if earliest.is_none() {
+                    match self.api.get_slot_with_commitment().await {
+                        Ok(slot) => {
+                            latest_slot = Some(slot);
+                        }
+                        Err(err) => {
+                            tracing::error!(%err, "could not get latest slot");
+                        }
+                    }
+                }
                 let res = self
                     .api
                     .get_signatures_for_address(
@@ -555,6 +584,15 @@ impl InnerTraverseLedger {
             first = ?new_signatures.front(), last = ?new_signatures.back(),
             "found new signatures"
         );
+
+        if let Some(latest_slot) = latest_slot {
+            if new_signatures
+                .back()
+                .map_or(true, |first_signature| first_signature.slot < latest_slot)
+            {
+                self.reliable_last_empty_slot.replace(latest_slot);
+            }
+        }
 
         self.buffer.extend(new_signatures);
         metrics().traverse.buffer_len.set(self.buffer.len() as i64);
