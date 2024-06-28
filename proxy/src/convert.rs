@@ -218,7 +218,7 @@ pub fn neon_event_to_log(event: &EventLog) -> PrimitiveLog {
     let topics = event
         .topic_list
         .iter()
-        .map(|topic| B256::new(topic.to_be_bytes())) // TODO: Is this ok?
+        .map(|topic| B256::new(topic.to_ne_bytes()))
         .collect();
     PrimitiveLog {
         address: Address(event.address.unwrap_or_default().0.into()),
@@ -260,7 +260,7 @@ fn build_block_header(block: SolanaBlock, txs: &[NeonTxInfo]) -> Result<Header, 
             let topics: Vec<_> = event
                 .topic_list
                 .iter()
-                .map(|topic| B256::new(topic.to_be_bytes())) // TODO: Is this ok?
+                .map(|topic| B256::new(topic.to_ne_bytes()))
                 .collect();
             let address = Address(event.address.unwrap_or_default().0.into());
             logs_bloom.accrue_raw_log(address, &topics);
