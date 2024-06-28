@@ -377,28 +377,38 @@ impl TransactionRepo {
     ) -> impl Stream<Item = Result<WithBlockhash<NeonTxInfo>, Error>> + '_ {
         let (slot, hash) = by.slot_hash();
         sqlx::query_as::<_, NeonTransactionRowWithLogs>(
-            r#"SELECT
-                 neon_sig, tx_type, from_addr,
-                 T.sol_sig, sol_ix_idx,
-                 sol_ix_inner_idx, T.block_slot,
-                 T.tx_idx, nonce, gas_price,
-                 gas_limit, value, gas_used,
-                 sum_gas_used, to_addr, contract,
-                 status, is_canceled, is_completed, 
-                 v, r, s, chain_id,
-                 calldata, neon_step_cnt,
-                 B.block_hash,
+            r#"SELECT * FROM
+                   (WITH tx_block_slot AS
+                    (
+                     SELECT block_slot
+                     FROM neon_transactions
+                     WHERE neon_sig = $1 OR ($2 AND block_slot = $3)
+                    )
+                    SELECT
+                      neon_sig, tx_type, from_addr,
+                      T.sol_sig, sol_ix_idx,
+                      sol_ix_inner_idx, T.block_slot,
+                      T.tx_idx, nonce, gas_price,
+                      gas_limit, value, gas_used,
+                      sum_gas_used, to_addr, contract,
+                      status, is_canceled, is_completed, 
+                      v, r, s, chain_id,
+                      calldata, neon_step_cnt,
+                      B.block_hash,
 
-                 address, log_idx, tx_log_idx,
-                 event_level, event_order,
-                 log_topic1, log_topic2,
-                 log_topic3, log_topic4,
-                 log_topic_cnt, log_data
-               FROM neon_transactions T
-               LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
-               LEFT JOIN neon_transaction_logs L ON L.tx_hash = T.neon_sig
-               WHERE (neon_sig = $1 OR $2) AND (T.block_slot = $3 OR $4) AND L.is_reverted = FALSE
-               ORDER BY (T.block_slot, T.tx_idx, T.neon_sig, L.tx_log_idx) ASC
+                      address, tx_log_idx,
+                      (row_number() OVER (PARTITION BY T.block_slot ORDER BY L.block_slot,L.tx_idx,L.tx_log_idx))-1 as log_idx,
+                      event_level, event_order,
+                      log_topic1, log_topic2,
+                      log_topic3, log_topic4,
+                      log_topic_cnt, log_data
+                    FROM neon_transactions T
+                    LEFT JOIN tx_block_slot S on T.block_slot = S.block_slot
+                    LEFT JOIN neon_transaction_logs L on L.tx_hash = T.neon_sig
+                    LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
+                    WHERE NOT COALESCE(L.is_reverted, FALSE)
+                    ORDER BY T.block_slot,T.tx_idx,tx_log_idx) TL
+                    WHERE TL.neon_sig = $1 OR ($2 AND block_slot = $3)
            "#,
         )
         .bind(hash.map(|hash| *hash.as_array()).unwrap_or_default())
@@ -438,14 +448,15 @@ impl TransactionRepo {
             NeonRichLogRow,
             r#"SELECT
                 address as "address?: PgAddress", tx_hash as "tx_hash!",
-                log_idx as "log_idx!", tx_log_idx as "tx_log_idx!", L.block_slot as "block_slot!",
+                row_number() over (partition by T.block_slot ORDER BY T.block_slot, T.tx_idx, tx_log_idx) as "log_idx!",
+                tx_log_idx as "tx_log_idx!", L.block_slot as "block_slot!",
                 event_level as "event_level!", event_order as "event_order!",
                 log_topic1 as "log_topic1?", log_topic2 as "log_topic2?",
                 log_topic3 as "log_topic3?", log_topic4 as "log_topic4?",
                 log_topic_cnt as "log_topic_cnt!", log_data as "log_data!",
                 block_hash as "block_hash!: PgSolanaBlockHash", block_time as "block_time!",
                 T.tx_idx as "tx_idx!"
-               FROM neon_transactions T 
+               FROM neon_transactions T
                LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
                INNER JOIN neon_transaction_logs L ON tx_hash = neon_sig
                WHERE T.is_completed
@@ -456,6 +467,7 @@ impl TransactionRepo {
                    AND (log_topic2 = ANY($9) OR $10)
                    AND (log_topic3 = ANY($11) OR $12)
                    AND (log_topic4 = ANY($13) OR $14)
+                   AND is_reverted = FALSE
                ORDER BY (T.block_slot, T.tx_idx, tx_log_idx) ASC
             "#,
             from.unwrap_or(0) as i64,                // 1
@@ -688,7 +700,7 @@ impl NeonTransactionRow {
 struct NeonTransactionLogRow {
     address: Option<PgAddress>,
     tx_log_idx: i32,
-    log_idx: i32,
+    log_idx: i64,
 
     event_level: i32,
     event_order: i32,
@@ -752,7 +764,7 @@ struct NeonRichLogRow {
     address: Option<PgAddress>,
     tx_hash: Vec<u8>,
     tx_log_idx: i32,
-    log_idx: i32,
+    log_idx: i64,
 
     event_level: i32,
     event_order: i32,
