@@ -146,6 +146,7 @@ pub enum EventKind {
     ExitReturn = 202,
     ExitSelfDestruct = 203,
     ExitRevert = 204,
+    ExitSendAll = 205,
 
     Return = 300,
     // Could not find this one
