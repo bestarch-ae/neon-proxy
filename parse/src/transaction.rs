@@ -132,7 +132,7 @@ pub fn parse(
         }
         tag::TX_STEP_FROM_DATA => {
             tracing::debug!("found tx step from data");
-            let tx = decode_step_from_ix(&bytes[1..], accounts, adb, neon_pubkey)?;
+            let tx = decode_step_from_ix(&bytes[1..])?;
             tracing::info!(
                 tx = hex::encode(tx.hash),
                 "iterative execution from instruction data"
@@ -202,7 +202,7 @@ pub fn parse(
         }
         tag::TX_STEP_FROM_DATA_DEPRECATED => {
             tracing::info!("found deprecated tx step from data");
-            let tx = decode_step_from_ix(&bytes[1..], accounts, adb, neon_pubkey)?;
+            let tx = decode_step_from_ix(&bytes[1..])?;
             ParseResult::TransactionStep(tx)
         }
         tag::TX_STEP_FROM_ACCOUNT_DEPRECATED => {
@@ -376,36 +376,13 @@ fn decode_step_from_account(
     todo!()
 }
 
-fn decode_step_from_ix(
-    bytes: &[u8],
-    accounts: &[Pubkey],
-    adb: &mut impl AccountsDb,
-    pubkey: Pubkey,
-) -> Result<Transaction, Error> {
-    use common::evm_loader::account::{TAG_HOLDER, TAG_STATE, TAG_STATE_FINALIZED};
-
+fn decode_step_from_ix(bytes: &[u8]) -> Result<Transaction, Error> {
     let _treasury_index = u32::from_le_bytes(*array_ref![bytes, 0, 4]);
     let _step_count = u64::from(u32::from_le_bytes(*array_ref![bytes, 4, 4]));
     // skip 4 bytes
     let message = &bytes[4 + 4 + 4..];
-    let storage_key = accounts[0];
-    let storage = adb
-        .get_by_key(&storage_key)
-        .ok_or(Error::AccountNotFound(storage_key))?;
-
-    let tag = common::evm_loader::account::tag(&pubkey, &storage).unwrap();
-    tracing::debug!(tag, "storage account tag");
-
-    match tag {
-        TAG_HOLDER | TAG_STATE_FINALIZED => {
-            let trx = Transaction::from_rlp(message)?;
-            Ok(trx)
-        }
-        TAG_STATE => {
-            todo!("TAG_STATE not implemented")
-        }
-        _ => todo!("unknown tag {} (not implemented)", tag),
-    }
+    let trx = Transaction::from_rlp(message)?;
+    Ok(trx)
 }
 
 fn decode_execute_from_ix(bytes: &[u8]) -> Result<Transaction, Error> {
