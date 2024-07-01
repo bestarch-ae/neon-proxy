@@ -115,6 +115,20 @@ impl EthApiImpl {
         Ok(Some(build_block(block, txs, full)?.into()))
     }
 
+    async fn get_slot_by_block_id(&self, block_id: BlockId) -> RpcResult<Option<u64>> {
+        match block_id {
+            BlockId::Hash(hash) => {
+                use common::solana_sdk::hash::Hash;
+                let hash = Hash::new_from_array(hash.block_hash.0);
+                let block = self
+                    .get_block(db::BlockBy::Hash(hash), false, false)
+                    .await?;
+                Ok(block.and_then(|block| block.header.number))
+            }
+            BlockId::Number(tag) => Ok(Some(self.find_slot(tag).await?)),
+        }
+    }
+
     async fn get_transaction(
         &self,
         by: db::TransactionBy,
@@ -344,15 +358,25 @@ impl EthApiServer for EthApiImpl {
     }
 
     /// Returns the balance of the account of given address.
-    async fn balance(&self, _address: Address, _block_number: Option<BlockId>) -> RpcResult<U256> {
+    async fn balance(&self, address: Address, block_number: Option<BlockId>) -> RpcResult<U256> {
         use crate::convert::ToReth;
         use common::evm_loader::types::Address;
 
+        let slot = if let Some(block_number) = block_number {
+            self.get_slot_by_block_id(block_number).await?
+        } else {
+            None
+        };
+
         let balance_address = BalanceAddress {
-            address: Address::from(<[u8; 20]>::from(_address.0)),
+            address: Address::from(<[u8; 20]>::from(address.0)),
             chain_id: CHAIN_ID,
         };
-        let balance = self.neon_api.get_balance(balance_address).await.unwrap(); // TODO: handle error
+        let balance = self
+            .neon_api
+            .get_balance(balance_address, slot)
+            .await
+            .unwrap(); // TODO: handle error
 
         Ok(balance.to_reth())
     }
@@ -370,18 +394,24 @@ impl EthApiServer for EthApiImpl {
     /// Returns the number of transactions sent from an address at given block number.
     async fn transaction_count(
         &self,
-        _address: Address,
-        _block_number: Option<BlockId>,
+        address: Address,
+        block_number: Option<BlockId>,
     ) -> RpcResult<U256> {
         use common::evm_loader::types::Address;
 
+        let slot = if let Some(block_number) = block_number {
+            self.get_slot_by_block_id(block_number).await?
+        } else {
+            None
+        };
+
         let balance_address = BalanceAddress {
-            address: Address::from(<[u8; 20]>::from(_address.0)),
+            address: Address::from(<[u8; 20]>::from(address.0)),
             chain_id: CHAIN_ID,
         };
         let balance = self
             .neon_api
-            .get_transaction_count(balance_address)
+            .get_transaction_count(balance_address, slot)
             .await
             .unwrap(); // TODO: handle error
 

@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use common::ethnum::U256;
 use common::neon_lib::commands::emulate::EmulateResponse;
-use common::neon_lib::rpc::{CloneRpcClient, RpcEnum};
+use common::neon_lib::rpc::{CallDbClient, CloneRpcClient, RpcEnum};
 use common::neon_lib::tracing::tracers::TracerTypeEnum;
-use common::neon_lib::types::{BalanceAddress, EmulateRequest, TxParams};
+use common::neon_lib::types::{BalanceAddress, ChDbConfig, EmulateRequest, TracerDb, TxParams};
 use common::neon_lib::{commands, NeonError};
 use common::solana_sdk::pubkey::Pubkey;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
@@ -14,8 +14,25 @@ use tokio::sync::oneshot;
 use tokio::task::LocalSet;
 
 #[derive(Debug)]
+struct Task {
+    slot: Option<u64>,
+    tx_index_in_block: Option<u64>,
+    cmd: TaskCommand,
+}
+
+impl Task {
+    pub fn new(cmd: TaskCommand, slot: Option<u64>, tx_index_in_block: Option<u64>) -> Self {
+        Self {
+            slot,
+            tx_index_in_block,
+            cmd,
+        }
+    }
+}
+
+#[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
-enum Task {
+enum TaskCommand {
     GetBalance {
         addr: BalanceAddress,
         response: oneshot::Sender<Result<U256, NeonError>>,
@@ -34,10 +51,24 @@ enum Task {
     },
 }
 
-#[derive(Clone)]
 struct Context {
-    client: CloneRpcClient,
+    rpc: RpcEnum,
     neon_pubkey: Pubkey,
+}
+
+async fn build_rpc(
+    rpc_client: &CloneRpcClient,
+    tracer_db: &TracerDb,
+    slot: Option<u64>,
+    tx_index_in_block: Option<u64>,
+) -> Result<RpcEnum, NeonError> {
+    if let Some(slot) = slot {
+        Ok(RpcEnum::CallDbClient(
+            CallDbClient::new(tracer_db.clone(), slot, tx_index_in_block).await?,
+        ))
+    } else {
+        Ok(RpcEnum::CloneRpcClient(rpc_client.clone()))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -46,8 +77,13 @@ pub struct NeonApi {
 }
 
 impl NeonApi {
-    pub fn new(url: String, neon_pubkey: Pubkey, config_key: Pubkey) -> Self {
-        let (tx, mut rx) = mpsc::channel(128);
+    pub fn new(
+        url: String,
+        neon_pubkey: Pubkey,
+        config_key: Pubkey,
+        tracer_db_config: ChDbConfig,
+    ) -> Self {
+        let (tx, mut rx) = mpsc::channel::<Task>(128);
 
         std::thread::spawn(move || {
             let rt = Builder::new_current_thread().enable_all().build().unwrap();
@@ -61,13 +97,14 @@ impl NeonApi {
                     max_retries: 10,
                     key_for_config: config_key,
                 };
-                let ctx = Context {
-                    client,
-                    neon_pubkey,
-                };
+                let tracer_db = TracerDb::new(&tracer_db_config);
                 while let Some(task) = rx.recv().await {
-                    let ctx = ctx.clone();
-                    tokio::task::spawn_local(Self::execute(task, ctx));
+                    // TODO: unwrap used
+                    let rpc = build_rpc(&client, &tracer_db, task.slot, task.tx_index_in_block)
+                        .await
+                        .unwrap();
+                    let ctx = Context { rpc, neon_pubkey };
+                    tokio::task::spawn_local(Self::execute(task.cmd, ctx));
                 }
             });
 
@@ -77,19 +114,35 @@ impl NeonApi {
         Self { channel: tx }
     }
 
-    pub async fn get_balance(&self, addr: BalanceAddress) -> Result<U256, NeonError> {
+    pub async fn get_balance(
+        &self,
+        addr: BalanceAddress,
+        slot: Option<u64>,
+    ) -> Result<U256, NeonError> {
         let (tx, rx) = oneshot::channel();
         self.channel
-            .send(Task::GetBalance { addr, response: tx })
+            .send(Task::new(
+                TaskCommand::GetBalance { addr, response: tx },
+                slot,
+                None,
+            ))
             .await
             .unwrap();
         rx.await.unwrap()
     }
 
-    pub async fn get_transaction_count(&self, addr: BalanceAddress) -> Result<u64, NeonError> {
+    pub async fn get_transaction_count(
+        &self,
+        addr: BalanceAddress,
+        slot: Option<u64>,
+    ) -> Result<u64, NeonError> {
         let (tx, rx) = oneshot::channel();
         self.channel
-            .send(Task::GetTransactionCount { addr, response: tx })
+            .send(Task::new(
+                TaskCommand::GetTransactionCount { addr, response: tx },
+                slot,
+                None,
+            ))
             .await
             .unwrap();
         rx.await.unwrap()
@@ -98,10 +151,14 @@ impl NeonApi {
     pub async fn call(&self, params: TxParams) -> Result<Vec<u8>, NeonError> {
         let (tx, rx) = oneshot::channel();
         self.channel
-            .send(Task::EmulateCall {
-                tx: params,
-                response: tx,
-            })
+            .send(Task::new(
+                TaskCommand::EmulateCall {
+                    tx: params,
+                    response: tx,
+                },
+                None,
+                None,
+            ))
             .await
             .unwrap();
         rx.await.unwrap()
@@ -110,10 +167,14 @@ impl NeonApi {
     pub async fn estimate_gas(&self, params: TxParams) -> Result<U256, NeonError> {
         let (tx, rx) = oneshot::channel();
         self.channel
-            .send(Task::EstimateGas {
-                tx: params,
-                response: tx,
-            })
+            .send(Task::new(
+                TaskCommand::EstimateGas {
+                    tx: params,
+                    response: tx,
+                },
+                None,
+                None,
+            ))
             .await
             .unwrap();
         let resp = rx.await.unwrap();
@@ -121,11 +182,10 @@ impl NeonApi {
         Ok(U256::from(resp?.used_gas))
     }
 
-    async fn execute(task: Task, ctx: Context) {
-        let rpc = RpcEnum::CloneRpcClient(ctx.client.clone());
-        match task {
-            Task::EstimateGas { tx, response } => {
-                let config = commands::get_config::execute(&rpc, ctx.neon_pubkey)
+    async fn execute(cmd: TaskCommand, ctx: Context) {
+        match cmd {
+            TaskCommand::EstimateGas { tx, response } => {
+                let config = commands::get_config::execute(&ctx.rpc, ctx.neon_pubkey)
                     .await
                     .expect("config didnt fail"); // TODO
 
@@ -137,9 +197,13 @@ impl NeonApi {
                     tx,
                     solana_overrides: None,
                 };
-                let resp =
-                    commands::emulate::execute(&rpc, ctx.neon_pubkey, req, None::<TracerTypeEnum>)
-                        .await;
+                let resp = commands::emulate::execute(
+                    &ctx.rpc,
+                    ctx.neon_pubkey,
+                    req,
+                    None::<TracerTypeEnum>,
+                )
+                .await;
                 let resp = match resp {
                     Ok((resp, _something)) => Ok(resp),
                     Err(err) => Err(err),
@@ -147,9 +211,9 @@ impl NeonApi {
                 let _ = response.send(resp);
             }
 
-            Task::EmulateCall { tx, response } => {
+            TaskCommand::EmulateCall { tx, response } => {
                 tracing::info!(?tx, "emulate_call");
-                let config = commands::get_config::execute(&rpc, ctx.neon_pubkey)
+                let config = commands::get_config::execute(&ctx.rpc, ctx.neon_pubkey)
                     .await
                     .expect("config didnt fail"); // TODO
 
@@ -161,9 +225,13 @@ impl NeonApi {
                     tx,
                     solana_overrides: None,
                 };
-                let resp =
-                    commands::emulate::execute(&rpc, ctx.neon_pubkey, req, None::<TracerTypeEnum>)
-                        .await;
+                let resp = commands::emulate::execute(
+                    &ctx.rpc,
+                    ctx.neon_pubkey,
+                    req,
+                    None::<TracerTypeEnum>,
+                )
+                .await;
                 tracing::info!(?resp, "emulate_call");
                 let resp = match resp {
                     Ok((resp, _something)) => Ok(resp.result),
@@ -172,8 +240,9 @@ impl NeonApi {
                 let _ = response.send(resp);
             }
 
-            Task::GetBalance { addr, response } => {
-                let resp = commands::get_balance::execute(&rpc, &ctx.neon_pubkey, &[addr]).await;
+            TaskCommand::GetBalance { addr, response } => {
+                let resp =
+                    commands::get_balance::execute(&ctx.rpc, &ctx.neon_pubkey, &[addr]).await;
                 tracing::info!(?resp, "get_balance");
                 let resp = match resp {
                     Ok(resp) => {
@@ -188,8 +257,9 @@ impl NeonApi {
                 let _ = response.send(resp);
             }
 
-            Task::GetTransactionCount { addr, response } => {
-                let resp = commands::get_balance::execute(&rpc, &ctx.neon_pubkey, &[addr]).await;
+            TaskCommand::GetTransactionCount { addr, response } => {
+                let resp =
+                    commands::get_balance::execute(&ctx.rpc, &ctx.neon_pubkey, &[addr]).await;
                 tracing::info!(?resp, "get_transaction_count");
                 let resp = match resp {
                     Ok(resp) => {
