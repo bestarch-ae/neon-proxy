@@ -388,7 +388,11 @@ impl TransactionRepo {
                       neon_sig, tx_type, from_addr,
                       T.sol_sig, sol_ix_idx,
                       sol_ix_inner_idx, T.block_slot,
-                      T.tx_idx, nonce, gas_price,
+                      CAST
+                          (row_number() OVER
+                               (PARTITION BY t.block_slot ORDER BY T.block_slot,T.tx_idx)-1
+                           AS INTEGER) as tx_idx,
+                      nonce, gas_price,
                       gas_limit, value, gas_used,
                       sum_gas_used, to_addr, contract,
                       status, is_canceled, is_completed, 
@@ -405,7 +409,7 @@ impl TransactionRepo {
                     FROM neon_transactions T
                     LEFT JOIN tx_block_slot S on T.block_slot = S.block_slot
                     LEFT JOIN (
-                        SELECT *  FROM neon_transaction_logs WHERE NOT COALESCE(is_reverted, FALSE)
+                        SELECT * FROM neon_transaction_logs WHERE NOT COALESCE(is_reverted, FALSE)
                         ) L ON L.tx_hash = T.neon_sig
                     LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
                     WHERE NOT COALESCE(L.is_reverted, FALSE)
@@ -498,7 +502,7 @@ impl TransactionRepo {
         let mut transactions: Vec<WithBlockhash<NeonTxInfo>> = Vec::new();
         let mut stream = self.fetch_with_events(by);
         while let Some(tx) = stream.try_next().await? {
-            tracing::info!(?tx, "found transaction");
+            tracing::debug!(?tx, "found transaction");
             if let Some(current_tx) = transactions.last_mut() {
                 if current_tx.inner.neon_signature == tx.inner.neon_signature {
                     current_tx.inner.events.extend(tx.inner.events);
