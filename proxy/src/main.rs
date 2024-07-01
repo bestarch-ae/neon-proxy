@@ -1,4 +1,5 @@
 use clap::Parser;
+use common::neon_lib::types::ChDbConfig;
 use common::solana_sdk::pubkey::Pubkey;
 use jsonrpsee::types::ErrorCode;
 use rpc_api::{EthApiServer, EthFilterApiServer};
@@ -65,6 +66,18 @@ struct Args {
     )]
     /// Solana endpoint
     solana_url: String,
+
+    #[arg(long, env, value_delimiter = ';')]
+    /// Tracer db urls, comma separated
+    neon_db_clickhouse_urls: Vec<String>,
+
+    #[arg(long, env)]
+    /// Trace db user
+    neon_db_clickhouse_user: Option<String>,
+
+    #[arg(long, env)]
+    /// Trace db password
+    neon_db_clickhouse_password: Option<String>,
 }
 
 #[tokio::main]
@@ -75,9 +88,19 @@ async fn main() {
     let opts = Args::parse();
 
     let pool = db::connect(&opts.pg_url).await.unwrap();
+    let tracer_db_config = ChDbConfig {
+        clickhouse_url: opts.neon_db_clickhouse_urls,
+        clickhouse_user: opts.neon_db_clickhouse_user,
+        clickhouse_password: opts.neon_db_clickhouse_password,
+    };
 
     tracing::info!(%opts.neon_pubkey, %opts.neon_config_pubkey, "starting");
-    let solana = NeonApi::new(opts.solana_url, opts.neon_pubkey, opts.neon_config_pubkey);
+    let solana = NeonApi::new(
+        opts.solana_url,
+        opts.neon_pubkey,
+        opts.neon_config_pubkey,
+        tracer_db_config,
+    );
     let eth = EthApiImpl::new(pool, solana);
     let mut module = jsonrpsee::server::RpcModule::new(());
     module
