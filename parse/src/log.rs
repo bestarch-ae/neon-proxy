@@ -93,9 +93,14 @@ enum Mnemonic {
     Exit,
     Gas,
     Steps,
+    Reset,
 }
 
 impl Mnemonic {
+    fn requires_arg(&self) -> bool {
+        !matches!(self, Mnemonic::Reset)
+    }
+
     fn decode_hash(s: &str) -> Result<TxHash, Error> {
         // TODO: figure it out, seems weird.
         // With 32 byte buf it reports OutputSliceTooSmall
@@ -345,6 +350,7 @@ impl FromStr for Mnemonic {
             "EXIT" => Ok(Mnemonic::Exit),
             "GAS" => Ok(Mnemonic::Gas),
             "STEPS" => Ok(Mnemonic::Steps),
+            "RESET" => Ok(Mnemonic::Reset),
             _ if s.starts_with("LOG") => {
                 let n = s.strip_prefix("LOG").unwrap();
                 let n = n.parse().map_err(|_| BadMnemonic)?;
@@ -358,12 +364,14 @@ impl FromStr for Mnemonic {
     }
 }
 
-fn parse_mnemonic(line: &str) -> Result<(Mnemonic, &str), Error> {
+fn parse_mnemonic(line: &str) -> Result<(Mnemonic, Option<&str>), Error> {
     tracing::debug!(?line, "parsing mnemonic");
 
-    let (mnemonic, rest) = line.split_once(' ').unwrap();
+    let parts: Vec<_> = line.splitn(2, ' ').collect();
+    let mnemonic = parts.first().ok_or(Error::InvalidLog)?;
     let mnemonic = BASE64.decode(mnemonic.as_bytes())?;
     let mnemonic = std::str::from_utf8(&mnemonic)?.parse()?;
+    let rest = parts.get(1).copied();
     Ok((mnemonic, rest))
 }
 
@@ -424,7 +432,15 @@ pub fn parse(
             let line = line.strip_prefix("Program data: ").unwrap();
             let (mnemonic, rest) = parse_mnemonic(line)?;
             tracing::debug!(?mnemonic, "parsing mnemonic");
+            let rest = mnemonic
+                .requires_arg()
+                .then_some(rest)
+                .flatten()
+                .ok_or(Error::InvalidLog)?;
             match mnemonic {
+                Mnemonic::Reset => {
+                    tracing::warn!("reset mnemonic not supported");
+                }
                 Mnemonic::Hash => {
                     if neon_tx_sig.is_some() {
                         warn!("HASH already exists");
