@@ -12,6 +12,7 @@ use tokio::runtime::Builder;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::sync::oneshot;
 use tokio::task::LocalSet;
+use tracing::{error, warn};
 
 #[derive(Debug)]
 struct Task {
@@ -58,14 +59,18 @@ struct Context {
 
 async fn build_rpc(
     rpc_client: &CloneRpcClient,
-    tracer_db: &TracerDb,
+    tracer_db: Option<&TracerDb>,
     slot: Option<u64>,
     tx_index_in_block: Option<u64>,
 ) -> Result<RpcEnum, NeonError> {
     if let Some(slot) = slot {
-        Ok(RpcEnum::CallDbClient(
-            CallDbClient::new(tracer_db.clone(), slot, tx_index_in_block).await?,
-        ))
+        if let Some(tracer_db) = tracer_db {
+            Ok(RpcEnum::CallDbClient(
+                CallDbClient::new(tracer_db.clone(), slot, tx_index_in_block).await?,
+            ))
+        } else {
+            Err(NeonError::InvalidChDbConfig)
+        }
     } else {
         Ok(RpcEnum::CloneRpcClient(rpc_client.clone()))
     }
@@ -97,12 +102,27 @@ impl NeonApi {
                     max_retries: 10,
                     key_for_config: config_key,
                 };
-                let tracer_db = TracerDb::new(&tracer_db_config);
+                let tracer_db = if tracer_db_config.clickhouse_url.is_empty() {
+                    warn!("Clickhouse url is empty, tracer db will not be used");
+                    None
+                } else {
+                    Some(TracerDb::new(&tracer_db_config))
+                };
                 while let Some(task) = rx.recv().await {
-                    // TODO: unwrap used
-                    let rpc = build_rpc(&client, &tracer_db, task.slot, task.tx_index_in_block)
-                        .await
-                        .unwrap();
+                    let rpc = match build_rpc(
+                        &client,
+                        tracer_db.as_ref(),
+                        task.slot,
+                        task.tx_index_in_block,
+                    )
+                    .await
+                    {
+                        Ok(rpc) => rpc,
+                        Err(err) => {
+                            error!("failed to build rpc: {err:?}");
+                            continue;
+                        }
+                    };
                     let ctx = Context { rpc, neon_pubkey };
                     tokio::task::spawn_local(Self::execute(task.cmd, ctx));
                 }
