@@ -1,3 +1,4 @@
+use either::Either;
 use thiserror::Error;
 
 use common::evm_loader::types::{Address, Transaction};
@@ -76,7 +77,7 @@ fn parse_transactions(
     let pubkeys = AccountKeys::new(tx.message.static_account_keys(), Some(loaded));
     let neon_idx = pubkeys.iter().position(|x| *x == neon_pubkey);
     let Some(neon_idx) = neon_idx else {
-        tracing::warn!("not a neon transaction");
+        tracing::debug!("not a neon transaction");
         return Ok(Default::default());
     };
     let mut actions = Vec::new();
@@ -232,6 +233,11 @@ pub fn parse(
     let loaded = &transaction.loaded_addresses;
     let actions = parse_transactions(tx, accountsdb, loaded, neon_pubkey)?;
 
+    // it's empty if transaction is not a neon transaction
+    if actions.is_empty() {
+        return Ok(Either::Left(std::iter::empty()));
+    }
+
     let log_info = log::parse(transaction.log_messages, neon_pubkey)?;
     tracing::info!(tx_hash = ?log_info.sig, steps = ?log_info.steps, "log");
 
@@ -246,7 +252,7 @@ pub fn parse(
                     .unwrap_or_default(),
             )
     });
-    Ok(iter)
+    Ok(Either::Right(iter))
 }
 
 #[cfg(test)]

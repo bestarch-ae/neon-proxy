@@ -20,7 +20,7 @@ use common::solana_sdk::slot_history::Slot;
 use common::solana_transaction_status::UiConfirmedBlock;
 use common::types::{SolanaBlock, SolanaTransaction};
 
-use crate::convert::{decode_ui_transaction, TxDecodeError};
+use crate::convert::{decode_confirmed_ui_transaction, TxDecodeError};
 use crate::metrics::metrics;
 use crate::solana_api::{SolanaApi, SIGNATURES_LIMIT};
 use crate::utils::ward;
@@ -322,7 +322,7 @@ impl InnerTraverseLedger {
             "could not request transaction {signature}"
         );
 
-        let mut tx = decode_ui_transaction(tx)
+        let mut tx = decode_confirmed_ui_transaction(tx)
             .inspect_err(|err| tracing::error!(%err, %signature, "could not decode transaction"))?;
         tx.tx_idx = idx;
 
@@ -346,7 +346,10 @@ impl InnerTraverseLedger {
                     txs.insert(candidate.signature);
                 }
             }
-            let block = retry!(self.api.get_block(slot), "failed requesting block {slot}");
+            let block = retry!(
+                self.api.get_block(slot, false),
+                "failed requesting block {slot}"
+            );
             tracing::debug!(
                 slot,
                 hash = block.blockhash,
