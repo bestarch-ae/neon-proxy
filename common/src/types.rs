@@ -5,7 +5,7 @@ use evm_loader::types::{Address, Transaction};
 
 use solana_sdk::clock::UnixTimestamp;
 use solana_sdk::hash::Hash;
-use solana_sdk::message::v0::LoadedAddresses;
+use solana_sdk::message::{v0::LoadedAddresses, AccountKeys};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 use solana_sdk::slot_history::Slot;
@@ -74,6 +74,16 @@ pub struct SolanaTransaction {
     pub inner_instructions: Vec<InnerInstructions>, // Do we really need this
     pub compute_units_consumed: u64,
     pub fee: u64,
+}
+
+impl SolanaTransaction {
+    pub fn has_key(&self, pubkey: Pubkey) -> bool {
+        let pubkeys = AccountKeys::new(
+            self.tx.message.static_account_keys(),
+            Some(&self.loaded_addresses),
+        );
+        pubkeys.iter().any(|pk| *pk == pubkey)
+    }
 }
 
 /// Represents instruction with NEON invocation inside. Inserted into `solana_neon_transations`.
