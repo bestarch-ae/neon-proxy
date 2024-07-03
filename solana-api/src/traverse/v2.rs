@@ -215,7 +215,7 @@ impl TraverseLedger {
         let inner_stream = stream_generator::generate_try_stream(
             move |mut stream: stream_generator::Yielder<Result<LedgerItem, TraverseError>>| async move {
                 for slot in range.step_by(1) {
-                    tracing::info!(%slot, "getting block");
+                    tracing::debug!(%slot, "getting block");
                     let mut current_slot = retry!(api.get_slot(commitment), "getting slot");
 
                     while slot > current_slot {
@@ -267,7 +267,7 @@ impl TraverseLedger {
                         .transactions_per_block
                         .observe(txs.len() as f64);
 
-                    tracing::info!(%slot, count = txs.len(), "fetched transactions");
+                    tracing::debug!(%slot, count = txs.len(), "fetched transactions");
                     stream
                         .send(Ok(LedgerItem::Block {
                             block,
@@ -283,47 +283,47 @@ impl TraverseLedger {
             tokio::pin!(inner_stream);
             let mut tracker = FinalizationTracker::init(api2, poll_interval).await?;
 
-            tokio::select! {
-                Ok(block_status) = tracker.next() => {
-                    let (slot, is_finalized) = block_status;
-                    stream.send(Ok(LedgerItem::BlockUpdate {
-                        slot,
-                        commitment: is_finalized.then_some(CommitmentLevel::Finalized)
-                    })).await;
-                }
-                Some(item) = inner_stream.next() => {
-                    match item {
-                        Ok(missing @ LedgerItem::MissingBlock { .. }) => {
-                            stream.send(Ok(missing)).await;
-                        }
-                        Ok(
-                            block @ LedgerItem::Block {
-                                commitment: CommitmentLevel::Finalized,
-                                ..
-                            },
-                        ) => {
-                            stream.send(Ok(block)).await;
-                        }
-                        Ok(block @ LedgerItem::Block { .. }) => {
-                            let slot = block.slot();
-                            let status = tracker.check_or_schedule_new_slot(slot);
-                            if matches!(status, BlockStatus::Finalized | BlockStatus::Purged) {
-                                stream.send(Ok(LedgerItem::BlockUpdate {
-                                    slot,
-                                    commitment: (status == BlockStatus::Finalized).then_some(CommitmentLevel::Finalized)
-                                })).await;
+            loop {
+                tokio::select! {
+                    Ok(block_status) = tracker.next() => {
+                        let (slot, is_finalized) = block_status;
+                        stream.send(Ok(LedgerItem::BlockUpdate {
+                            slot,
+                            commitment: is_finalized.then_some(CommitmentLevel::Finalized)
+                        })).await;
+                    }
+                    Some(item) = inner_stream.next() => {
+                        match item {
+                            Ok(missing @ LedgerItem::MissingBlock { .. }) => {
+                                stream.send(Ok(missing)).await;
                             }
-                            stream.send(Ok(block)).await;
-                        }
-                        Ok(update) => stream.send(Ok(update)).await,
-                        Err(err) => {
-                            stream.send(Err(err)).await;
+                            Ok(
+                                block @ LedgerItem::Block {
+                                    commitment: CommitmentLevel::Finalized,
+                                    ..
+                                },
+                            ) => {
+                                stream.send(Ok(block)).await;
+                            }
+                            Ok(block @ LedgerItem::Block { .. }) => {
+                                let slot = block.slot();
+                                let status = tracker.check_or_schedule_new_slot(slot);
+                                if matches!(status, BlockStatus::Finalized | BlockStatus::Purged) {
+                                    stream.send(Ok(LedgerItem::BlockUpdate {
+                                        slot,
+                                        commitment: (status == BlockStatus::Finalized).then_some(CommitmentLevel::Finalized)
+                                    })).await;
+                                }
+                                stream.send(Ok(block)).await;
+                            }
+                            Ok(update) => stream.send(Ok(update)).await,
+                            Err(err) => {
+                                stream.send(Err(err)).await;
+                            }
                         }
                     }
                 }
             }
-
-            Ok(())
         })
     }
 }
