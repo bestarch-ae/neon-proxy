@@ -210,6 +210,7 @@ impl TraverseLedger {
         let is_finalized = matches!(self.commitment, CommitmentLevel::Finalized);
         let poll_interval = self.config.status_poll_interval;
         let target = self.config.target_key;
+        let only_success = self.config.only_success;
 
         let inner_stream = stream_generator::generate_try_stream(
             move |mut stream: stream_generator::Yielder<Result<LedgerItem, TraverseError>>| async move {
@@ -247,6 +248,15 @@ impl TraverseLedger {
                     };
                     let mut txs = Vec::new();
                     for tx in ui_txs.into_iter() {
+                        if only_success
+                            && tx
+                                .meta
+                                .as_ref()
+                                .map(|meta| meta.status.is_err())
+                                .unwrap_or(false)
+                        {
+                            continue;
+                        }
                         let tx = decode_ui_transaction(tx, slot)?;
                         if tx.has_key(target) {
                             txs.push(tx);
