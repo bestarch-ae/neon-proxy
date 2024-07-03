@@ -4,7 +4,7 @@ use clap::Parser;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
 use common::types::SolanaBlock;
-use solana_api::traverse::{LedgerItem, TraverseConfig, TraverseLedger};
+use solana_api::traverse::v1::{LedgerItem, TraverseConfig, TraverseLedger};
 use solana_client::rpc_client::SerializableTransaction;
 use tracing_subscriber::EnvFilter;
 

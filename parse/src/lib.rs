@@ -77,7 +77,7 @@ fn parse_transactions(
     let pubkeys = AccountKeys::new(tx.message.static_account_keys(), Some(loaded));
     let neon_idx = pubkeys.iter().position(|x| *x == neon_pubkey);
     let Some(neon_idx) = neon_idx else {
-        tracing::debug!("not a neon transaction");
+        tracing::warn!("not a neon transaction");
         return Ok(Default::default());
     };
     let mut actions = Vec::new();
