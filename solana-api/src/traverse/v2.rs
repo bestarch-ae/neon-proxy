@@ -242,13 +242,21 @@ impl TraverseLedger {
                         time: block.block_time,
                         is_finalized,
                     };
+                    let Some(ui_txs) = ui_txs else {
+                        return Err(TxDecodeError::MissingTransactions.into());
+                    };
                     let mut txs = Vec::new();
-                    for tx in ui_txs.into_iter().flatten() {
+                    for tx in ui_txs.into_iter() {
                         let tx = decode_ui_transaction(tx, slot)?;
                         if tx.has_key(target) {
                             txs.push(tx);
                         }
                     }
+                    metrics()
+                        .traverse
+                        .transactions_per_block
+                        .observe(txs.len() as f64);
+
                     tracing::info!(%slot, count = txs.len(), "fetched transactions");
                     stream
                         .send(Ok(LedgerItem::Block {

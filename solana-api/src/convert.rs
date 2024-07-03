@@ -21,6 +21,8 @@ pub enum TxDecodeError {
     MissingLoadedAddr,
     #[error("absent signatures in block")]
     MissingSignatures,
+    #[error("absent transactions in block")]
+    MissingTransactions,
     #[error("transaction cannot be found in block")]
     MissingTxInBlock,
     #[error("invalide loaded addresses: {0}")]
