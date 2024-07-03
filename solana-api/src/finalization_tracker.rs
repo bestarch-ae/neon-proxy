@@ -9,7 +9,7 @@ use crate::solana_api::SolanaApi;
 
 pub(super) const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(super) enum BlockStatus {
     Pending,
     Purged,

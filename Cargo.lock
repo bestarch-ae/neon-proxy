@@ -3255,6 +3255,7 @@ dependencies = [
  "prometheus_exporter",
  "solana-api",
  "tokio",
+ "tokio-stream",
  "tracing",
  "tracing-subscriber",
 ]
@@ -4410,6 +4411,7 @@ version = "0.1.0"
 dependencies = [
  "arrayref",
  "base64 0.21.7",
+ "either",
  "hex",
  "neon-proxy-common",
  "serde",
@@ -6265,6 +6267,7 @@ dependencies = [
  "async-trait",
  "clap 4.5.4",
  "dashmap 5.5.3",
+ "either",
  "futures-util",
  "neon-proxy-common",
  "prometheus",
@@ -6272,6 +6275,8 @@ dependencies = [
  "serde_json",
  "solana-client",
  "solana-rpc-client",
+ "solana-rpc-client-api",
+ "stream_generator",
  "thiserror",
  "tokio",
  "tracing",
@@ -7791,6 +7796,15 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "stream_generator"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3eef07b08bf0ff7aa7d8f0f35f632344d69c4fc2b49e3887cd0c08ee4de82d26"
+dependencies = [
+ "futures",
+]
 
 [[package]]
 name = "stringprep"

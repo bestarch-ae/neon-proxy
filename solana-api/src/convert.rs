@@ -21,6 +21,8 @@ pub enum TxDecodeError {
     MissingLoadedAddr,
     #[error("absent signatures in block")]
     MissingSignatures,
+    #[error("absent transactions in block")]
+    MissingTransactions,
     #[error("transaction cannot be found in block")]
     MissingTxInBlock,
     #[error("invalide loaded addresses: {0}")]
@@ -45,16 +47,14 @@ impl<T> OptionSerializerExt for OptionSerializer<T> {
 }
 
 pub fn decode_ui_transaction(
-    tx: EncodedConfirmedTransactionWithStatusMeta,
+    tx: EncodedTransactionWithStatusMeta,
+    slot: u64,
 ) -> Result<SolanaTransaction, TxDecodeError> {
-    let EncodedConfirmedTransactionWithStatusMeta {
-        slot, transaction, ..
-    } = tx;
     let EncodedTransactionWithStatusMeta {
         transaction,
         meta,
         version: _,
-    } = transaction;
+    } = tx;
 
     let meta = meta.ok_or(TxDecodeError::MissingMeta)?;
     let Some(tx) = transaction.decode() else {
@@ -81,6 +81,15 @@ pub fn decode_ui_transaction(
     };
 
     Ok(result)
+}
+
+pub fn decode_confirmed_ui_transaction(
+    tx: EncodedConfirmedTransactionWithStatusMeta,
+) -> Result<SolanaTransaction, TxDecodeError> {
+    let EncodedConfirmedTransactionWithStatusMeta {
+        slot, transaction, ..
+    } = tx;
+    decode_ui_transaction(transaction, slot)
 }
 
 fn decode_loaded_addresses(

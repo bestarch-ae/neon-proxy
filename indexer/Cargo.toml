@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+tokio-stream = "0.1"
 clap = { version = "4.5.4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
@@ -18,5 +19,7 @@ common = { path = "../common", package = "neon-proxy-common" }
 solana = { path = "../solana-api", package = "solana-api" }
 db = { path = "../db" }
 hex = "0.4.3"
-prometheus = { version = "0.13", default-features = false, features = ["process"] }
+prometheus = { version = "0.13", default-features = false, features = [
+    "process",
+] }
 prometheus_exporter = { version = "0.8" }

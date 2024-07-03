@@ -130,14 +130,19 @@ impl SolanaApi {
             .await
     }
 
-    pub async fn get_block(&self, slot: Slot) -> ClientResult<UiConfirmedBlock> {
+    pub async fn get_block(&self, slot: Slot, full: bool) -> ClientResult<UiConfirmedBlock> {
         metrics().get_block.inc();
+        let details = if full {
+            TransactionDetails::Full
+        } else {
+            TransactionDetails::Signatures
+        };
         self.client
             .get_block_with_config(
                 slot,
                 RpcBlockConfig {
-                    encoding: None,
-                    transaction_details: Some(TransactionDetails::Signatures),
+                    encoding: Some(UiTransactionEncoding::Base64),
+                    transaction_details: Some(details),
                     rewards: Some(false),
                     commitment: Some(CommitmentConfig {
                         commitment: self.commitment,
@@ -149,8 +154,12 @@ impl SolanaApi {
     }
 
     pub async fn get_finalized_slot(&self) -> ClientResult<Slot> {
+        self.get_slot(CommitmentLevel::Finalized).await
+    }
+
+    pub async fn get_slot(&self, commitment: CommitmentLevel) -> ClientResult<Slot> {
         self.client
-            .get_slot_with_commitment(CommitmentConfig::finalized())
+            .get_slot_with_commitment(CommitmentConfig { commitment })
             .await
     }
 
