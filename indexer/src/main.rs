@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
+use common::solana_sdk::commitment_config::CommitmentLevel;
 use solana::traverse_v2::{LedgerItem, TraverseConfig, TraverseLedger};
 use tokio::sync::mpsc;
 
@@ -62,7 +63,7 @@ async fn main() -> Result<()> {
     let sig_repo = db::SolanaSignaturesRepo::new(pool.clone());
     let holder_repo = db::HolderRepo::new(pool.clone());
     let block_repo = db::BlockRepo::new(pool.clone());
-    let reliable_empty_slot_repo = db::ReliableEmptySlotRepo::new(pool);
+    // let reliable_empty_slot_repo = db::ReliableEmptySlotRepo::new(pool);
 
     let last_signature = sig_repo.get_latest().await?;
     let from = opts.from.or(last_signature);
@@ -248,55 +249,32 @@ async fn main() -> Result<()> {
                     metrics().blocks_processed.inc();
                 }
             }
-            // Ok(LedgerItem::Block(block)) => {
-            //     let _blk_timer = metrics().block_processing_time.start_timer();
-            //     neon_tx_idx = 0;
-            //     block_gas_used = U256::new(0);
-            //     block_log_idx = 0;
-
-            //     if let Err(err) = block_repo.insert(&block).await {
-            //         tracing::warn!(?err, slot = block.slot, "failed to save solana block");
-            //         metrics().database_errors.inc();
-            //     } else {
-            //         tracing::info!(slot = block.slot, "saved solana block");
-            //         last_written_slot.replace(block.slot);
-            //         metrics().blocks_processed.inc();
-            //     }
-            // }
-            // Ok(LedgerItem::FinalizedBlock(slot)) => {
-            //     let _blk_timer = metrics().finalized_block_processing_time.start_timer();
-            //     if let Err(err) = block_repo.finalize(slot).await {
-            //         tracing::warn!(%err, slot, "failed finalizing block in db");
-            //         metrics().database_errors.inc();
-            //         continue;
-            //     }
-            //     metrics().finalized_blocks_processed.inc();
-            //     tracing::info!(slot, "block was finalized");
-            // }
-            // Ok(LedgerItem::PurgedBlock(slot)) => {
-            //     let _blk_timer = metrics().purged_block_processing_time.start_timer();
-            //     metrics().purged_blocks_processed.inc();
-            //     if let Err(err) = block_repo.purge(slot).await {
-            //         tracing::warn!(%err, slot, "failed purging block in db");
-            //         metrics().database_errors.inc();
-            //         continue;
-            //     }
-            //     tracing::info!(slot, "block was purged");
-            // }
-            // Ok(LedgerItem::ReliableLastEmptySlot(slot)) => {
-            //     if let Err(err) = reliable_empty_slot_repo.update_or_insert(slot).await {
-            //         tracing::warn!(%err, slot, "failed updating reliable empty slot");
-            //         metrics().database_errors.inc();
-            //         continue;
-            //     }
-            //     tracing::info!(slot, "reliable empty slot was updated");
-            // }
+            Ok(LedgerItem::BlockUpdate { slot, commitment }) => {
+                if matches!(commitment, Some(CommitmentLevel::Finalized)) {
+                    let _blk_timer = metrics().finalized_block_processing_time.start_timer();
+                    if let Err(err) = block_repo.finalize(slot).await {
+                        tracing::warn!(%err, slot, "failed finalizing block in db");
+                        metrics().database_errors.inc();
+                        continue;
+                    }
+                    metrics().finalized_blocks_processed.inc();
+                    tracing::info!(slot, "block was finalized");
+                } else {
+                    let _blk_timer = metrics().purged_block_processing_time.start_timer();
+                    metrics().purged_blocks_processed.inc();
+                    if let Err(err) = block_repo.purge(slot).await {
+                        tracing::warn!(%err, slot, "failed purging block in db");
+                        metrics().database_errors.inc();
+                        continue;
+                    }
+                    tracing::info!(slot, "block was purged");
+                }
+            }
             Err(err) => {
                 tracing::warn!(?err, "failed to retrieve transaction");
                 metrics().traverse_errors.inc();
                 continue;
             }
-            _ => {}
         };
     }
 

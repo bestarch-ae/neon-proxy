@@ -130,7 +130,12 @@ impl SolanaApi {
             .await
     }
 
-    pub async fn get_block(&self, slot: Slot, full: bool) -> ClientResult<UiConfirmedBlock> {
+    pub async fn get_block(
+        &self,
+        slot: Slot,
+        full: bool,
+        commitment: Option<CommitmentLevel>,
+    ) -> ClientResult<UiConfirmedBlock> {
         metrics().get_block.inc();
         let details = if full {
             TransactionDetails::Full
@@ -145,7 +150,7 @@ impl SolanaApi {
                     transaction_details: Some(details),
                     rewards: Some(false),
                     commitment: Some(CommitmentConfig {
-                        commitment: self.commitment,
+                        commitment: commitment.unwrap_or(self.commitment),
                     }),
                     max_supported_transaction_version: Some(0),
                 },

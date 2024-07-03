@@ -347,7 +347,7 @@ impl InnerTraverseLedger {
                 }
             }
             let block = retry!(
-                self.api.get_block(slot, false),
+                self.api.get_block(slot, false, None),
                 "failed requesting block {slot}"
             );
             tracing::debug!(

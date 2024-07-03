@@ -4,12 +4,13 @@ use std::time::Duration;
 use crate::convert::{decode_ui_transaction, TxDecodeError};
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::{ParseSignatureError, Signature};
+use common::solana_transaction_status::UiConfirmedBlock;
 use common::{
     solana_sdk::commitment_config::CommitmentLevel,
     types::{SolanaBlock, SolanaTransaction},
 };
-use either::Either;
-use futures_util::{Stream, StreamExt};
+use futures_util::stream::FuturesUnordered;
+use futures_util::{FutureExt, Stream, StreamExt};
 use solana_client::client_error::{ClientError, ClientErrorKind};
 use solana_client::rpc_request::RpcError;
 use solana_rpc_client_api::custom_error;
@@ -86,8 +87,18 @@ pub enum LedgerItem {
     },
     BlockUpdate {
         slot: u64,
-        commitment: CommitmentLevel,
+        commitment: Option<CommitmentLevel>,
     },
+}
+
+impl LedgerItem {
+    fn slot(&self) -> u64 {
+        match self {
+            Self::Block { block, .. } => block.slot,
+            Self::MissingBlock { slot } => *slot,
+            Self::BlockUpdate { slot, .. } => *slot,
+        }
+    }
 }
 
 pub struct TraverseLedger {
@@ -159,76 +170,133 @@ impl TraverseLedger {
         self.in_range(tx.slot..)
     }
 
+    async fn get_block(
+        api: &SolanaApi,
+        slot: u64,
+        full: bool,
+        commitment: CommitmentLevel,
+    ) -> Option<UiConfirmedBlock> {
+        loop {
+            match api.get_block(slot, full, Some(commitment)).await {
+                Ok(block) => {
+                    break Some(block);
+                }
+                Err(err)
+                    if matches!(
+                        err.kind,
+                        ClientErrorKind::RpcError(RpcError::RpcResponseError {
+                            code:
+                                custom_error::JSON_RPC_SERVER_ERROR_LONG_TERM_STORAGE_SLOT_SKIPPED,
+                            ..
+                        })
+                    ) =>
+                {
+                    tracing::info!(%slot, "skipped slot");
+                    break None;
+                }
+                Err(err) => {
+                    tracing::warn!(?err, "error fetching block");
+                    sleep(RECHECK_INTERVAL).await;
+                    continue;
+                }
+            }
+        }
+    }
+
     pub fn in_range<R: RangeBounds<u64> + Iterator<Item = u64> + 'static>(
         &self,
         range: R,
     ) -> impl Stream<Item = Result<LedgerItem, TraverseError>> {
         tracing::info!(start = ?range.start_bound(), end = ?range.end_bound(), "traversing range");
         let api = self.api.clone();
+        let api2 = self.api.clone();
         let commitment = self.commitment;
         let is_finalized = matches!(self.commitment, CommitmentLevel::Finalized);
 
-        stream_generator::generate_try_stream(move |mut stream| async move {
-            for slot in range.step_by(1) {
-                tracing::info!(%slot, "getting block");
-                let mut current_slot = retry!(api.get_slot(commitment), "getting slot");
+        let inner_stream = stream_generator::generate_try_stream(
+            move |mut stream: stream_generator::Yielder<Result<LedgerItem, TraverseError>>| async move {
+                for slot in range.step_by(1) {
+                    tracing::info!(%slot, "getting block");
+                    let mut current_slot = retry!(api.get_slot(commitment), "getting slot");
 
-                while slot > current_slot {
-                    current_slot = retry!(api.get_slot(commitment), "waiting for slot");
-                }
+                    while slot > current_slot {
+                        current_slot = retry!(api.get_slot(commitment), "waiting for slot");
+                    }
 
-                let block = loop {
-                    match api.get_block(slot, true).await {
-                        Ok(block) => {
-                            break Either::Right(block);
-                        }
-                        Err(err) if matches!(err.kind, ClientErrorKind::RpcError(
-                                RpcError::RpcResponseError { code: custom_error::JSON_RPC_SERVER_ERROR_LONG_TERM_STORAGE_SLOT_SKIPPED, .. })
-                        ) => {
-                            tracing::info!(%slot, "skipped slot");
-                            break Either::Left(LedgerItem::MissingBlock { slot });
-                        }
-                        Err(err) => {
-                            tracing::warn!(?err, "error fetching block");
-                            sleep(RECHECK_INTERVAL).await;
+                    let block = Self::get_block(&api, slot, true, commitment).await;
+                    let block = match block {
+                        None => {
+                            stream.send(Ok(LedgerItem::MissingBlock { slot })).await;
                             continue;
                         }
+                        Some(block) => block,
+                    };
+                    metrics().traverse.last_observed_slot.set(slot as i64);
+                    let ui_txs = block.transactions;
+                    let block = SolanaBlock {
+                        slot,
+                        parent_slot: block.parent_slot,
+                        parent_hash: block
+                            .previous_blockhash
+                            .parse()
+                            .map_err(TxDecodeError::from)?,
+                        hash: block.blockhash.parse().map_err(TxDecodeError::from)?,
+                        time: block.block_time,
+                        is_finalized,
+                    };
+                    let mut txs = Vec::new();
+                    for tx in ui_txs.into_iter().flatten() {
+                        let tx = decode_ui_transaction(tx, slot)?;
+                        txs.push(tx);
                     }
-                };
-                let block = match block {
-                    Either::Left(missing) => {
-                        stream.send(Ok(missing)).await;
-                        continue;
-                    }
-                    Either::Right(block) => block,
-                };
-                metrics().traverse.last_observed_slot.set(slot as i64);
-                let ui_txs = block.transactions;
-                let block = SolanaBlock {
-                    slot,
-                    parent_slot: block.parent_slot,
-                    parent_hash: block
-                        .previous_blockhash
-                        .parse()
-                        .map_err(TxDecodeError::from)?,
-                    hash: block.blockhash.parse().map_err(TxDecodeError::from)?,
-                    time: block.block_time,
-                    is_finalized,
-                };
-                let mut txs = Vec::new();
-                for tx in ui_txs.into_iter().flatten() {
-                    let tx = decode_ui_transaction(tx, slot)?;
-                    txs.push(tx);
+                    tracing::info!(%slot, count = txs.len(), "fetched transactions");
+                    stream
+                        .send(Ok(LedgerItem::Block {
+                            block,
+                            txs,
+                            commitment,
+                        }))
+                        .await;
                 }
-                tracing::info!(%slot, count = txs.len(), "fetched transactions");
-                stream
-                    .send(Ok(LedgerItem::Block {
-                        block,
-                        txs,
-                        commitment,
-                    }))
-                    .await;
+                Ok(())
+            },
+        );
+        stream_generator::generate_try_stream(move |mut stream| async move {
+            tokio::pin!(inner_stream);
+            let mut queue = FuturesUnordered::new();
+
+            tokio::select! {
+                Some(block_status) = queue.next() => {
+                    let (slot, commitment) = block_status;
+                    stream.send(Ok(LedgerItem::BlockUpdate { slot, commitment })).await;
+                }
+                Some(item) = inner_stream.next() => {
+                    match item {
+                        Ok(missing @ LedgerItem::MissingBlock { .. }) => {
+                            stream.send(Ok(missing)).await;
+                        }
+                        Ok(
+                            block @ LedgerItem::Block {
+                                commitment: CommitmentLevel::Finalized,
+                                ..
+                            },
+                        ) => {
+                            stream.send(Ok(block)).await;
+                        }
+                        Ok(block @ LedgerItem::Block { .. }) => {
+                            let slot = block.slot();
+                            let fut = Self::get_block(&api2, slot, false, CommitmentLevel::Finalized).map(move |block| (slot, block.map(|_| CommitmentLevel::Finalized)));
+                            queue.push(fut);
+                            stream.send(Ok(block)).await;
+                        }
+                        Ok(update) => stream.send(Ok(update)).await,
+                        Err(err) => {
+                            stream.send(Err(err)).await;
+                        }
+                    }
+                }
             }
+
             Ok(())
         })
     }
