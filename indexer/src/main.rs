@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::Parser;
 use common::solana_sdk::commitment_config::CommitmentLevel;
-use solana::traverse_v2::{LedgerItem, TraverseConfig, TraverseLedger};
+use solana::traverse::v2::{LedgerItem, TraverseConfig, TraverseLedger};
 use tokio::sync::mpsc;
 
 use common::ethnum::U256;

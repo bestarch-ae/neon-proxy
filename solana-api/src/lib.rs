@@ -1,6 +1,6 @@
 mod convert;
+mod finalization_tracker;
 mod metrics;
 pub mod solana_api;
 pub mod traverse;
-pub mod traverse_v2;
 mod utils;

@@ -9,8 +9,7 @@ use common::{
     solana_sdk::commitment_config::CommitmentLevel,
     types::{SolanaBlock, SolanaTransaction},
 };
-use futures_util::stream::FuturesUnordered;
-use futures_util::{FutureExt, Stream, StreamExt};
+use futures_util::{Stream, StreamExt};
 use solana_client::client_error::{ClientError, ClientErrorKind};
 use solana_client::rpc_request::RpcError;
 use solana_rpc_client_api::custom_error;
@@ -19,6 +18,8 @@ use tokio::time::sleep;
 
 use crate::metrics::metrics;
 use crate::solana_api::SolanaApi;
+
+use crate::finalization_tracker::{BlockStatus, FinalizationTracker};
 
 const RECHECK_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -104,7 +105,7 @@ impl LedgerItem {
 pub struct TraverseLedger {
     api: SolanaApi,
     commitment: CommitmentLevel,
-    target_key: Pubkey,
+    config: TraverseConfig,
 }
 
 impl TraverseLedger {
@@ -115,8 +116,8 @@ impl TraverseLedger {
             CommitmentLevel::Confirmed
         };
         TraverseLedger {
-            target_key: config.target_key,
-            api: SolanaApi::new(config.endpoint, config.finalized),
+            api: SolanaApi::new(config.endpoint.clone(), config.finalized),
+            config,
             commitment,
         }
     }
@@ -146,7 +147,7 @@ impl TraverseLedger {
         &'_ self,
     ) -> impl Stream<Item = Result<LedgerItem, TraverseError>> + '_ {
         let api = self.api.clone();
-        let target = self.target_key;
+        let target = self.config.target_key;
 
         stream_generator::generate_try_stream(move |mut stream| async move {
             tracing::info!("starting from beginning");
@@ -170,14 +171,9 @@ impl TraverseLedger {
         self.in_range(tx.slot..)
     }
 
-    async fn get_block(
-        api: &SolanaApi,
-        slot: u64,
-        full: bool,
-        commitment: CommitmentLevel,
-    ) -> Option<UiConfirmedBlock> {
+    async fn get_block(api: &SolanaApi, slot: u64, full: bool) -> Option<UiConfirmedBlock> {
         loop {
-            match api.get_block(slot, full, Some(commitment)).await {
+            match api.get_block(slot, full).await {
                 Ok(block) => {
                     break Some(block);
                 }
@@ -212,6 +208,7 @@ impl TraverseLedger {
         let api2 = self.api.clone();
         let commitment = self.commitment;
         let is_finalized = matches!(self.commitment, CommitmentLevel::Finalized);
+        let poll_interval = self.config.status_poll_interval;
 
         let inner_stream = stream_generator::generate_try_stream(
             move |mut stream: stream_generator::Yielder<Result<LedgerItem, TraverseError>>| async move {
@@ -223,7 +220,7 @@ impl TraverseLedger {
                         current_slot = retry!(api.get_slot(commitment), "waiting for slot");
                     }
 
-                    let block = Self::get_block(&api, slot, true, commitment).await;
+                    let block = Self::get_block(&api, slot, true).await;
                     let block = match block {
                         None => {
                             stream.send(Ok(LedgerItem::MissingBlock { slot })).await;
@@ -263,12 +260,15 @@ impl TraverseLedger {
         );
         stream_generator::generate_try_stream(move |mut stream| async move {
             tokio::pin!(inner_stream);
-            let mut queue = FuturesUnordered::new();
+            let mut tracker = FinalizationTracker::init(api2, poll_interval).await?;
 
             tokio::select! {
-                Some(block_status) = queue.next() => {
-                    let (slot, commitment) = block_status;
-                    stream.send(Ok(LedgerItem::BlockUpdate { slot, commitment })).await;
+                Ok(block_status) = tracker.next() => {
+                    let (slot, is_finalized) = block_status;
+                    stream.send(Ok(LedgerItem::BlockUpdate {
+                        slot,
+                        commitment: is_finalized.then_some(CommitmentLevel::Finalized)
+                    })).await;
                 }
                 Some(item) = inner_stream.next() => {
                     match item {
@@ -285,8 +285,13 @@ impl TraverseLedger {
                         }
                         Ok(block @ LedgerItem::Block { .. }) => {
                             let slot = block.slot();
-                            let fut = Self::get_block(&api2, slot, false, CommitmentLevel::Finalized).map(move |block| (slot, block.map(|_| CommitmentLevel::Finalized)));
-                            queue.push(fut);
+                            let status = tracker.check_or_schedule_new_slot(slot);
+                            if matches!(status, BlockStatus::Finalized | BlockStatus::Purged) {
+                                stream.send(Ok(LedgerItem::BlockUpdate {
+                                    slot,
+                                    commitment: (status == BlockStatus::Finalized).then_some(CommitmentLevel::Finalized)
+                                })).await;
+                            }
                             stream.send(Ok(block)).await;
                         }
                         Ok(update) => stream.send(Ok(update)).await,

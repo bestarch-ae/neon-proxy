@@ -1,7 +1,3 @@
-mod finalization_tracker;
-#[cfg(test)]
-mod tests;
-
 use std::collections::{HashSet, VecDeque};
 use std::str::FromStr;
 use std::sync::Once;
@@ -25,7 +21,7 @@ use crate::metrics::metrics;
 use crate::solana_api::{SolanaApi, SIGNATURES_LIMIT};
 use crate::utils::ward;
 
-use finalization_tracker::{BlockStatus, FinalizationTracker};
+use crate::finalization_tracker::{self, BlockStatus, FinalizationTracker};
 
 // const SIGNATURES_LIMIT: usize = 1000;
 const RECHECK_INTERVAL: Duration = Duration::from_secs(1);
@@ -347,7 +343,7 @@ impl InnerTraverseLedger {
                 }
             }
             let block = retry!(
-                self.api.get_block(slot, false, None),
+                self.api.get_block(slot, false),
                 "failed requesting block {slot}"
             );
             tracing::debug!(
