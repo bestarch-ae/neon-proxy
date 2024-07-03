@@ -6267,6 +6267,7 @@ dependencies = [
  "async-trait",
  "clap 4.5.4",
  "dashmap 5.5.3",
+ "either",
  "futures-util",
  "neon-proxy-common",
  "prometheus",

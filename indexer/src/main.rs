@@ -12,7 +12,7 @@ use common::solana_sdk::signature::Signature;
 use common::types::{HolderOperation, SolanaBlock, TxHash};
 use metrics::metrics;
 use neon_parse::Action;
-use tokio_stream::StreamExt;
+use tokio_stream::{Stream, StreamExt};
 
 mod accountsdb;
 mod metrics;
@@ -91,8 +91,12 @@ async fn main() -> Result<()> {
     let (tx, mut rx) = mpsc::channel(128);
 
     let traverse_handle = tokio::spawn(async move {
-        let traverse = traverse.since_signature(from.unwrap()).await;
-        tokio::pin!(traverse);
+        let mut traverse = if let Some(signature) = from {
+            Box::pin(traverse.since_signature(signature).await)
+                as std::pin::Pin<Box<dyn Stream<Item = _> + Send>>
+        } else {
+            Box::pin(traverse.start_from_beginning())
+        };
         while let Some(result) = traverse.next().await {
             if let Err(err) = tx.send(result).await {
                 tracing::error!(?err, "failed to send");
