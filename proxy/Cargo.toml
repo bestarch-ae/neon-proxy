@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 db = { path = "../db" }
 common = { path = '../common', package = "neon-proxy-common" }
+solana-api = { path = "../solana-api" }
 
 rpc-api = { git = "https://github.com/paradigmxyz/reth", package = "reth-rpc-api" }
 rpc-api-types = { git = "https://github.com/paradigmxyz/reth", package = "reth-rpc-types" }
@@ -33,3 +34,5 @@ hex-literal = "0.4.1"
 futures-util = "0.3.30"
 solana-client = "1.16.18"
 solana-rpc-client = "1.16.18"
+alloy-consensus = { git = "https://github.com/alloy-rs/alloy", rev = "dd7a999", version = "0.1.0", default-features = false, features = ["k256"] }
+alloy-rlp = "0.3.4"

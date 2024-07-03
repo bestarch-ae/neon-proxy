@@ -4787,6 +4787,8 @@ dependencies = [
 name = "proxy"
 version = "0.1.0"
 dependencies = [
+ "alloy-consensus",
+ "alloy-rlp",
  "anyhow",
  "clap 4.5.4",
  "db",
@@ -4798,6 +4800,7 @@ dependencies = [
  "reth-rpc-api",
  "reth-rpc-types",
  "serde_json",
+ "solana-api",
  "solana-client",
  "solana-rpc-client",
  "sqlx",

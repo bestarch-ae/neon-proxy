@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use common::ethnum::U256;
 use common::neon_lib::commands::emulate::EmulateResponse;
+use common::neon_lib::commands::get_config::GetConfigResponse;
 use common::neon_lib::rpc::{CallDbClient, CloneRpcClient, RpcEnum};
 use common::neon_lib::tracing::tracers::TracerTypeEnum;
 use common::neon_lib::types::{BalanceAddress, ChDbConfig, EmulateRequest, TracerDb, TxParams};
@@ -50,6 +51,11 @@ enum TaskCommand {
         tx: TxParams,
         response: oneshot::Sender<Result<EmulateResponse, NeonError>>,
     },
+    Emulate {
+        tx: TxParams,
+        response: oneshot::Sender<Result<EmulateResponse, NeonError>>,
+    },
+    GetConfig(oneshot::Sender<Result<GetConfigResponse, NeonError>>),
 }
 
 struct Context {
@@ -203,9 +209,34 @@ impl NeonApi {
         Ok(U256::from(resp?.used_gas))
     }
 
-    async fn execute(cmd: TaskCommand, ctx: Context) {
-        match cmd {
-            TaskCommand::EstimateGas { tx, response } => {
+    pub async fn emulate(&self, params: TxParams) -> Result<EmulateResponse, NeonError> {
+        let (tx, rx) = oneshot::channel();
+        self.channel
+            .send(Task::new(
+                TaskCommand::Emulate {
+                    tx: params,
+                    response: tx,
+                },
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        rx.await.unwrap()
+    }
+
+    pub async fn get_config(&self) -> Result<GetConfigResponse, NeonError> {
+        let (tx, rx) = oneshot::channel();
+        self.channel
+            .send(Task::new(TaskCommand::GetConfig(tx), None, None))
+            .await
+            .unwrap();
+        rx.await.unwrap()
+    }
+
+    async fn execute(task: TaskCommand, ctx: Context) {
+        match task {
+            TaskCommand::EstimateGas { tx, response } | TaskCommand::Emulate { tx, response } => {
                 let config = commands::get_config::execute(&ctx.rpc, ctx.neon_pubkey)
                     .await
                     .expect("config didnt fail"); // TODO
@@ -292,6 +323,11 @@ impl NeonApi {
                     }
                     Err(err) => Err(err),
                 };
+                let _ = response.send(resp);
+            }
+
+            TaskCommand::GetConfig(response) => {
+                let resp = commands::get_config::execute(&ctx.rpc, ctx.neon_pubkey).await;
                 let _ = response.send(resp);
             }
         }

@@ -4,6 +4,7 @@ mod mock;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use common::solana_sdk::account::Account;
 use common::solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use common::solana_sdk::hash::Hash;
 use common::solana_sdk::pubkey::Pubkey;
@@ -168,6 +169,18 @@ impl SolanaApi {
         self.client
             .get_blocks_with_commitment(from, None, CommitmentConfig::finalized())
             .await
+    }
+
+    pub async fn get_account(&self, key: &Pubkey) -> ClientResult<Option<Account>> {
+        self.client
+            .get_account_with_commitment(
+                key,
+                CommitmentConfig {
+                    commitment: self.commitment,
+                },
+            )
+            .await
+            .map(|response| response.value)
     }
 }
 

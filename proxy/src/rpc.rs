@@ -1,3 +1,5 @@
+use alloy_consensus::TxEnvelope;
+use alloy_rlp::Decodable;
 use common::neon_lib::types::{BalanceAddress, TxParams};
 use futures_util::StreamExt;
 use futures_util::TryStreamExt;
@@ -33,6 +35,7 @@ use crate::convert::LogFilters;
 use crate::convert::{
     build_block, neon_to_eth, neon_to_eth_receipt, NeonLog, NeonTransactionReceipt,
 };
+use crate::executor::Executor;
 use crate::neon_api::NeonApi;
 use crate::Error;
 
@@ -42,10 +45,11 @@ pub struct EthApiImpl {
     blocks: ::db::BlockRepo,
     neon_api: NeonApi,
     chain_id: u64,
+    executor: Executor,
 }
 
 impl EthApiImpl {
-    pub fn new(pool: PgPool, neon_api: NeonApi, chain_id: u64) -> Self {
+    pub fn new(pool: PgPool, neon_api: NeonApi, executor: Executor, chain_id: u64) -> Self {
         let transactions = ::db::TransactionRepo::new(pool.clone());
         let blocks = ::db::BlockRepo::new(pool.clone());
 
@@ -53,6 +57,7 @@ impl EthApiImpl {
             transactions,
             blocks,
             neon_api,
+            executor,
             chain_id,
         }
     }
@@ -614,8 +619,17 @@ impl EthApiServer for EthApiImpl {
     }
 
     /// Sends signed transaction, returning its hash.
-    async fn send_raw_transaction(&self, _bytes: Bytes) -> RpcResult<B256> {
-        unimplemented()
+    async fn send_raw_transaction(&self, bytes: Bytes) -> RpcResult<B256> {
+        let bytes: &mut &[u8] = &mut bytes.as_ref();
+        let envelope = TxEnvelope::decode(bytes)
+            .map_err(|_| ErrorObjectOwned::from(ErrorCode::InvalidParams))?;
+        let hash = *envelope.tx_hash();
+        self.executor
+            .handle_transaction(envelope)
+            .await
+            .map_err(|_| ErrorObjectOwned::from(ErrorCode::InternalError))?; // TODO
+
+        Ok(hash)
     }
 
     /// Returns an Ethereum specific signature with: sign(keccak256("\x19Ethereum Signed Message:\n"
