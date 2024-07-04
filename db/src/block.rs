@@ -113,6 +113,21 @@ impl BlockRepo {
         Ok(num)
     }
 
+    pub async fn latest_block_time(&self) -> Result<Option<(u64, u64)>, Error> {
+        let num = sqlx::query!(
+            r#"SELECT block_slot,block_time as "block_time!"
+               FROM solana_blocks
+               WHERE block_time IS NOT NULL
+               ORDER BY block_slot DESC
+               LIMIT 1
+              "#
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        .map(|row| (row.block_slot as u64, row.block_time as u64));
+        Ok(num)
+    }
+
     pub async fn earliest_slot(&self) -> Result<u64, Error> {
         let num = sqlx::query!(r#"SELECT min(block_slot) as "slot!" FROM solana_blocks"#)
             .fetch_one(&self.pool)

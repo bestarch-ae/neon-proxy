@@ -2,16 +2,25 @@ use std::time::Duration;
 
 use anyhow::Result;
 use common::ethnum::U256;
+use common::solana_sdk::clock::UnixTimestamp;
 use common::solana_sdk::commitment_config::CommitmentLevel;
 use common::solana_sdk::hash::Hash;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
 use common::types::{HolderOperation, SolanaBlock, SolanaTransaction, TxHash};
-use neon_parse::Action;
+use neon_parse::{AccountsDb, Action};
 use solana::traverse::v2::LedgerItem;
 
 use crate::accountsdb::DummyAdb;
 use crate::metrics::metrics;
+
+const ONE_BLOCK_SEC: f64 = 0.4;
+
+#[derive(Copy, Clone, Debug)]
+struct LastBlock {
+    slot: u64,
+    time: UnixTimestamp,
+}
 
 pub struct Indexer {
     tx_repo: db::TransactionRepo,
@@ -24,6 +33,7 @@ pub struct Indexer {
     tx_log_idx: TxLogIdx,
     adb: DummyAdb,
     target: Pubkey,
+    last_block: Option<LastBlock>,
 }
 
 impl Indexer {
@@ -46,6 +56,19 @@ impl Indexer {
             tx_log_idx,
             adb,
             target,
+            last_block: None,
+        }
+    }
+
+    async fn update_last_block(&mut self) {
+        if self.last_block.is_some() {
+            return;
+        }
+        if let Some(last_block) = self.block_repo.latest_block_time().await.ok().flatten() {
+            self.last_block = Some(LastBlock {
+                slot: last_block.0,
+                time: last_block.1 as i64,
+            });
         }
     }
 
@@ -55,11 +78,20 @@ impl Indexer {
         txs: Vec<SolanaTransaction>,
         _commitment: CommitmentLevel,
     ) -> anyhow::Result<()> {
+        metrics().current_slot.set(block.slot as i64);
+
         for tx in txs {
             let _tx_timer = metrics().transaction_processing_time.start_timer();
             let signature = tx.tx.signatures[0];
             let tx_idx = tx.tx_idx as u32;
             let slot = tx.slot;
+
+            if let Some(time) = block.time {
+                self.last_block = Some(LastBlock {
+                    slot: block.slot,
+                    time,
+                })
+            }
 
             metrics().transactions_processed.inc();
 
@@ -128,10 +160,7 @@ impl Indexer {
                     }
                     Action::WriteHolder(op) => {
                         tracing::info!(slot = %slot, pubkey = %op.pubkey(), "saving holder");
-                        if let Err(err) =
-                            process_holder(&self.holder_repo, slot, tx_idx, &op, &mut self.adb)
-                                .await
-                        {
+                        if let Err(err) = self.process_holder(slot, tx_idx, &op).await {
                             tracing::warn!(?err, pubkey = %op.pubkey(), "failed to save neon holder");
                             metrics().database_errors.inc();
                         } else {
@@ -184,20 +213,32 @@ impl Indexer {
                 return Ok(());
             }
             tracing::info!(slot, "block was purged");
+            self.process_missing_block(slot).await?;
         }
         Ok(())
     }
 
-    async fn process_missing_block(&mut self, slot: u64) -> Result<()> {
-        tracing::info!(%slot, "missing block, generating fake");
-        let block = SolanaBlock {
+    fn make_fake_block(&self, slot: u64) -> SolanaBlock {
+        let block_time = self.last_block.map(|block| block.time);
+        let block_diff = slot - self.last_block.map(|block| block.slot).unwrap_or(slot);
+        let additional_time = (block_diff as f64 * ONE_BLOCK_SEC).ceil() as i64;
+
+        SolanaBlock {
             slot,
             hash: fake_hash(slot),
             parent_hash: fake_hash(slot - 1),
             parent_slot: slot - 1,
-            time: None,
-            is_finalized: true,
-        };
+            time: block_time.map(|time| time + additional_time),
+            is_finalized: false,
+        }
+    }
+
+    async fn process_missing_block(&mut self, slot: u64) -> Result<()> {
+        tracing::info!(%slot, "missing/purged block, generating fake");
+
+        self.update_last_block().await;
+
+        let block = self.make_fake_block(slot);
         if let Err(err) = self.block_repo.insert(&block).await {
             tracing::warn!(?err, slot = block.slot, "failed to save solana block");
             metrics().database_errors.inc();
@@ -227,6 +268,19 @@ impl Indexer {
 
     pub async fn get_latest_signature(&self) -> Result<Option<Signature>> {
         Ok(self.sig_repo.get_latest().await?)
+    }
+
+    async fn process_holder(
+        &mut self,
+        slot: u64,
+        tx_idx: u32,
+        op: &HolderOperation,
+    ) -> Result<(), anyhow::Error> {
+        if let HolderOperation::Delete(pubkey) = op {
+            self.adb.delete_account(*pubkey);
+        }
+        self.holder_repo.insert(slot, tx_idx, false, op).await?;
+        Ok(())
     }
 }
 
@@ -263,20 +317,6 @@ impl TxLogIdx {
             }
         }
     }
-}
-
-async fn process_holder(
-    repo: &db::HolderRepo,
-    slot: u64,
-    tx_idx: u32,
-    op: &HolderOperation,
-    adb: &mut impl neon_parse::AccountsDb,
-) -> Result<(), anyhow::Error> {
-    if let HolderOperation::Delete(pubkey) = op {
-        adb.delete_account(*pubkey);
-    }
-    repo.insert(slot, tx_idx, false, op).await?;
-    Ok(())
 }
 
 fn fake_hash(slot: u64) -> Hash {

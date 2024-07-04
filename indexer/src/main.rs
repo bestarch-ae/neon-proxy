@@ -100,7 +100,7 @@ async fn main() -> Result<()> {
     });
 
     while let Some(result) = rx.recv().await {
-        tracing::debug!(?result, "retrieved transaction/block");
+        tracing::debug!(?result, "retrieved new block");
 
         match result {
             Ok(item) => indexer.process_ledger(item).await?,
