@@ -115,6 +115,7 @@ impl EthApiImpl {
         Ok(Some(build_block(block, txs, full)?.into()))
     }
 
+    /// Returns none for latest, and pending
     async fn get_slot_by_block_id(&self, block_id: BlockId) -> RpcResult<Option<u64>> {
         match block_id {
             BlockId::Hash(hash) => {
@@ -125,6 +126,7 @@ impl EthApiImpl {
                     .await?;
                 Ok(block.and_then(|block| block.header.number))
             }
+            BlockId::Number(BlockNumberOrTag::Pending | BlockNumberOrTag::Latest) => Ok(None),
             BlockId::Number(tag) => Ok(Some(self.find_slot(tag).await?)),
         }
     }
