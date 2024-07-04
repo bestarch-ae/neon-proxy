@@ -8,11 +8,11 @@ use anyhow::Context;
 use common::solana_sdk::signature::Signature;
 use common::solana_sdk::{hash::Hash, pubkey::Pubkey};
 use common::types::HolderOperation;
-use sqlx::PgPool;
 use thiserror::Error;
 
 pub use block::{BlockBy, BlockRepo};
 pub use reliable_empty_slot::ReliableEmptySlotRepo;
+pub use sqlx::PgPool;
 pub use transaction::{RichLog, RichLogBy, TransactionBy, TransactionRepo, WithBlockhash};
 
 pub async fn connect(url: &str) -> Result<PgPool, sqlx::Error> {
