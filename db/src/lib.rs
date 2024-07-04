@@ -12,6 +12,7 @@ use thiserror::Error;
 
 pub use block::{BlockBy, BlockRepo};
 pub use reliable_empty_slot::ReliableEmptySlotRepo;
+use sqlx::postgres::Postgres;
 pub use sqlx::PgPool;
 pub use transaction::{RichLog, RichLogBy, TransactionBy, TransactionRepo, WithBlockhash};
 
@@ -62,6 +63,7 @@ impl SolanaSignaturesRepo {
         slot: u64,
         tx_idx: u32,
         signature: Signature,
+        txn: &mut sqlx::Transaction<'_, Postgres>,
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(
             r#"
@@ -77,7 +79,7 @@ impl SolanaSignaturesRepo {
             tx_idx as i32,
             signature.to_string()
         )
-        .execute(&self.pool)
+        .execute(&mut **txn)
         .await?;
         Ok(())
     }
@@ -183,6 +185,7 @@ impl HolderRepo {
         tx_idx: u32,
         is_stuck: bool,
         op: &HolderOperation,
+        txn: &mut sqlx::Transaction<'_, Postgres>,
     ) -> Result<(), sqlx::Error> {
         let (pubkey, neon_sig, offset, data) = match op {
             HolderOperation::Create(pubkey) => (pubkey, None, None, None),
@@ -215,7 +218,7 @@ impl HolderRepo {
             offset.map(|o| *o as i64),
             data
         )
-        .execute(&self.pool)
+        .execute(&mut **txn)
         .await?;
         Ok(())
     }

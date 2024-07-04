@@ -1,7 +1,7 @@
 use anyhow::{bail, Context};
 use common::solana_sdk::hash::Hash;
 use futures_util::{Stream, StreamExt, TryStreamExt};
-use sqlx::postgres::PgRow;
+use sqlx::postgres::{PgRow, Postgres};
 use sqlx::FromRow;
 
 use common::ethnum::U256;
@@ -144,6 +144,7 @@ impl TransactionRepo {
         hash: &TxHash,
         gas_used: U256,
         slot: u64,
+        txn: &mut sqlx::Transaction<'_, Postgres>,
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(
             r#"
@@ -159,12 +160,20 @@ impl TransactionRepo {
             PgU256::from(gas_used) as PgU256,
             hash.as_slice()
         )
-        .execute(&self.pool)
+        .execute(&mut **txn)
         .await?;
         Ok(())
     }
 
-    pub async fn insert(&self, tx: &NeonTxInfo) -> Result<(), sqlx::Error> {
+    pub async fn begin_transaction(&self) -> Result<sqlx::Transaction<'_, Postgres>, sqlx::Error> {
+        self.pool.begin().await
+    }
+
+    pub async fn insert(
+        &self,
+        tx: &NeonTxInfo,
+        txn: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), sqlx::Error> {
         let block_slot = tx.sol_slot as i64;
         let tx_hash = tx.neon_signature;
         let tx_idx = tx.tx_idx as i32;
@@ -179,8 +188,6 @@ impl TransactionRepo {
             TransactionPayload::AccessList(tx) => tx.chain_id * 2 + 35 + u128::from(tx.recovery_id),
         };
         let chain_id = tx.transaction.chain_id();
-
-        let mut txn = self.pool.begin().await?;
 
         sqlx::query!(
             r#"
@@ -200,7 +207,7 @@ impl TransactionRepo {
             neon_step_cnt,
             PgU256::from(total_gas_used) as PgU256,
         )
-        .execute(&mut *txn)
+        .execute(&mut **txn)
         .await?;
 
         for log in &tx.events {
@@ -255,7 +262,7 @@ impl TransactionRepo {
                 log.topic_list.len() as i32,                                       // 16
                 hex::encode(&log.data)                                             // 17
             )
-            .execute(&mut *txn)
+            .execute(&mut **txn)
             .await?;
         }
 
@@ -332,9 +339,8 @@ impl TransactionRepo {
             &[],                                                               /* 25 logs */
             neon_step_cnt                                                      // 26
         )
-        .execute(&mut *txn)
+        .execute(&mut **txn)
         .await?;
-        txn.commit().await?;
         Ok(())
     }
 

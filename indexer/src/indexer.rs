@@ -1,12 +1,11 @@
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use common::ethnum::U256;
 use common::solana_sdk::clock::UnixTimestamp;
 use common::solana_sdk::commitment_config::CommitmentLevel;
 use common::solana_sdk::hash::Hash;
 use common::solana_sdk::pubkey::Pubkey;
-use common::solana_sdk::signature::Signature;
 use common::types::{HolderOperation, SolanaBlock, SolanaTransaction, TxHash};
 use neon_parse::{AccountsDb, Action};
 use solana::traverse::v2::LedgerItem;
@@ -72,13 +71,28 @@ impl Indexer {
         }
     }
 
+    pub async fn get_latest_block(&self) -> Result<Option<u64>> {
+        Ok(self
+            .block_repo
+            .latest_block_time()
+            .await?
+            .map(|(slot, _)| slot))
+    }
+
     async fn process_block(
         &mut self,
         block: SolanaBlock,
         txs: Vec<SolanaTransaction>,
         _commitment: CommitmentLevel,
     ) -> anyhow::Result<()> {
+        /* TODO: remove these entirely */
+        self.neon_tx_idx = 0;
+        self.block_gas_used = U256::new(0);
+        self.block_log_idx = 0;
+
         metrics().current_slot.set(block.slot as i64);
+
+        let mut txn = self.tx_repo.begin_transaction().await?;
 
         for tx in txs {
             let _tx_timer = metrics().transaction_processing_time.start_timer();
@@ -141,52 +155,51 @@ impl Indexer {
                             }
                         }
 
-                        if let Err(err) = self.tx_repo.insert(&tx).await {
-                            tracing::warn!(?err, "failed to save neon transaction");
-                            metrics().database_errors.inc();
-                        } else {
-                            metrics().neon_transactions_saved.inc();
-                            tracing::info!(
-                                signature = %tx.neon_signature,
-                                "saved transaction"
-                            );
-                        }
+                        self.tx_repo
+                            .insert(&tx, &mut txn)
+                            .await
+                            .context("failed to save neon transaction")?;
+                        metrics().neon_transactions_saved.inc();
+                        tracing::info!(
+                            signature = %tx.neon_signature,
+                            "saved transaction"
+                        );
                     }
                     Action::CancelTransaction { hash, total_gas } => {
-                        if let Err(err) = self.tx_repo.set_canceled(&hash, total_gas, slot).await {
-                            tracing::warn!(?err, "failed to cancel neon transaction");
-                            metrics().database_errors.inc();
-                        }
+                        self.tx_repo
+                            .set_canceled(&hash, total_gas, slot, &mut txn)
+                            .await
+                            .context("failed to cancel neon transaction")?;
                     }
                     Action::WriteHolder(op) => {
                         tracing::info!(slot = %slot, pubkey = %op.pubkey(), "saving holder");
-                        if let Err(err) = self.process_holder(slot, tx_idx, &op).await {
-                            tracing::warn!(?err, pubkey = %op.pubkey(), "failed to save neon holder");
-                            metrics().database_errors.inc();
-                        } else {
-                            metrics().holders_saved.inc();
+                        if let HolderOperation::Delete(pubkey) = &op {
+                            self.adb.delete_account(*pubkey);
                         }
+                        self.holder_repo
+                            .insert(slot, tx_idx, false, &op, &mut txn)
+                            .await
+                            .context("failed to save neon holder")?;
+                        metrics().holders_saved.inc();
                     }
                 }
             }
-            if let Err(err) = self.sig_repo.insert(slot, tx_idx, signature).await {
-                tracing::warn!(?err, "failed to save solana transaction");
-                metrics().database_errors.inc();
-            }
+            self.sig_repo
+                .insert(slot, tx_idx, signature, &mut txn)
+                .await
+                .context("failed to save solana signature")?;
         }
 
         let _blk_timer = metrics().block_processing_time.start_timer();
-        self.neon_tx_idx = 0;
-        self.block_gas_used = U256::new(0);
-        self.block_log_idx = 0;
-
-        if let Err(err) = self.block_repo.insert(&block).await {
-            tracing::warn!(?err, slot = block.slot, "failed to save solana block");
-            metrics().database_errors.inc();
-        } else {
-            tracing::info!(slot = block.slot, "saved solana block");
-            metrics().blocks_processed.inc();
-        }
+        self.block_repo
+            .insert(&block, &mut txn)
+            .await
+            .context("failed to save solana block")?;
+        tracing::info!(slot = block.slot, "saved solana block");
+        metrics().blocks_processed.inc();
+        txn.commit()
+            .await
+            .context("failed to commit block transaction")?;
         Ok(())
     }
 
@@ -238,14 +251,18 @@ impl Indexer {
 
         self.update_last_block().await;
 
+        let mut txn = self.tx_repo.begin_transaction().await?;
+
         let block = self.make_fake_block(slot);
-        if let Err(err) = self.block_repo.insert(&block).await {
-            tracing::warn!(?err, slot = block.slot, "failed to save solana block");
-            metrics().database_errors.inc();
-        } else {
-            tracing::info!(slot = block.slot, "saved solana block");
-            metrics().blocks_processed.inc();
-        }
+        self.block_repo
+            .insert(&block, &mut txn)
+            .await
+            .context("failed to save solana block")?;
+        tracing::info!(slot = block.slot, "saved solana block");
+        metrics().blocks_processed.inc();
+        txn.commit()
+            .await
+            .context("failed to commit missing block")?;
         Ok(())
     }
 
@@ -263,23 +280,6 @@ impl Indexer {
                 self.process_missing_block(slot).await?;
             }
         }
-        Ok(())
-    }
-
-    pub async fn get_latest_signature(&self) -> Result<Option<Signature>> {
-        Ok(self.sig_repo.get_latest().await?)
-    }
-
-    async fn process_holder(
-        &mut self,
-        slot: u64,
-        tx_idx: u32,
-        op: &HolderOperation,
-    ) -> Result<(), anyhow::Error> {
-        if let HolderOperation::Delete(pubkey) = op {
-            self.adb.delete_account(*pubkey);
-        }
-        self.holder_repo.insert(slot, tx_idx, false, op).await?;
         Ok(())
     }
 }
