@@ -69,7 +69,8 @@ async fn build_rpc(
                 CallDbClient::new(tracer_db.clone(), slot, tx_index_in_block).await?,
             ))
         } else {
-            Err(NeonError::InvalidChDbConfig)
+            warn!("tracer_db is not configured, falling back to RpcClient");
+            Ok(RpcEnum::CloneRpcClient(rpc_client.clone()))
         }
     } else {
         Ok(RpcEnum::CloneRpcClient(rpc_client.clone()))
