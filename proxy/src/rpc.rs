@@ -36,18 +36,16 @@ use crate::convert::{
 use crate::neon_api::NeonApi;
 use crate::Error;
 
-// TODO: get it from neon config??
-const CHAIN_ID: u64 = 245022926;
-
 #[derive(Clone)]
 pub struct EthApiImpl {
     transactions: ::db::TransactionRepo,
     blocks: ::db::BlockRepo,
     neon_api: NeonApi,
+    chain_id: u64,
 }
 
 impl EthApiImpl {
-    pub fn new(pool: PgPool, neon_api: NeonApi) -> Self {
+    pub fn new(pool: PgPool, neon_api: NeonApi, chain_id: u64) -> Self {
         let transactions = ::db::TransactionRepo::new(pool.clone());
         let blocks = ::db::BlockRepo::new(pool.clone());
 
@@ -55,6 +53,7 @@ impl EthApiImpl {
             transactions,
             blocks,
             neon_api,
+            chain_id,
         }
     }
 
@@ -217,7 +216,7 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns the chain ID of the current network.
     async fn chain_id(&self) -> RpcResult<Option<U64>> {
-        Ok(Some(U64::from(CHAIN_ID)))
+        Ok(Some(U64::from(self.chain_id)))
     }
 
     /// Returns information about a block by hash.
@@ -371,7 +370,7 @@ impl EthApiServer for EthApiImpl {
 
         let balance_address = BalanceAddress {
             address: Address::from(<[u8; 20]>::from(address.0)),
-            chain_id: CHAIN_ID,
+            chain_id: self.chain_id,
         };
         let balance = self
             .neon_api
@@ -408,7 +407,7 @@ impl EthApiServer for EthApiImpl {
 
         let balance_address = BalanceAddress {
             address: Address::from(<[u8; 20]>::from(address.0)),
-            chain_id: CHAIN_ID,
+            chain_id: self.chain_id,
         };
         let balance = self
             .neon_api
@@ -465,7 +464,7 @@ impl EthApiServer for EthApiImpl {
                 .access_list
                 .map(|list| list.0.into_iter().map(ToNeon::to_neon).collect()),
             actual_gas_used: None,
-            chain_id: Some(CHAIN_ID),
+            chain_id: Some(self.chain_id),
         };
         let data = self.neon_api.call(tx).await.unwrap(); // TODO: handle error
         Ok(Bytes::from(data))
@@ -531,7 +530,7 @@ impl EthApiServer for EthApiImpl {
                 .access_list
                 .map(|list| list.0.into_iter().map(ToNeon::to_neon).collect()),
             actual_gas_used: None,
-            chain_id: Some(CHAIN_ID),
+            chain_id: Some(self.chain_id),
         };
         let gas = self
             .neon_api
