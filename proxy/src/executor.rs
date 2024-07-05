@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod tests;
+
 use std::mem;
 use std::sync::Arc;
 
@@ -13,6 +16,7 @@ use common::neon_lib::types::{Address, TxParams};
 use common::solana_sdk::instruction::{AccountMeta, Instruction};
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Keypair;
+use common::solana_sdk::signature::Signature;
 use common::solana_sdk::signer::Signer;
 use common::solana_sdk::system_program;
 use common::solana_sdk::transaction::Transaction;
@@ -68,7 +72,7 @@ impl Executor {
         })
     }
 
-    pub async fn handle_transaction(&self, tx: TxEnvelope) -> anyhow::Result<()> {
+    pub async fn handle_transaction(&self, tx: TxEnvelope) -> anyhow::Result<Signature> {
         let from = tx
             .recover_signer()
             .context("could not recover signer")?
@@ -128,12 +132,13 @@ impl Executor {
 
         tx.try_sign(&[&self.operator], blockhash)
             .context("could not sign request")?;
-        self.solana_api
+        let signature = self
+            .solana_api
             .send_transaction(&tx)
             .await
             .context("could not send transaction")?;
 
-        Ok(())
+        Ok(signature)
     }
 
     fn build_simple(
@@ -168,7 +173,7 @@ impl Executor {
         let data_len = mem::size_of::<u8>() // Tag
             + mem::size_of::<u32>()
             + tx.length();
-        let mut data = Vec::with_capacity(data_len);
+        let mut data = vec![0; data_len];
 
         data[0] = tag::TX_EXEC_FROM_DATA;
         data[1..1 + mem::size_of_val(&treasury_pool_idx)]
@@ -183,7 +188,7 @@ impl Executor {
         Ok(ix)
     }
 
-    async fn init_operator_balance(&self, chain_id: u64) -> anyhow::Result<()> {
+    async fn init_operator_balance(&self, chain_id: u64) -> anyhow::Result<Option<Signature>> {
         let addr = self.operator_balance(chain_id);
         if let Some(acc) = self
             .solana_api
@@ -194,15 +199,15 @@ impl Executor {
             if acc.owner != self.program_id {
                 anyhow::bail!("operator balance account ({addr}) exists, but hash invalid owner");
             }
-            return Ok(());
+            return Ok(None);
         }
 
         const TAG_IDX: usize = 0;
-        const ADDR_IDX: usize = TAG_IDX;
+        const ADDR_IDX: usize = TAG_IDX + 1;
         const CHAIN_ID_IDX: usize = ADDR_IDX + mem::size_of::<Address>();
         const DATA_LEN: usize = CHAIN_ID_IDX + mem::size_of::<u64>();
 
-        let mut data = Vec::with_capacity(DATA_LEN);
+        let mut data = vec![0; DATA_LEN];
         data[TAG_IDX] = tag::OPERATOR_BALANCE_CREATE;
         data[ADDR_IDX..CHAIN_ID_IDX].copy_from_slice(&self.operator_addr.0);
         data[CHAIN_ID_IDX..].copy_from_slice(&chain_id.to_le_bytes());
@@ -223,12 +228,13 @@ impl Executor {
         tx.try_sign(&[&self.operator], blockhash)
             .context("failed signing create balance transaction")?;
 
-        self.solana_api
+        let signature = self
+            .solana_api
             .send_transaction(&tx)
             .await
             .context("failed create balance transaction send")?;
 
-        Ok(())
+        Ok(Some(signature))
     }
 
     fn operator_balance(&self, chain_id: u64) -> Pubkey {

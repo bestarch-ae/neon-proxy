@@ -95,6 +95,16 @@ impl NeonApi {
         config_key: Pubkey,
         tracer_db_config: ChDbConfig,
     ) -> Self {
+        let client = RpcClient::new(url);
+        Self::new_with_custom_rpc_client(client, neon_pubkey, config_key, tracer_db_config)
+    }
+
+    pub fn new_with_custom_rpc_client(
+        client: RpcClient,
+        neon_pubkey: Pubkey,
+        config_key: Pubkey,
+        tracer_db_config: ChDbConfig,
+    ) -> Self {
         let (tx, mut rx) = mpsc::channel::<Task>(128);
 
         std::thread::spawn(move || {
@@ -103,7 +113,6 @@ impl NeonApi {
             let local = LocalSet::new();
 
             local.spawn_local(async move {
-                let client = RpcClient::new(url);
                 let client = CloneRpcClient {
                     rpc: Arc::new(client),
                     max_retries: 10,
