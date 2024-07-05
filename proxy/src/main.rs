@@ -78,6 +78,10 @@ struct Args {
     #[arg(long, env)]
     /// Trace db password
     neon_db_clickhouse_password: Option<String>,
+
+    #[arg(long, env, default_value = "245022926")]
+    // Neon chain id
+    chain_id: u64,
 }
 
 #[tokio::main]
@@ -86,6 +90,13 @@ async fn main() {
     let _ = tracing_log::LogTracer::init();
 
     let opts = Args::parse();
+
+    tracing::info!(
+        neon_pubkey = %opts.neon_pubkey,
+        neon_config = %opts.neon_config_pubkey,
+        chain_id = opts.chain_id,
+        "starting"
+    );
 
     let pool = db::connect(&opts.pg_url).await.unwrap();
     let tracer_db_config = ChDbConfig {
@@ -101,7 +112,7 @@ async fn main() {
         opts.neon_config_pubkey,
         tracer_db_config,
     );
-    let eth = EthApiImpl::new(pool, solana);
+    let eth = EthApiImpl::new(pool, solana, opts.chain_id);
     let mut module = jsonrpsee::server::RpcModule::new(());
     module
         .merge(<EthApiImpl as EthApiServer>::into_rpc(eth.clone()))
