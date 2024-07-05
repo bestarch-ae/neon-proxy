@@ -65,7 +65,7 @@ pub struct TraverseConfig {
 
 impl Default for TraverseConfig {
     fn default() -> Self {
-        TraverseConfig {
+        Self {
             endpoint: String::default(),
             finalized: true,
             rps_limit_sleep: None,
@@ -96,7 +96,7 @@ pub enum LedgerItem {
 }
 
 impl LedgerItem {
-    pub fn slot(&self) -> u64 {
+    pub const fn slot(&self) -> u64 {
         match self {
             Self::Block { block, .. } => block.slot,
             Self::MissingBlock { slot } => *slot,
@@ -118,7 +118,7 @@ impl TraverseLedger {
         } else {
             CommitmentLevel::Confirmed
         };
-        TraverseLedger {
+        Self {
             api: SolanaApi::new(config.endpoint.clone(), config.finalized),
             config,
             commitment,

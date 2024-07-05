@@ -360,7 +360,7 @@ mod tests {
 
     impl DummyAdb {
         pub fn new(neon: Pubkey) -> Self {
-            DummyAdb {
+            Self {
                 map: Default::default(),
                 neon_pubkey: neon,
             }
@@ -444,7 +444,7 @@ mod tests {
             "5hV1MnLmrEz2HPYqdxmUPUvBx9kRA1PPFYAJh6vMBXg9vTxtJLxSfLDcvz3pg41JtwxeXNuYyY18vzDPPn1LadV6",
         ];
         for sig in holder_txs {
-            let holder_tx = format!("tests/data/transactions/{}/transaction.json", sig);
+            let holder_tx = format!("tests/data/transactions/{sig}/transaction.json");
             parse_tx(holder_tx, None::<PathBuf>, &mut adb);
         }
 
@@ -460,7 +460,7 @@ mod tests {
             "4MfBsYNYsSBCo1BP2BLRuPYUzApc7ynqdGYNNbZyi4AKkkE2pBjn2MWqw1y7dmZFWN1sJL8uUsbG36b7gB3ekAa7"
         ];
         for sig in holder_txs {
-            let holder_tx = format!("tests/data/transactions/{}/transaction.json", sig);
+            let holder_tx = format!("tests/data/transactions/{sig}/transaction.json");
             parse_tx(holder_tx, None::<PathBuf>, &mut adb);
         }
         let transaction_path = "tests/data/transactions/3uH3dMtSpp7x75poHQM7rHefviVC6WRp4Qzjvodhs2RWALTmQ6fTw52VPrSGwvhmStwpLyaRgcL3X9r8SytXE3eR/transaction.json";

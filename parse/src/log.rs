@@ -97,8 +97,8 @@ enum Mnemonic {
 }
 
 impl Mnemonic {
-    fn requires_arg(&self) -> bool {
-        !matches!(self, Mnemonic::Reset)
+    const fn requires_arg(&self) -> bool {
+        !matches!(self, Self::Reset)
     }
 
     fn decode_hash(s: &str) -> Result<TxHash, Error> {
@@ -296,7 +296,7 @@ impl Mnemonic {
         let len = BASE64.decode_slice(input, &mut buf)?;
         assert_eq!(len, 1); // TODO: unclear how long should it be
         let exit_status = buf[0];
-        let exit_status = if exit_status < 0xd0 { 0x1 } else { 0x0 };
+        let exit_status = u8::from(exit_status < 0xd0);
 
         let gas_used = ix.map(|ix| ix.total_gas_used).ok_or(Error::InvalidEvent)?;
 
@@ -309,7 +309,7 @@ impl Mnemonic {
 
     // TODO
     fn decode_miner(_input: &str) {
-        warn!("miner opcode not implemented yet")
+        warn!("miner opcode not implemented yet");
     }
 
     // Unpacks number of evm steps:
@@ -343,18 +343,18 @@ impl FromStr for Mnemonic {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "HASH" => Ok(Mnemonic::Hash),
-            "MINER" => Ok(Mnemonic::Miner),
-            "RETURN" => Ok(Mnemonic::Return),
-            "ENTER" => Ok(Mnemonic::Enter),
-            "EXIT" => Ok(Mnemonic::Exit),
-            "GAS" => Ok(Mnemonic::Gas),
-            "STEPS" => Ok(Mnemonic::Steps),
-            "RESET" => Ok(Mnemonic::Reset),
+            "HASH" => Ok(Self::Hash),
+            "MINER" => Ok(Self::Miner),
+            "RETURN" => Ok(Self::Return),
+            "ENTER" => Ok(Self::Enter),
+            "EXIT" => Ok(Self::Exit),
+            "GAS" => Ok(Self::Gas),
+            "STEPS" => Ok(Self::Steps),
+            "RESET" => Ok(Self::Reset),
             _ if s.starts_with("LOG") => {
                 let n = s.strip_prefix("LOG").unwrap();
                 let n = n.parse().map_err(|_| BadMnemonic)?;
-                Ok(Mnemonic::Log(n))
+                Ok(Self::Log(n))
             }
             s => {
                 tracing::warn!("Invalid mnemonic {}", s);
@@ -518,10 +518,7 @@ pub fn parse(
     }
 
     let mut revert_level = None;
-    let is_failed = neon_tx_return
-        .as_ref()
-        .map(|ret| ret.status == 0)
-        .unwrap_or(false);
+    let is_failed = neon_tx_return.as_ref().is_some_and(|ret| ret.status == 0);
 
     for event in event_list.iter_mut().rev() {
         if event.event_type.is_start() && revert_level == Some(event.level) {

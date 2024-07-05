@@ -20,7 +20,7 @@ pub enum BlockBy {
 }
 
 impl BlockRepo {
-    pub fn new(pool: sqlx::PgPool) -> Self {
+    pub const fn new(pool: sqlx::PgPool) -> Self {
         Self { pool }
     }
 
@@ -161,7 +161,7 @@ impl TryFrom<BlockRow> for SolanaBlock {
             parent_block_hash,
             is_finalized,
         } = value;
-        Ok(SolanaBlock {
+        Ok(Self {
             slot: block_slot.try_into().context("slot")?,
             hash: block_hash.into(),
             parent_slot: parent_block_slot.try_into().context("parent_slot")?,

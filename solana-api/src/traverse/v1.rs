@@ -52,7 +52,7 @@ pub(crate) struct CachedBlock {
 }
 
 impl CachedBlock {
-    fn new(slot: Slot, block: UiConfirmedBlock, txs: HashSet<String>) -> Self {
+    const fn new(slot: Slot, block: UiConfirmedBlock, txs: HashSet<String>) -> Self {
         Self {
             slot,
             block,
@@ -141,7 +141,7 @@ impl TraverseConfig {
 
 impl Default for TraverseConfig {
     fn default() -> Self {
-        TraverseConfig {
+        Self {
             endpoint: String::default(),
             finalized: true,
             rps_limit_sleep: None,
@@ -212,7 +212,7 @@ impl TraverseLedger {
                 Ok((slot, false)) => Ok(LedgerItem::PurgedBlock(slot)),
             }),
             Some(result) = self.traverse.next() => Some(match result {
-                res @ Ok(InnerLedgerItem::Transaction(..)) | res @ Err(..) => res.map(Into::into),
+                res @ (Ok(InnerLedgerItem::Transaction(..)) | Err(..)) => res.map(Into::into),
                 res @ Ok(InnerLedgerItem::Block(..)) if self.is_finalized => res.map(Into::into),
                 Ok(InnerLedgerItem::Block(mut block)) => {
                     match tracker.check_or_schedule_new_slot(block.slot) {
@@ -338,9 +338,8 @@ impl InnerTraverseLedger {
                     self.buffer.push_front(candidate);
                     metrics().traverse.buffer_len.inc();
                     break;
-                } else {
-                    txs.insert(candidate.signature);
                 }
+                txs.insert(candidate.signature);
             }
             let block = retry!(
                 self.api.get_block(slot, false),
@@ -558,7 +557,7 @@ impl InnerTraverseLedger {
                             tracing::warn!(
                                 limit = ?self.config.signature_buffer_limit,
                                 "signature buffer was exceeded, newer signatures will be purged"
-                            )
+                            );
                         });
                         new_signatures.pop_back();
                         let sign = &new_signatures.back().expect("must not be empty").signature;
@@ -576,7 +575,7 @@ impl InnerTraverseLedger {
         }
 
         if last_observed.is_some() {
-            self.last_observed = last_observed
+            self.last_observed = last_observed;
         };
         tracing::debug!(
             len = new_signatures.len(),

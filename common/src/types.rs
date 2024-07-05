@@ -16,11 +16,11 @@ use solana_transaction_status::InnerInstructions;
 pub struct TxHash([u8; 32]);
 
 impl TxHash {
-    pub fn as_array(&self) -> &[u8; 32] {
+    pub const fn as_array(&self) -> &[u8; 32] {
         &self.0
     }
 
-    pub fn as_slice(&self) -> &[u8] {
+    pub const fn as_slice(&self) -> &[u8] {
         &self.0
     }
 }
@@ -164,25 +164,22 @@ pub enum EventKind {
 }
 
 impl EventKind {
-    pub fn is_exit(&self) -> bool {
+    pub const fn is_exit(&self) -> bool {
         matches!(
             self,
-            EventKind::ExitStop
-                | EventKind::ExitReturn
-                | EventKind::ExitSelfDestruct
-                | EventKind::ExitRevert
+            Self::ExitStop | Self::ExitReturn | Self::ExitSelfDestruct | Self::ExitRevert
         )
     }
 
-    pub fn is_start(&self) -> bool {
+    pub const fn is_start(&self) -> bool {
         matches!(
             self,
-            EventKind::EnterCall
-                | EventKind::EnterCallCode
-                | EventKind::EnterStaticCall
-                | EventKind::EnterDelegateCall
-                | EventKind::EnterCreate
-                | EventKind::EnterCreate2
+            Self::EnterCall
+                | Self::EnterCallCode
+                | Self::EnterStaticCall
+                | Self::EnterDelegateCall
+                | Self::EnterCreate
+                | Self::EnterCreate2
         )
     }
 }
@@ -274,11 +271,9 @@ pub enum HolderOperation {
 }
 
 impl HolderOperation {
-    pub fn pubkey(&self) -> Pubkey {
+    pub const fn pubkey(&self) -> Pubkey {
         match self {
-            Self::Create(pubkey) => *pubkey,
-            Self::Delete(pubkey) => *pubkey,
-            Self::Write { pubkey, .. } => *pubkey,
+            Self::Create(pubkey) | Self::Delete(pubkey) | Self::Write { pubkey, .. } => *pubkey,
         }
     }
 }
