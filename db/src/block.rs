@@ -2,6 +2,7 @@ use anyhow::Context;
 use common::solana_sdk::hash::Hash;
 use common::types::SolanaBlock;
 use futures_util::FutureExt;
+use sqlx::postgres::Postgres;
 
 use crate::PgSolanaBlockHash;
 
@@ -23,8 +24,11 @@ impl BlockRepo {
         Self { pool }
     }
 
-    pub async fn insert(&self, block: &SolanaBlock) -> Result<(), sqlx::Error> {
-        let mut txn = self.pool.begin().await?;
+    pub async fn insert(
+        &self,
+        block: &SolanaBlock,
+        txn: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), sqlx::Error> {
         sqlx::query!(
             r#"INSERT INTO solana_blocks (
                 block_slot,
@@ -43,9 +47,8 @@ impl BlockRepo {
             block.is_finalized,
             true,
         )
-        .execute(&mut *txn)
+        .execute(&mut **txn)
         .await?;
-        txn.commit().await?;
         Ok(())
     }
 

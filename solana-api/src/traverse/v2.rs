@@ -93,7 +93,7 @@ pub enum LedgerItem {
 }
 
 impl LedgerItem {
-    fn slot(&self) -> u64 {
+    pub fn slot(&self) -> u64 {
         match self {
             Self::Block { block, .. } => block.slot,
             Self::MissingBlock { slot } => *slot,

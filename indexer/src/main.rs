@@ -6,7 +6,6 @@ use solana::traverse::v2::{TraverseConfig, TraverseLedger};
 use tokio::sync::mpsc;
 
 use common::solana_sdk::pubkey::Pubkey;
-use common::solana_sdk::signature::Signature;
 use indexer::Indexer;
 use metrics::metrics;
 use tokio_stream::{Stream, StreamExt};
@@ -30,9 +29,9 @@ struct Args {
     /// Solana endpoint
     url: String,
 
-    #[arg(short, long, default_value = None, value_name = "SIGNATURE")]
-    /// Transaction to start from
-    from: Option<Signature>,
+    #[arg(short, long, default_value = None, value_name = "SLOT")]
+    /// Slot to start from
+    slot: Option<u64>,
 
     #[arg(short, long, default_value = None, value_name = "POSTGRES_URL")]
     pg_url: String,
@@ -58,16 +57,16 @@ async fn main() -> Result<()> {
     let pool = db::connect(&opts.pg_url).await?;
 
     let mut indexer = Indexer::new(pool, opts.target);
-    let last_signature = indexer.get_latest_signature().await?;
-    let from = opts.from.or(last_signature);
+    let last_block = indexer.get_latest_block().await?.map(|x| x + 1);
+    let start_slot = last_block.or(opts.slot);
 
-    tracing::info!("starting traversal from {:?}", from);
+    tracing::info!("starting traversal from slot {:?}", start_slot);
 
     let traverse_config = TraverseConfig {
         endpoint: opts.url,
         rps_limit_sleep: opts.rps_limit_sleep.map(Duration::from_secs),
         target_key: opts.target,
-        last_observed: from,
+        last_observed: None,
         finalized: !opts.confirmed,
         only_success: true,
         ..Default::default()
@@ -82,9 +81,8 @@ async fn main() -> Result<()> {
     let (tx, mut rx) = mpsc::channel(128);
 
     let traverse_handle = tokio::spawn(async move {
-        let mut traverse = if let Some(signature) = from {
-            Box::pin(traverse.since_signature(signature).await)
-                as std::pin::Pin<Box<dyn Stream<Item = _> + Send>>
+        let mut traverse = if let Some(slot) = start_slot {
+            Box::pin(traverse.in_range(slot..)) as std::pin::Pin<Box<dyn Stream<Item = _> + Send>>
         } else {
             Box::pin(traverse.start_from_beginning())
         };
@@ -103,7 +101,12 @@ async fn main() -> Result<()> {
         tracing::debug!(?result, "retrieved new block");
 
         match result {
-            Ok(item) => indexer.process_ledger(item).await?,
+            Ok(item) => {
+                let slot = item.slot();
+                if let Err(err) = indexer.process_ledger(item).await {
+                    tracing::error!(error = %err, %slot, "failed processing item");
+                }
+            }
             Err(err) => {
                 tracing::warn!(?err, "failed to retrieve transaction");
                 metrics().traverse_errors.inc();
