@@ -181,8 +181,8 @@ impl TraverseLedger {
                     if matches!(
                         err.kind,
                         ClientErrorKind::RpcError(RpcError::RpcResponseError {
-                            code:
-                                custom_error::JSON_RPC_SERVER_ERROR_LONG_TERM_STORAGE_SLOT_SKIPPED,
+                            code: custom_error::JSON_RPC_SERVER_ERROR_LONG_TERM_STORAGE_SLOT_SKIPPED
+                                | custom_error::JSON_RPC_SERVER_ERROR_SLOT_SKIPPED,
                             ..
                         })
                     ) =>
