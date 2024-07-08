@@ -51,7 +51,13 @@ pub struct EthApiImpl {
 }
 
 impl EthApiImpl {
-    pub fn new(pool: PgPool, neon_api: NeonApi, chain_id: u64, executor: Option<Executor>, mp_gas_prices: mempool::GasPrices) -> Self {
+    pub fn new(
+        pool: PgPool,
+        neon_api: NeonApi,
+        chain_id: u64,
+        executor: Option<Executor>,
+        mp_gas_prices: mempool::GasPrices,
+    ) -> Self {
         let transactions = ::db::TransactionRepo::new(pool.clone());
         let blocks = ::db::BlockRepo::new(pool.clone());
 
