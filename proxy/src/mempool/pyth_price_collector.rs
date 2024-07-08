@@ -7,9 +7,10 @@ use futures_util::future::BoxFuture;
 use futures_util::StreamExt;
 use pyth_sdk_solana::state::{load_mapping_account, load_product_account};
 use pyth_sdk_solana::{load_price_feed_from_account, Price, PriceFeed};
-use tokio::sync::mpsc::unbounded_channel;
+// use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use common::solana_account_decoder::UiAccountEncoding;
 use common::solana_sdk::account::Account;
@@ -119,14 +120,14 @@ impl PythPricesCollector {
         if self.subscriptions.contains_key(&token_pkey) {
             return Ok(());
         }
-        let (unsub_tx, mut unsub_rx) = unbounded_channel();
+        let (unsub_tx, unsub_rx) = oneshot::channel::<UnsubscribeFn>();
         let subs_handler = tokio::task::spawn_local({
             // From the `PubsubClient docs:
             //   The subscriptions have to be made from the tasks that will receive the subscription
             //   messages, because the subscription streams hold a reference to the `PubsubClient`.
             //   Otherwise, we would just subscribe on the main task and send the receivers out
             //   to other tasks.
-            let unsub_tx = unsub_tx.clone();
+            // let unsub_tx = unsub_tx.clone();
             let client = Arc::clone(&self.client);
             let token_key = token_pkey;
             let prices = Arc::clone(&self.prices);
@@ -141,10 +142,11 @@ impl PythPricesCollector {
                     .account_subscribe(&token_key, Some(account_info_config))
                     .await?;
                 info!(?token_key, "subscribed to pyth token account");
-                unsub_tx
-                    .send(unsub_fn)
-                    .map_err(|err| MempoolError::TokioSendError(err.to_string()))?;
-                drop(unsub_tx);
+                if let Err(unsub_fn) = unsub_tx.send(unsub_fn) {
+                    error!("failed to send unsubscribe function");
+                    unsub_fn().await;
+                    return Err(MempoolError::FailedToSendUnsubscribe);
+                }
 
                 // this loop will end once the main task unsubscribes
                 while let Some(update) = notif.next().await {
@@ -168,14 +170,15 @@ impl PythPricesCollector {
             }
         });
 
-        drop(unsub_tx);
-
         self.subscriptions.insert(token_pkey, subs_handler);
-        if let Some(unsub_fn) = unsub_rx.recv().await {
-            self.unsubscribe_fns.insert(token_pkey, unsub_fn);
+        match unsub_rx.await {
+            Ok(unsub_fn) => {
+                self.unsubscribe_fns.insert(token_pkey, unsub_fn);
+            }
+            Err(err) => {
+                error!(?err, "failed to receive unsubscribe function");
+            }
         }
-
-        drop(unsub_rx);
 
         Ok(())
     }

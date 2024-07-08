@@ -21,8 +21,8 @@ pub enum MempoolError {
     PythError(#[from] PythError),
     #[error("pubsub client error: {0}")]
     SolanaPubsubClientError(#[from] PubsubClientError),
-    #[error("tokio send error: {0}")]
-    TokioSendError(String),
+    #[error("failed to send subscribe fn")]
+    FailedToSendUnsubscribe,
     #[error("system time error: {0}")]
     SystemTimeError(#[from] std::time::SystemTimeError),
     #[error("base token not found in pyth symbology: {0}")]
