@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use dashmap::DashMap;
 use pyth_sdk_solana::Price;
-use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use tokio::runtime::Builder;
 use tokio::task::LocalSet;
 use tracing::{error, info, warn};
@@ -12,6 +11,7 @@ use tracing::{error, info, warn};
 use common::neon_lib::commands;
 use common::neon_lib::rpc::CloneRpcClient;
 use common::solana_sdk::pubkey::Pubkey;
+use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
 use crate::mempool::gas_price_calculator::{GasPriceCalculator, GasPriceCalculatorConfig};
 use crate::mempool::pyth_price_collector::PythPricesCollector;

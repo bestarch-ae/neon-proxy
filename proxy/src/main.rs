@@ -6,8 +6,6 @@ use clap::Parser;
 
 use jsonrpsee::types::ErrorCode;
 use rpc_api::{EthApiServer, EthFilterApiServer};
-use solana_api::solana_api::SolanaApi;
-use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use thiserror::Error;
 
 mod convert;
@@ -23,6 +21,8 @@ use common::solana_sdk::signer::EncodableKey;
 use executor::Executor;
 use neon_api::NeonApi;
 use rpc::{EthApiImpl, NeonEthApiServer, NeonFilterApiServer};
+use solana_api::solana_api::SolanaApi;
+use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
 #[derive(Debug, Error)]
 pub enum Error {

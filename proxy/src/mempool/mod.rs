@@ -3,9 +3,10 @@ mod gas_prices;
 mod pyth_price_collector;
 
 use pyth_sdk_solana::PythError;
-use solana_client::pubsub_client::PubsubClientError;
-use solana_rpc_client_api::client_error::Error as SolanaClientError;
 use thiserror::Error;
+
+use solana_api::solana_client::pubsub_client::PubsubClientError;
+use solana_api::solana_rpc_client_api::client_error::Error as SolanaClientError;
 
 pub use gas_price_calculator::GasPriceCalculatorConfig;
 pub use gas_prices::GasPrices;
