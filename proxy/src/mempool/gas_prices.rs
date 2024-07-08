@@ -83,9 +83,10 @@ impl GasPrices {
                     max_retries: RPC_CLIENT_MAX_RETRIES,
                     key_for_config: config.config_key,
                 };
-                let mut collector = PythPricesCollector::try_new(&ws_url_thread, prices_thread)
-                    .await
-                    .expect("failed to create PythPricesCollector");
+                let mut collector =
+                    PythPricesCollector::try_new(&ws_url_thread, Arc::downgrade(&prices_thread))
+                        .await
+                        .expect("failed to create PythPricesCollector");
 
                 let refresh_rate = Duration::from_secs(EVM_CONFIG_REFRESH_RATE_SEC);
                 let mut interval = tokio::time::interval(refresh_rate);

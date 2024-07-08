@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
@@ -94,7 +94,7 @@ pub async fn pyth_collect_symbology(
 /// Collects the Pyth prices for the tokens in the symbology map.
 pub struct PythPricesCollector {
     client: Arc<PubsubClient>,
-    prices: Arc<DashMap<Pubkey, Price>>,
+    prices: Weak<DashMap<Pubkey, Price>>,
     subscriptions: HashMap<Pubkey, JoinHandle<Result<(), MempoolError>>>,
     unsubscribe_fns: HashMap<Pubkey, UnsubscribeFn>,
 }
@@ -103,7 +103,7 @@ impl PythPricesCollector {
     /// Creates a new PythPricesCollector instance.
     pub async fn try_new(
         ws_url: &str,
-        prices: Arc<DashMap<Pubkey, Price>>,
+        prices: Weak<DashMap<Pubkey, Price>>,
     ) -> Result<Self, MempoolError> {
         let client = Arc::new(PubsubClient::new(ws_url).await?);
 
@@ -130,7 +130,7 @@ impl PythPricesCollector {
             // let unsub_tx = unsub_tx.clone();
             let client = Arc::clone(&self.client);
             let token_key = token_pkey;
-            let prices = Arc::clone(&self.prices);
+            let prices = Weak::clone(&self.prices);
             async move {
                 let account_info_config = RpcAccountInfoConfig {
                     encoding: Some(UiAccountEncoding::Base64),
@@ -164,7 +164,12 @@ impl PythPricesCollector {
                         warn!(?token_key, "stale or no price");
                         continue;
                     };
-                    prices.insert(token_key, price);
+                    if let Some(prices) = prices.upgrade() {
+                        prices.insert(token_key, price);
+                    } else {
+                        info!("prices map dropped, unsubscribing");
+                        return Ok::<_, MempoolError>(());
+                    }
                 }
                 Ok::<_, MempoolError>(())
             }
@@ -190,6 +195,8 @@ impl PythPricesCollector {
         }
         // TODO: do we want to wait the handler?
         self.subscriptions.remove(&token_pkey);
-        self.prices.remove(&token_pkey);
+        if let Some(prices) = self.prices.upgrade() {
+            prices.remove(&token_pkey);
+        }
     }
 }
