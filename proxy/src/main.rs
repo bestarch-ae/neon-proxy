@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use clap::Parser;
 
@@ -128,6 +130,9 @@ struct Args {
     #[arg(long, env, default_value = "50000")]
     /// Operator fee
     operator_fee: u128,
+
+    #[arg(long, env)]
+    symbology_path: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -159,11 +164,23 @@ async fn main() {
         tracer_db_config,
     );
     tracing::info!(%opts.pyth_mapping_addr, "loading symbology");
-    let rpc_client = RpcClient::new(opts.solana_url.clone());
-    let pyth_symbology = mempool::pyth_collect_symbology(&opts.pyth_mapping_addr, &rpc_client)
-        .await
-        .expect("failed to collect pyth symbology");
-    drop(rpc_client);
+    let pyth_symbology = if let Some(path) = opts.symbology_path.as_ref() {
+        let raw = std::fs::read_to_string(path).expect("failed to read symbology");
+        let symbology_raw: HashMap<String, String> =
+            serde_json::from_str(&raw).expect("failed to parse symbology json");
+        symbology_raw
+            .iter()
+            .map(|(k, v)| Pubkey::from_str(v).map(|pubkey| (k.clone(), pubkey)))
+            .collect::<Result<HashMap<String, Pubkey>, _>>()
+            .expect("failed to parse symbology")
+    } else {
+        let rpc_client = RpcClient::new(opts.solana_url.clone());
+        let symbology = mempool::pyth_collect_symbology(&opts.pyth_mapping_addr, &rpc_client)
+            .await
+            .expect("failed to collect pyth symbology");
+        drop(rpc_client);
+        symbology
+    };
     let mp_gas_calculator_config = mempool::GasPriceCalculatorConfig {
         operator_fee: opts.operator_fee,
         min_gas_price: opts.minimal_gas_price,
