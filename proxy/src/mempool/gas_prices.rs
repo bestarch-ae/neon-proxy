@@ -4,35 +4,24 @@ use std::time::Duration;
 
 use dashmap::DashMap;
 use pyth_sdk_solana::Price;
-use tokio::runtime::Builder;
-use tokio::task::LocalSet;
 use tracing::{error, info, warn};
 
-use common::neon_lib::commands;
-use common::neon_lib::rpc::CloneRpcClient;
 use common::solana_sdk::pubkey::Pubkey;
-use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
 use crate::mempool::gas_price_calculator::{GasPriceCalculator, GasPriceCalculatorConfig};
 use crate::mempool::pyth_price_collector::PythPricesCollector;
 use crate::mempool::MempoolError;
+use crate::neon_api::NeonApi;
 
 pub type Symbology = HashMap<String, Pubkey>;
 
 const EVM_CONFIG_REFRESH_RATE_SEC: u64 = 60;
-const RPC_CLIENT_MAX_RETRIES: usize = 10;
 const TARGET_PREC: i32 = -9;
 
 #[derive(Debug, Clone)]
 pub struct GasPricesConfig {
-    /// URL of the Solana RPC endpoint
-    pub url: String,
     /// URL of the Pyth websocket endpoint (could be solana mainnet)
     pub ws_url: String,
-    /// Neon program pubkey
-    pub neon_pubkey: Pubkey,
-    /// Neon EVM config pubkey
-    pub config_key: Pubkey,
     /// Base token symbol in the Pyth symbology
     pub base_token: String,
     /// Default token symbol in the Pyth symbology
@@ -55,12 +44,12 @@ impl GasPrices {
     /// config.
     pub fn try_new(
         config: GasPricesConfig,
+        neon_api: NeonApi,
         symbology: Symbology,
         calculator_config: GasPriceCalculatorConfig,
     ) -> Result<Self, MempoolError> {
         let prices = Arc::new(DashMap::new());
         let prices_thread = Arc::clone(&prices);
-        let url_thread = config.url;
         let ws_url_thread = config.ws_url;
 
         let base_token_pkey = *symbology
@@ -70,74 +59,54 @@ impl GasPrices {
             .get(&config.default_token)
             .ok_or(MempoolError::DefaultTokenNotFound(config.default_token))?;
 
-        std::thread::spawn(move || {
-            let rt = Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("failed to build rt");
-            let local = LocalSet::new();
-
-            local.spawn_local(async move {
-                let rpc_client = CloneRpcClient {
-                    rpc: Arc::new(RpcClient::new(url_thread)),
-                    max_retries: RPC_CLIENT_MAX_RETRIES,
-                    key_for_config: config.config_key,
-                };
-                let mut collector =
-                    PythPricesCollector::try_new(&ws_url_thread, Arc::downgrade(&prices_thread))
-                        .await
-                        .expect("failed to create PythPricesCollector");
-
-                let refresh_rate = Duration::from_secs(EVM_CONFIG_REFRESH_RATE_SEC);
-                let mut interval = tokio::time::interval(refresh_rate);
-                let mut evm_tokens = HashSet::new();
-                loop {
-                    let evm_config = match commands::get_config::execute(
-                        &rpc_client,
-                        config.neon_pubkey,
-                    )
+        tokio::spawn(async move {
+            let mut collector =
+                PythPricesCollector::try_new(&ws_url_thread, Arc::downgrade(&prices_thread))
                     .await
-                    {
-                        Ok(config) => config,
-                        Err(err) => {
-                            error!(?err, "failed to get EVM config");
-                            interval.tick().await;
-                            continue;
-                        }
-                    };
+                    .expect("failed to create PythPricesCollector");
 
-                    let new_tokens = evm_config
-                        .chains
-                        .iter()
-                        .map(|chain| chain.name.to_uppercase())
-                        .collect::<HashSet<_>>();
-                    for token in new_tokens.difference(&evm_tokens) {
-                        if let Some(token_pkey) = symbology.get(token) {
-                            info!(?token, "subscribing to price");
-                            if let Err(err) = collector.subscribe(*token_pkey).await {
-                                error!(?err, "failed to subscribe to price");
-                            }
-                        } else {
-                            warn!(?token, "subscribing to price: not found in symbology");
-                        }
+            let refresh_rate = Duration::from_secs(EVM_CONFIG_REFRESH_RATE_SEC);
+            let mut interval = tokio::time::interval(refresh_rate);
+            let mut evm_tokens = HashSet::new();
+            loop {
+                let evm_config = match neon_api.get_config().await {
+                    Ok(config) => config,
+                    Err(err) => {
+                        error!(?err, "failed to get EVM config");
+                        interval.tick().await;
+                        continue;
                     }
-                    for token in evm_tokens.difference(&new_tokens) {
-                        if let Some(token_pkey) = symbology.get(token) {
-                            info!(?token, "unsubscribing from price");
-                            collector.unsubscribe(*token_pkey).await;
-                        } else {
-                            warn!(
-                                ?token,
-                                "unsubscribing from to price: not found in symbology"
-                            );
+                };
+
+                let new_tokens = evm_config
+                    .chains
+                    .iter()
+                    .map(|chain| chain.name.to_uppercase())
+                    .collect::<HashSet<_>>();
+                for token in new_tokens.difference(&evm_tokens) {
+                    if let Some(token_pkey) = symbology.get(token) {
+                        info!(?token, "subscribing to price");
+                        if let Err(err) = collector.subscribe(*token_pkey).await {
+                            error!(?err, "failed to subscribe to price");
                         }
+                    } else {
+                        warn!(?token, "subscribing to price: not found in symbology");
                     }
-                    evm_tokens = new_tokens;
-                    interval.tick().await;
                 }
-            });
-
-            rt.block_on(local);
+                for token in evm_tokens.difference(&new_tokens) {
+                    if let Some(token_pkey) = symbology.get(token) {
+                        info!(?token, "unsubscribing from price");
+                        collector.unsubscribe(*token_pkey).await;
+                    } else {
+                        warn!(
+                            ?token,
+                            "unsubscribing from to price: not found in symbology"
+                        );
+                    }
+                }
+                evm_tokens = new_tokens;
+                interval.tick().await;
+            }
         });
 
         Ok(Self {

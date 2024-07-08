@@ -7,7 +7,6 @@ use futures_util::future::BoxFuture;
 use futures_util::StreamExt;
 use pyth_sdk_solana::state::{load_mapping_account, load_product_account};
 use pyth_sdk_solana::{load_price_feed_from_account, Price, PriceFeed};
-// use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
@@ -121,7 +120,7 @@ impl PythPricesCollector {
             return Ok(());
         }
         let (unsub_tx, unsub_rx) = oneshot::channel::<UnsubscribeFn>();
-        let subs_handler = tokio::task::spawn_local({
+        let subs_handler = tokio::spawn({
             // From the `PubsubClient docs:
             //   The subscriptions have to be made from the tasks that will receive the subscription
             //   messages, because the subscription streams hold a reference to the `PubsubClient`.
