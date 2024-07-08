@@ -186,17 +186,17 @@ async fn main() {
         min_gas_price: opts.minimal_gas_price,
         const_gas_price: opts.const_gas_price,
     };
-    let mp_gas_prices = mempool::GasPrices::try_new(
-        &opts.solana_url,
-        &opts.solana_ws_url,
-        opts.neon_pubkey,
-        opts.neon_config_pubkey,
-        &opts.chain_token_name,
-        &opts.default_token_name,
-        pyth_symbology,
-        mp_gas_calculator_config,
-    )
-    .expect("failed to create gas prices");
+    let gas_prices_config = mempool::GasPricesConfig {
+        url: opts.solana_url.to_owned(),
+        ws_url: opts.solana_ws_url.to_owned(),
+        neon_pubkey: opts.neon_pubkey,
+        config_key: opts.neon_config_pubkey,
+        base_token: opts.chain_token_name.to_owned(),
+        default_token: opts.default_token_name.to_owned(),
+    };
+    let mp_gas_prices =
+        mempool::GasPrices::try_new(gas_prices_config, pyth_symbology, mp_gas_calculator_config)
+            .expect("failed to create gas prices");
 
     let executor = if let Some((path, address)) = opts.operator_keypair.zip(opts.operator_address) {
         let operator = Keypair::read_from_file(path).expect("cannot read operator keypair");

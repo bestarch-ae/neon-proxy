@@ -23,6 +23,22 @@ const EVM_CONFIG_REFRESH_RATE_SEC: u64 = 60;
 const RPC_CLIENT_MAX_RETRIES: usize = 10;
 const TARGET_PREC: i32 = -9;
 
+#[derive(Debug, Clone)]
+pub struct GasPricesConfig {
+    /// URL of the Solana RPC endpoint
+    pub url: String,
+    /// URL of the Pyth websocket endpoint (could be solana mainnet)
+    pub ws_url: String,
+    /// Neon program pubkey
+    pub neon_pubkey: Pubkey,
+    /// Neon EVM config pubkey
+    pub config_key: Pubkey,
+    /// Base token symbol in the Pyth symbology
+    pub base_token: String,
+    /// Default token symbol in the Pyth symbology
+    pub default_token: String,
+}
+
 /// Gas prices for EVM transactions
 #[derive(Clone)]
 pub struct GasPrices {
@@ -37,28 +53,22 @@ impl GasPrices {
     /// from Pyth and update them in the `prices` map.
     /// It periodically fetches the EVM config and subscribes to the prices of the tokens in the
     /// config.
-    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
-        url: &str,
-        ws_url: &str,
-        neon_pubkey: Pubkey,
-        config_key: Pubkey,
-        base_token: &str,
-        default_token: &str,
+        config: GasPricesConfig,
         symbology: Symbology,
         calculator_config: GasPriceCalculatorConfig,
     ) -> Result<Self, MempoolError> {
         let prices = Arc::new(DashMap::new());
         let prices_thread = Arc::clone(&prices);
-        let url_thread = url.to_owned();
-        let ws_url_thread = ws_url.to_owned();
+        let url_thread = config.url;
+        let ws_url_thread = config.ws_url;
 
         let base_token_pkey = *symbology
-            .get(base_token)
-            .ok_or(MempoolError::BaseTokenNotFound(base_token.to_owned()))?;
+            .get(&config.base_token)
+            .ok_or(MempoolError::BaseTokenNotFound(config.base_token))?;
         let default_token_pkey = *symbology
-            .get(default_token)
-            .ok_or(MempoolError::DefaultTokenNotFound(default_token.to_owned()))?;
+            .get(&config.default_token)
+            .ok_or(MempoolError::DefaultTokenNotFound(config.default_token))?;
 
         std::thread::spawn(move || {
             let rt = Builder::new_current_thread()
@@ -71,7 +81,7 @@ impl GasPrices {
                 let rpc_client = CloneRpcClient {
                     rpc: Arc::new(RpcClient::new(url_thread)),
                     max_retries: RPC_CLIENT_MAX_RETRIES,
-                    key_for_config: config_key,
+                    key_for_config: config.config_key,
                 };
                 let mut collector = PythPricesCollector::try_new(&ws_url_thread, prices_thread)
                     .await
@@ -81,15 +91,19 @@ impl GasPrices {
                 let mut interval = tokio::time::interval(refresh_rate);
                 let mut evm_tokens = HashSet::new();
                 loop {
-                    let evm_config =
-                        match commands::get_config::execute(&rpc_client, neon_pubkey).await {
-                            Ok(config) => config,
-                            Err(err) => {
-                                error!(?err, "failed to get EVM config");
-                                interval.tick().await;
-                                continue;
-                            }
-                        };
+                    let evm_config = match commands::get_config::execute(
+                        &rpc_client,
+                        config.neon_pubkey,
+                    )
+                    .await
+                    {
+                        Ok(config) => config,
+                        Err(err) => {
+                            error!(?err, "failed to get EVM config");
+                            interval.tick().await;
+                            continue;
+                        }
+                    };
 
                     let new_tokens = evm_config
                         .chains
