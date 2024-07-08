@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use common::ethnum::U256;
 use common::solana_sdk::clock::UnixTimestamp;
@@ -33,6 +35,7 @@ pub struct Indexer {
     sig_repo: db::SolanaSignaturesRepo,
     holder_repo: db::HolderRepo,
     block_repo: db::BlockRepo,
+    tx_log_idx: TxLogIdx,
     neon_tx_idx: u64,
     block_gas_used: U256,
     block_log_idx: u64,
@@ -48,6 +51,7 @@ impl Indexer {
         let holder_repo = db::HolderRepo::new(pool.clone());
         let block_repo = db::BlockRepo::new(pool.clone());
         let adb = DummyAdb::new(target, holder_repo.clone());
+        let tx_log_idx = TxLogIdx::new(tx_repo.clone());
 
         Self {
             tx_repo,
@@ -55,6 +59,7 @@ impl Indexer {
             holder_repo,
             block_repo,
             neon_tx_idx: 0,
+            tx_log_idx,
             block_gas_used: U256::new(0),
             block_log_idx: 0,
             adb,
@@ -142,7 +147,7 @@ impl Indexer {
         use backoff::{backoff::Backoff, ExponentialBackoff};
 
         let slot = block.slot;
-        let block = self.prepare_block(block, txs, commitment)?;
+        let block = self.prepare_block(block, txs, commitment).await?;
         let mut backoff = ExponentialBackoff {
             max_elapsed_time: None,
             ..Default::default()
@@ -162,7 +167,7 @@ impl Indexer {
         Ok(())
     }
 
-    fn prepare_block(
+    async fn prepare_block(
         &mut self,
         block: SolanaBlock,
         txs: Vec<SolanaTransaction>,
@@ -234,6 +239,7 @@ impl Indexer {
                         // all transactions increment tx_log_idx
                         for log in &mut tx.events {
                             if !log.is_hidden {
+                                log.tx_log_idx = self.tx_log_idx.next(&tx.neon_signature).await;
                                 tracing::debug!(tx = %tx.neon_signature,
                                                     blk_log_idx = %log.blk_log_idx,
                                                     tx_log_idx = %log.tx_log_idx, "log");
@@ -338,6 +344,41 @@ impl Indexer {
             }
         }
         Ok(())
+    }
+}
+
+struct TxLogIdx {
+    repo: db::TransactionRepo,
+    cache: lru::LruCache<TxHash, u64>,
+}
+
+impl TxLogIdx {
+    fn new(repo: db::TransactionRepo) -> Self {
+        Self {
+            repo,
+            cache: lru::LruCache::new(512.try_into().expect("512 > 0")),
+        }
+    }
+
+    async fn next(&mut self, hash: &TxHash) -> u64 {
+        if let Some(idx) = self.cache.get_mut(hash) {
+            *idx += 1;
+            return *idx;
+        }
+
+        loop {
+            match self.repo.fetch_last_log_idx(*hash).await {
+                Ok(idx) => {
+                    let idx = idx.map(|idx| idx + 1).unwrap_or(0) as u32 as u64;
+                    self.cache.put(*hash, idx);
+                    return idx;
+                }
+                Err(err) => {
+                    tracing::warn!(?err, "failed to fetch log idx");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
+        }
     }
 }
 
