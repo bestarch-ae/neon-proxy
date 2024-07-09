@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use thiserror::Error;
 use tokio::runtime::Builder;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::sync::oneshot;
@@ -15,6 +16,36 @@ use common::neon_lib::types::{BalanceAddress, ChDbConfig, EmulateRequest, Tracer
 use common::neon_lib::{commands, NeonError};
 use common::solana_sdk::pubkey::Pubkey;
 use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
+
+use crate::gas_limit_calculator::{GasLimitCalculator, GasLimitError};
+
+#[derive(Debug, Error)]
+pub enum NeonApiError {
+    #[error("neon error: {0}")]
+    NeonError(#[from] NeonError),
+    #[error("gas limit error: {0}")]
+    GasLimitError(#[from] GasLimitError),
+}
+
+impl NeonApiError {
+    pub const fn error_code(&self) -> u32 {
+        match self {
+            Self::NeonError(err) => err.error_code(),
+            Self::GasLimitError(_) => 3,
+        }
+    }
+}
+
+impl From<NeonApiError> for jsonrpsee::types::ErrorObjectOwned {
+    fn from(value: NeonApiError) -> Self {
+        match value {
+            NeonApiError::NeonError(err) => {
+                Self::owned(err.error_code() as i32, err.to_string(), None::<String>)
+            }
+            NeonApiError::GasLimitError(err) => Self::owned(3, err.to_string(), None::<String>),
+        }
+    }
+}
 
 #[derive(Debug)]
 struct Task {
@@ -50,7 +81,7 @@ enum TaskCommand {
     },
     EstimateGas {
         tx: TxParams,
-        response: oneshot::Sender<Result<EmulateResponse, NeonError>>,
+        response: oneshot::Sender<(GetConfigResponse, Result<EmulateResponse, NeonError>)>,
     },
     Emulate {
         tx: TxParams,
@@ -87,6 +118,7 @@ async fn build_rpc(
 #[derive(Debug, Clone)]
 pub struct NeonApi {
     channel: Sender<Task>,
+    gas_limit_calculator: GasLimitCalculator,
 }
 
 impl NeonApi {
@@ -105,6 +137,7 @@ impl NeonApi {
         neon_pubkey: Pubkey,
         config_key: Pubkey,
         tracer_db_config: ChDbConfig,
+        max_tx_account_cnt: usize,
     ) -> Self {
         let (tx, mut rx) = mpsc::channel::<Task>(128);
 
@@ -148,14 +181,17 @@ impl NeonApi {
             rt.block_on(local);
         });
 
-        Self { channel: tx }
+        Self {
+            channel: tx,
+            gas_limit_calculator: GasLimitCalculator::new(max_tx_account_cnt),
+        }
     }
 
     pub async fn get_balance(
         &self,
         addr: BalanceAddress,
         slot: Option<u64>,
-    ) -> Result<U256, NeonError> {
+    ) -> Result<U256, NeonApiError> {
         let (tx, rx) = oneshot::channel();
         self.channel
             .send(Task::new(
@@ -165,14 +201,14 @@ impl NeonApi {
             ))
             .await
             .unwrap();
-        rx.await.unwrap()
+        Ok(rx.await.unwrap()?)
     }
 
     pub async fn get_transaction_count(
         &self,
         addr: BalanceAddress,
         slot: Option<u64>,
-    ) -> Result<u64, NeonError> {
+    ) -> Result<u64, NeonApiError> {
         let (tx, rx) = oneshot::channel();
         self.channel
             .send(Task::new(
@@ -182,10 +218,10 @@ impl NeonApi {
             ))
             .await
             .unwrap();
-        rx.await.unwrap()
+        Ok(rx.await.unwrap()?)
     }
 
-    pub async fn call(&self, params: TxParams) -> Result<Vec<u8>, NeonError> {
+    pub async fn call(&self, params: TxParams) -> Result<Vec<u8>, NeonApiError> {
         let (tx, rx) = oneshot::channel();
         self.channel
             .send(Task::new(
@@ -198,15 +234,15 @@ impl NeonApi {
             ))
             .await
             .unwrap();
-        rx.await.unwrap()
+        Ok(rx.await.unwrap()?)
     }
 
-    pub async fn estimate_gas(&self, params: TxParams) -> Result<U256, NeonError> {
+    pub async fn estimate_gas(&self, params: TxParams) -> Result<U256, NeonApiError> {
         let (tx, rx) = oneshot::channel();
         self.channel
             .send(Task::new(
                 TaskCommand::EstimateGas {
-                    tx: params,
+                    tx: params.clone(),
                     response: tx,
                 },
                 None,
@@ -214,9 +250,17 @@ impl NeonApi {
             ))
             .await
             .unwrap();
-        let resp = rx.await.unwrap();
-        // TODO: do actual calculations
-        Ok(U256::from(resp?.used_gas))
+        let (evm_config, resp) = rx.await.unwrap();
+        let holder_msg_size = evm_config
+            .config
+            .get("NEON_HOLDER_MSG_SIZE")
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+        let emul_resp = resp?;
+        let total_gas = self
+            .gas_limit_calculator
+            .estimate(&params, &emul_resp, holder_msg_size)?;
+        Ok(U256::from(total_gas))
     }
 
     pub async fn emulate(&self, params: TxParams) -> Result<EmulateResponse, NeonError> {
@@ -253,7 +297,7 @@ impl NeonApi {
 
                 let req = EmulateRequest {
                     step_limit: None,
-                    chains: Some(config.chains),
+                    chains: Some(config.chains.clone()),
                     trace_config: None,
                     accounts: Vec::new(),
                     tx,
@@ -270,7 +314,7 @@ impl NeonApi {
                     Ok((resp, _something)) => Ok(resp),
                     Err(err) => Err(err),
                 };
-                let _ = response.send(resp);
+                let _ = response.send((config, resp));
             }
 
             TaskCommand::EmulateCall { tx, response } => {
