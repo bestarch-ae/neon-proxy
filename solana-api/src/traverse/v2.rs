@@ -216,13 +216,25 @@ impl TraverseLedger {
             move |mut stream: stream_generator::Yielder<Result<LedgerItem, TraverseError>>| async move {
                 for slot in range.step_by(1) {
                     tracing::debug!(%slot, "getting block");
+                    let _process_slot_timer = metrics()
+                        .traverse
+                        .process_slot_from_range_time
+                        .start_timer();
+                    let current_slot_timer = metrics().traverse.get_current_slot_time.start_timer();
                     let mut current_slot = retry!(api.get_slot(commitment), "getting slot");
+                    drop(current_slot_timer);
 
+                    let waiting_for_slot_timer =
+                        metrics().traverse.waiting_for_slot_time.start_timer();
                     while slot > current_slot {
                         current_slot = retry!(api.get_slot(commitment), "waiting for slot");
                     }
+                    drop(waiting_for_slot_timer);
 
+                    let get_block_timer = metrics().traverse.get_block_time.start_timer();
                     let block = Self::get_block(&api, slot, true).await;
+                    drop(get_block_timer);
+
                     let block = match block {
                         None => {
                             stream.send(Ok(LedgerItem::MissingBlock { slot })).await;
@@ -231,6 +243,8 @@ impl TraverseLedger {
                         Some(block) => block,
                     };
                     metrics().traverse.last_observed_slot.set(slot as i64);
+                    let process_transactions_timer =
+                        metrics().traverse.process_transactions_time.start_timer();
                     let ui_txs = block.transactions;
                     let block = SolanaBlock {
                         slot,
@@ -268,6 +282,7 @@ impl TraverseLedger {
                         .observe(txs.len() as f64);
 
                     tracing::debug!(%slot, count = txs.len(), "fetched transactions");
+                    drop(process_transactions_timer);
                     stream
                         .send(Ok(LedgerItem::Block {
                             block,
