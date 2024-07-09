@@ -127,9 +127,16 @@ impl NeonApi {
         neon_pubkey: Pubkey,
         config_key: Pubkey,
         tracer_db_config: ChDbConfig,
+        max_tx_account_cnt: usize,
     ) -> Self {
         let client = RpcClient::new(url);
-        Self::new_with_custom_rpc_client(client, neon_pubkey, config_key, tracer_db_config)
+        Self::new_with_custom_rpc_client(
+            client,
+            neon_pubkey,
+            config_key,
+            tracer_db_config,
+            max_tx_account_cnt,
+        )
     }
 
     pub fn new_with_custom_rpc_client(
@@ -263,7 +270,7 @@ impl NeonApi {
         Ok(U256::from(total_gas))
     }
 
-    pub async fn emulate(&self, params: TxParams) -> Result<EmulateResponse, NeonError> {
+    pub async fn emulate(&self, params: TxParams) -> Result<EmulateResponse, NeonApiError> {
         let (tx, rx) = oneshot::channel();
         self.channel
             .send(Task::new(
@@ -276,7 +283,7 @@ impl NeonApi {
             ))
             .await
             .unwrap();
-        rx.await.unwrap()
+        Ok(rx.await.unwrap()?)
     }
 
     pub async fn get_config(&self) -> Result<GetConfigResponse, NeonError> {
@@ -290,7 +297,7 @@ impl NeonApi {
 
     async fn execute(task: TaskCommand, ctx: Context) {
         match task {
-            TaskCommand::EstimateGas { tx, response } | TaskCommand::Emulate { tx, response } => {
+            TaskCommand::EstimateGas { tx, response } => {
                 let config = commands::get_config::execute(&ctx.rpc, ctx.neon_pubkey)
                     .await
                     .expect("config didnt fail"); // TODO
@@ -315,6 +322,33 @@ impl NeonApi {
                     Err(err) => Err(err),
                 };
                 let _ = response.send((config, resp));
+            }
+
+            TaskCommand::Emulate { tx, response } => {
+                let config = commands::get_config::execute(&ctx.rpc, ctx.neon_pubkey)
+                    .await
+                    .expect("config didnt fail"); // TODO
+
+                let req = EmulateRequest {
+                    step_limit: None,
+                    chains: Some(config.chains.clone()),
+                    trace_config: None,
+                    accounts: Vec::new(),
+                    tx,
+                    solana_overrides: None,
+                };
+                let resp = commands::emulate::execute(
+                    &ctx.rpc,
+                    ctx.neon_pubkey,
+                    req,
+                    None::<TracerTypeEnum>,
+                )
+                .await;
+                let resp = match resp {
+                    Ok((resp, _something)) => Ok(resp),
+                    Err(err) => Err(err),
+                };
+                let _ = response.send(resp);
             }
 
             TaskCommand::EmulateCall { tx, response } => {
