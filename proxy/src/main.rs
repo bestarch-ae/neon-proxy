@@ -10,6 +10,7 @@ use thiserror::Error;
 
 mod convert;
 mod executor;
+mod gas_limit_calculator;
 mod mempool;
 mod neon_api;
 mod rpc;
@@ -138,6 +139,10 @@ struct Args {
 
     #[arg(long, env)]
     symbology_path: Option<PathBuf>,
+
+    #[arg(long, env, default_value = "64")]
+    // Max tx account count
+    max_tx_account_count: usize,
 }
 
 #[tokio::main]
@@ -167,6 +172,7 @@ async fn main() {
         opts.neon_pubkey,
         opts.neon_config_pubkey,
         tracer_db_config,
+        opts.max_tx_account_count,
     );
     let pyth_symbology = if let Some(path) = opts.symbology_path.as_ref() {
         tracing::info!(?path, "loading symbology");

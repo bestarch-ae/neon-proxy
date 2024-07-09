@@ -526,8 +526,7 @@ impl EthApiServer for EthApiImpl {
         _state_override: Option<StateOverride>,
     ) -> RpcResult<U256> {
         use crate::convert::{ToNeon, ToReth};
-        tracing::info!("estimate_gas {:?}", request);
-
+        tracing::info!("estimate_gas {request:?}");
         let tx = TxParams {
             nonce: request.nonce,
             from: request.from.map(ToNeon::to_neon).unwrap_or_default(),
@@ -546,12 +545,7 @@ impl EthApiServer for EthApiImpl {
             actual_gas_used: None,
             chain_id: Some(self.chain_id),
         };
-        let gas = self
-            .neon_api
-            .estimate_gas(tx)
-            .await
-            .map(ToReth::to_reth)
-            .unwrap();
+        let gas = self.neon_api.estimate_gas(tx).await.map(ToReth::to_reth)?;
         Ok(gas)
     }
 
