@@ -45,11 +45,11 @@ pub struct EthApiImpl {
     blocks: ::db::BlockRepo,
     neon_api: NeonApi,
     chain_id: u64,
-    executor: Executor,
+    executor: Option<Executor>,
 }
 
 impl EthApiImpl {
-    pub fn new(pool: PgPool, neon_api: NeonApi, executor: Executor, chain_id: u64) -> Self {
+    pub fn new(pool: PgPool, neon_api: NeonApi, executor: Option<Executor>, chain_id: u64) -> Self {
         let transactions = ::db::TransactionRepo::new(pool.clone());
         let blocks = ::db::BlockRepo::new(pool.clone());
 
@@ -620,16 +620,20 @@ impl EthApiServer for EthApiImpl {
 
     /// Sends signed transaction, returning its hash.
     async fn send_raw_transaction(&self, bytes: Bytes) -> RpcResult<B256> {
-        let bytes: &mut &[u8] = &mut bytes.as_ref();
-        let envelope = TxEnvelope::decode(bytes)
-            .map_err(|_| ErrorObjectOwned::from(ErrorCode::InvalidParams))?;
-        let hash = *envelope.tx_hash();
-        self.executor
-            .handle_transaction(envelope)
-            .await
-            .map_err(|_| ErrorObjectOwned::from(ErrorCode::InternalError))?; // TODO
+        if let Some(executor) = self.executor.as_ref() {
+            let bytes: &mut &[u8] = &mut bytes.as_ref();
+            let envelope = TxEnvelope::decode(bytes)
+                .map_err(|_| ErrorObjectOwned::from(ErrorCode::InvalidParams))?;
+            let hash = *envelope.tx_hash();
+            executor
+                .handle_transaction(envelope)
+                .await
+                .map_err(|_| ErrorObjectOwned::from(ErrorCode::InternalError))?; // TODO
 
-        Ok(hash)
+            Ok(hash)
+        } else {
+            unimplemented()
+        }
     }
 
     /// Returns an Ethereum specific signature with: sign(keccak256("\x19Ethereum Signed Message:\n"

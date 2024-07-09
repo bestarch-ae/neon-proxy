@@ -89,13 +89,14 @@ struct Args {
     #[arg(long, env, default_value = "245022926")]
     // Neon chain id
     chain_id: u64,
-    #[arg(long)]
-    /// Path to operator keypair
-    operator_keypair_path: PathBuf,
 
-    #[arg(long)]
+    #[arg(long, requires = "operator_address")]
+    /// Path to operator keypair
+    operator_keypair: Option<PathBuf>,
+
+    #[arg(long, requires = "operator_keypair_path")]
     /// Operator ETH address
-    operator_address: Address,
+    operator_address: Option<Address>,
 }
 
 #[tokio::main]
@@ -127,17 +128,22 @@ async fn main() {
         tracer_db_config,
     );
 
-    let operator =
-        Keypair::read_from_file(opts.operator_keypair_path).expect("cannot read operator keypair");
-    let executor = Executor::initialize(
-        solana.clone(),
-        SolanaApi::new(opts.solana_url, false),
-        opts.neon_pubkey,
-        operator,
-        opts.operator_address,
-    )
-    .await
-    .expect("could not initialize executor");
+    let executor = if let Some((path, address)) = opts.operator_keypair.zip(opts.operator_address) {
+        let operator = Keypair::read_from_file(path).expect("cannot read operator keypair");
+        Some(
+            Executor::initialize(
+                solana.clone(),
+                SolanaApi::new(opts.solana_url, false),
+                opts.neon_pubkey,
+                operator,
+                address,
+            )
+            .await
+            .expect("could not initialize executor"),
+        )
+    } else {
+        None
+    };
 
     let eth = EthApiImpl::new(pool, solana, executor, opts.chain_id);
     let mut module = jsonrpsee::server::RpcModule::new(());
