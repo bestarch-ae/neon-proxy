@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use alloy_consensus::TxEnvelope;
 use alloy_rlp::Decodable;
 use futures_util::StreamExt;
@@ -46,7 +48,7 @@ pub struct EthApiImpl {
     blocks: ::db::BlockRepo,
     neon_api: NeonApi,
     chain_id: u64,
-    executor: Option<Executor>,
+    executor: Option<Arc<Executor>>,
     mp_gas_prices: mempool::GasPrices,
 }
 
@@ -55,7 +57,7 @@ impl EthApiImpl {
         pool: PgPool,
         neon_api: NeonApi,
         chain_id: u64,
-        executor: Option<Executor>,
+        executor: Option<Arc<Executor>>,
         mp_gas_prices: mempool::GasPrices,
     ) -> Self {
         let transactions = ::db::TransactionRepo::new(pool.clone());

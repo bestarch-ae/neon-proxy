@@ -62,6 +62,13 @@ impl SolanaApi {
         self.client.get_latest_blockhash().await
     }
 
+    pub async fn is_blockhash_valid(&self, hash: &Hash) -> ClientResult<bool> {
+        self.client
+            // Doubt there's any point using different commitment
+            .is_blockhash_valid(hash, CommitmentConfig::processed())
+            .await
+    }
+
     pub async fn send_transaction(&self, transaction: &Transaction) -> ClientResult<Signature> {
         self.client
             .send_transaction_with_config(

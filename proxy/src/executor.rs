@@ -1,18 +1,25 @@
 #[cfg(test)]
 mod tests;
 
+use std::future::Future;
 use std::mem;
 use std::sync::Arc;
+use std::time::Duration;
 
 use alloy_consensus::TxEnvelope;
 use alloy_rlp::Encodable;
 use anyhow::Context;
+use dashmap::DashMap;
+use solana_api::solana_api::SolanaApi;
+use tokio::sync::Notify;
+use tokio::time::sleep;
 
 use common::ethnum::U256;
 use common::evm_loader::config::ACCOUNT_SEED_VERSION;
 use common::neon_instruction::tag;
 use common::neon_lib::commands::emulate::EmulateResponse;
 use common::neon_lib::types::{Address, TxParams};
+use common::solana_sdk::hash::Hash;
 use common::solana_sdk::instruction::{AccountMeta, Instruction};
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Keypair;
@@ -20,12 +27,12 @@ use common::solana_sdk::signature::Signature;
 use common::solana_sdk::signer::Signer;
 use common::solana_sdk::system_program;
 use common::solana_sdk::transaction::Transaction;
-use solana_api::solana_api::SolanaApi;
+use common::solana_sdk::transaction::TransactionError;
+use common::solana_transaction_status::TransactionStatus;
 
 use crate::convert::ToNeon;
 use crate::neon_api::NeonApi;
 
-#[derive(Clone)]
 pub struct Executor {
     program_id: Pubkey,
 
@@ -35,12 +42,29 @@ pub struct Executor {
     treasury_pool_count: u32,
     treasury_pool_seed: Vec<u8>,
 
-    operator: Arc<Keypair>,
+    operator: Keypair,
     operator_addr: Address,
+
+    pending_transactions: DashMap<Signature, OngoingTransaction>,
+    notify: Notify,
 }
 
 impl Executor {
-    pub async fn initialize(
+    pub async fn initialize_and_start(
+        neon_api: NeonApi,
+        solana_api: SolanaApi,
+        neon_pubkey: Pubkey,
+        operator: Keypair,
+        operator_addr: Address, // TODO: derive from keypair
+    ) -> anyhow::Result<(Arc<Self>, impl Future<Output = anyhow::Result<()>>)> {
+        let this =
+            Self::initialize(neon_api, solana_api, neon_pubkey, operator, operator_addr).await?;
+        let this = Arc::new(this);
+        let this_to_run = this.clone();
+        Ok((this, this_to_run.run()))
+    }
+
+    async fn initialize(
         neon_api: NeonApi,
         solana_api: SolanaApi,
         neon_pubkey: Pubkey,
@@ -60,6 +84,7 @@ impl Executor {
             .context("missing NEON_TREASURY_POOL_SEED in config")?
             .as_bytes()
             .to_vec();
+        let notify = Notify::new();
 
         Ok(Self {
             program_id: neon_pubkey,
@@ -67,8 +92,10 @@ impl Executor {
             solana_api,
             treasury_pool_count,
             treasury_pool_seed,
-            operator: Arc::new(operator),
+            operator,
             operator_addr,
+            pending_transactions: DashMap::new(),
+            notify,
         })
     }
 
@@ -116,34 +143,158 @@ impl Executor {
             .await
             .context("cannot init operator balance")?;
 
+        // TODO: store in ongoing transaction
         let emulate_result = self
             .neon_api
             .emulate(request)
             .await
             .context("could not emulate transaction")?;
 
-        let ix = self.build_simple(tx, emulate_result, chain_id)?;
-        let mut tx = Transaction::new_with_payer(&[ix], Some(&self.operator.pubkey()));
+        let ix = self.build_simple(&tx, emulate_result, chain_id)?;
+        let tx = OngoingTransaction::new_eth(tx, &[ix], &self.operator.pubkey());
+        let signature = self.sign_and_send_transaction(tx).await?;
+
+        Ok(signature)
+    }
+
+    /// Sign, send and register transaction to be confirmed.
+    /// The only method in this module that can call `send_transaction`
+    /// or insert into `pending_transactions` map.
+    async fn sign_and_send_transaction(&self, tx: OngoingTransaction) -> anyhow::Result<Signature> {
+        let mut tx = tx;
         let blockhash = self
             .solana_api
             .get_recent_blockhash()
             .await
             .context("could not request blockhash")?; // TODO: force confirmed
 
-        tx.try_sign(&[&self.operator], blockhash)
+        // This will replace bh and clear signatures in case it's a retry
+        tx.tx
+            .try_sign(&[&self.operator], blockhash)
             .context("could not sign request")?;
+
         let signature = self
             .solana_api
-            .send_transaction(&tx)
+            .send_transaction(&tx.tx)
             .await
             .context("could not send transaction")?;
+
+        tracing::info!(%signature, tx = ?tx.eth_tx, "sent new transaction");
+        let do_notify = self.pending_transactions.is_empty();
+        self.pending_transactions.insert(signature, tx); // TODO: check none?
+        if do_notify {
+            self.notify.notify_waiters();
+        }
 
         Ok(signature)
     }
 
+    async fn run(self: Arc<Self>) -> anyhow::Result<()> {
+        const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+        let mut signatures = Vec::new();
+        loop {
+            if self.pending_transactions.is_empty() {
+                self.notify.notified().await;
+            } else {
+                sleep(POLL_INTERVAL).await;
+            }
+
+            signatures.clear();
+            let current_len = self.pending_transactions.len();
+            if current_len > signatures.capacity() {
+                signatures.reserve(current_len - signatures.capacity());
+            }
+            for tx in self.pending_transactions.iter() {
+                signatures.push(*tx.key());
+            }
+
+            // TODO: request finalized
+            let result = match self.solana_api.get_signature_statuses(&signatures).await {
+                Err(err) => {
+                    tracing::warn!(%err, "could not request signature statuses");
+                    continue;
+                }
+                Ok(res) => res,
+            };
+
+            for (signature, status) in signatures.drain(..).zip(result) {
+                self.handle_signature_status(signature, status).await;
+            }
+        }
+    }
+
+    async fn handle_signature_status(
+        &self,
+        signature: Signature,
+        status: Option<TransactionStatus>,
+    ) {
+        macro_rules! bail_if_absent {
+            ($kv:expr) => {
+                if let Some(value) = $kv {
+                    value
+                } else {
+                    tracing::warn!(%signature, "missing pending transaction data");
+                    return;
+                }
+            }
+        }
+
+        let Some(status) = status else {
+            let hash = bail_if_absent!(self.pending_transactions.get(&signature)).blockhash;
+            let is_valid = self
+                .solana_api
+                .is_blockhash_valid(&hash)
+                .await
+                .inspect_err(|err| tracing::warn!(%err, "could not check blockhash validity"))
+                .unwrap_or(true);
+            if !is_valid {
+                let (_, tx) = bail_if_absent!(self.pending_transactions.remove(&signature));
+                self.handle_expired_transaction(signature, tx).await;
+            }
+            return;
+        };
+
+        let (_, tx) = bail_if_absent!(self.pending_transactions.remove(&signature));
+        let slot = status.slot;
+        if let Some(err) = status.err {
+            self.handle_error(signature, tx, slot, err).await;
+        } else {
+            self.handle_success(signature, tx, slot).await;
+        }
+    }
+
+    async fn handle_expired_transaction(&self, signature: Signature, tx: OngoingTransaction) {
+        // TODO: retry counter
+        tracing::warn!(%signature, "transaction blockhash expired, retrying");
+        if let Err(error) = self.sign_and_send_transaction(tx).await {
+            tracing::error!(%signature, %error, "failed retrying transaction");
+        }
+    }
+
+    async fn handle_success(&self, signature: Signature, _tx: OngoingTransaction, slot: u64) {
+        // TODO: maybe add Instant to ongoing transaction.
+        tracing::info!(%signature, slot, "transaction was confirmed");
+
+        // TODO: follow up transactions
+    }
+
+    async fn handle_error(
+        &self,
+        signature: Signature,
+        _tx: OngoingTransaction,
+        slot: u64,
+        err: TransactionError,
+    ) {
+        tracing::warn!(%signature, slot, %err, "transaction was confirmed, but failed");
+
+        // TODO: do we retry?
+        // TODO: do we request logs?
+    }
+
     fn build_simple(
         &self,
-        tx: TxEnvelope,
+        tx: &TxEnvelope,
         emulate: EmulateResponse,
         chain_id: u64,
     ) -> anyhow::Result<Instruction> {
@@ -223,16 +374,8 @@ impl Executor {
             accounts,
             data,
         };
-        let blockhash = self.solana_api.get_recent_blockhash().await?;
-        let mut tx = Transaction::new_with_payer(&[ix], Some(&self.operator.pubkey()));
-        tx.try_sign(&[&self.operator], blockhash)
-            .context("failed signing create balance transaction")?;
-
-        let signature = self
-            .solana_api
-            .send_transaction(&tx)
-            .await
-            .context("failed create balance transaction send")?;
+        let tx = OngoingTransaction::new_operational(&[ix], &self.operator.pubkey());
+        let signature = self.sign_and_send_transaction(tx).await?;
 
         Ok(Some(signature))
     }
@@ -248,5 +391,31 @@ impl Executor {
             &chain_id.to_be_bytes(),
         ];
         Pubkey::find_program_address(seeds, &self.program_id).0
+    }
+}
+
+#[derive(Debug, Clone)]
+struct OngoingTransaction {
+    // holder_idx: Option<usize>,
+    eth_tx: Option<TxEnvelope>,
+    tx: Transaction,
+    blockhash: Hash,
+}
+
+impl OngoingTransaction {
+    fn new_eth(eth_tx: TxEnvelope, ixs: &[Instruction], payer: &Pubkey) -> Self {
+        Self {
+            eth_tx: Some(eth_tx),
+            tx: Transaction::new_with_payer(ixs, Some(payer)),
+            blockhash: Hash::default(),
+        }
+    }
+
+    fn new_operational(ixs: &[Instruction], payer: &Pubkey) -> Self {
+        Self {
+            eth_tx: None,
+            tx: Transaction::new_with_payer(ixs, Some(payer)),
+            blockhash: Hash::default(),
+        }
     }
 }

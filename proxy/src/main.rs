@@ -214,17 +214,17 @@ async fn main() {
 
     let executor = if let Some((path, address)) = opts.operator_keypair.zip(opts.operator_address) {
         let operator = Keypair::read_from_file(path).expect("cannot read operator keypair");
-        Some(
-            Executor::initialize(
-                solana.clone(),
-                SolanaApi::new(opts.solana_url, false),
-                opts.neon_pubkey,
-                operator,
-                address,
-            )
-            .await
-            .expect("could not initialize executor"),
+        let (executor, executor_task) = Executor::initialize_and_start(
+            solana.clone(),
+            SolanaApi::new(opts.solana_url, false),
+            opts.neon_pubkey,
+            operator,
+            address,
         )
+        .await
+        .expect("could not initialize executor");
+        tokio::spawn(executor_task);
+        Some(executor)
     } else {
         None
     };
