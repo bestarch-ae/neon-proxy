@@ -386,11 +386,7 @@ impl EthApiServer for EthApiImpl {
             address: Address::from(<[u8; 20]>::from(address.0)),
             chain_id: self.chain_id,
         };
-        let balance = self
-            .neon_api
-            .get_balance(balance_address, slot)
-            .await
-            .unwrap(); // TODO: handle error
+        let balance = self.neon_api.get_balance(balance_address, slot).await?;
 
         Ok(balance.to_reth())
     }
@@ -426,8 +422,7 @@ impl EthApiServer for EthApiImpl {
         let balance = self
             .neon_api
             .get_transaction_count(balance_address, slot)
-            .await
-            .unwrap(); // TODO: handle error
+            .await?;
 
         Ok(U256::from(balance))
     }
@@ -480,7 +475,7 @@ impl EthApiServer for EthApiImpl {
             actual_gas_used: None,
             chain_id: Some(self.chain_id),
         };
-        let data = self.neon_api.call(tx).await.unwrap(); // TODO: handle error
+        let data = self.neon_api.call(tx).await?;
         Ok(Bytes::from(data))
     }
 
