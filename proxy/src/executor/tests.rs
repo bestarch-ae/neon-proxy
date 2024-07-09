@@ -307,7 +307,7 @@ async fn basic() -> anyhow::Result<()> {
     let address = operator_signer.address();
     let ix = system_instruction::transfer(&payer.pubkey(), &operator.pubkey(), 100 * 10u64.pow(9));
     env.send_instructions(&[ix], &[&payer]).await?;
-    let executor = Executor::initialize(
+    let (executor, task) = Executor::initialize_and_start(
         neon_api.clone(),
         solana_api,
         NEON_KEY,
@@ -316,6 +316,7 @@ async fn basic() -> anyhow::Result<()> {
     )
     .await
     .context("failed initializing executor")?;
+    tokio::spawn(task);
     let sign = executor.init_operator_balance(CHAIN_ID).await?.unwrap();
     env.confirm_transaction(&sign).await?;
 
