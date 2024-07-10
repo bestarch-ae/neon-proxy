@@ -76,6 +76,7 @@ impl Executor {
 
         let builder = TransactionBuilder::new(
             neon_pubkey,
+            solana_api.clone(),
             operator,
             operator_addr,
             treasury_pool_count,
@@ -143,7 +144,10 @@ impl Executor {
             .await
             .context("could not emulate transaction")?;
 
-        let tx = self.builder.build_simple(tx, emulate_result, chain_id)?;
+        let tx = self
+            .builder
+            .start_execution(tx, emulate_result, chain_id)
+            .await?;
         let signature = self.sign_and_send_transaction(tx).await?;
 
         Ok(signature)
@@ -262,11 +266,23 @@ impl Executor {
         }
     }
 
-    async fn handle_success(&self, signature: Signature, _tx: OngoingTransaction, slot: u64) {
+    async fn handle_success(&self, signature: Signature, tx: OngoingTransaction, slot: u64) {
         // TODO: maybe add Instant to ongoing transaction.
         tracing::info!(%signature, slot, "transaction was confirmed");
 
         // TODO: follow up transactions
+        let hash = tx.eth_tx().map(|tx| tx.signature_hash());
+        match self.builder.next_step(tx) {
+            Err(err) => {
+                tracing::error!(?hash, %signature, %err, "failed executing next transaction step")
+            }
+            Ok(Some(tx)) => {
+                if let Err(err) = self.sign_and_send_transaction(tx).await {
+                    tracing::error!(%signature, ?hash, %err, "failed sending transaction next step");
+                }
+            }
+            Ok(None) => (),
+        }
     }
 
     async fn handle_error(

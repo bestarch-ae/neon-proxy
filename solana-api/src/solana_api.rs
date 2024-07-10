@@ -69,6 +69,12 @@ impl SolanaApi {
             .await
     }
 
+    pub async fn minimum_rent_for_exemption(&self, size: usize) -> ClientResult<u64> {
+        self.client
+            .get_minimum_balance_for_rent_exemption(size)
+            .await
+    }
+
     pub async fn send_transaction(&self, transaction: &Transaction) -> ClientResult<Signature> {
         self.client
             .send_transaction_with_config(
