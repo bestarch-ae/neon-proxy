@@ -1,6 +1,5 @@
 use alloy_consensus::TxEnvelope;
 use alloy_rlp::Decodable;
-use common::neon_lib::types::{BalanceAddress, TxParams};
 use futures_util::StreamExt;
 use futures_util::TryStreamExt;
 use jsonrpsee::core::async_trait;
@@ -26,6 +25,7 @@ use rpc_api_types::{
 };
 use sqlx::PgPool;
 
+use common::neon_lib::types::{BalanceAddress, TxParams};
 use common::types::NeonTxInfo;
 use db::WithBlockhash;
 
@@ -36,6 +36,7 @@ use crate::convert::{
     build_block, neon_to_eth, neon_to_eth_receipt, NeonLog, NeonTransactionReceipt,
 };
 use crate::executor::Executor;
+use crate::mempool;
 use crate::neon_api::NeonApi;
 use crate::Error;
 
@@ -46,10 +47,17 @@ pub struct EthApiImpl {
     neon_api: NeonApi,
     chain_id: u64,
     executor: Option<Executor>,
+    mp_gas_prices: mempool::GasPrices,
 }
 
 impl EthApiImpl {
-    pub fn new(pool: PgPool, neon_api: NeonApi, executor: Option<Executor>, chain_id: u64) -> Self {
+    pub fn new(
+        pool: PgPool,
+        neon_api: NeonApi,
+        chain_id: u64,
+        executor: Option<Executor>,
+        mp_gas_prices: mempool::GasPrices,
+    ) -> Self {
         let transactions = ::db::TransactionRepo::new(pool.clone());
         let blocks = ::db::BlockRepo::new(pool.clone());
 
@@ -59,6 +67,7 @@ impl EthApiImpl {
             neon_api,
             executor,
             chain_id,
+            mp_gas_prices,
         }
     }
 
@@ -548,7 +557,8 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns the current price per gas in wei.
     async fn gas_price(&self) -> RpcResult<U256> {
-        unimplemented()
+        let price = self.mp_gas_prices.get_gas_price();
+        Ok(U256::from(price))
     }
 
     /// Introduced in EIP-1559, returns suggestion for the priority for dynamic fee transactions.

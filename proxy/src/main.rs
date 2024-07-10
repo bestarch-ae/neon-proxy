@@ -1,23 +1,28 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use clap::Parser;
-use common::neon_lib::types::{Address, ChDbConfig};
-use common::solana_sdk::pubkey::Pubkey;
-use common::solana_sdk::signature::Keypair;
-use common::solana_sdk::signer::EncodableKey;
+
 use jsonrpsee::types::ErrorCode;
 use rpc_api::{EthApiServer, EthFilterApiServer};
-use solana_api::solana_api::SolanaApi;
 use thiserror::Error;
 
 mod convert;
 mod executor;
+mod mempool;
 mod neon_api;
 mod rpc;
 
+use common::neon_lib::types::{Address, ChDbConfig};
+use common::solana_sdk::pubkey::Pubkey;
+use common::solana_sdk::signature::Keypair;
+use common::solana_sdk::signer::EncodableKey;
 use executor::Executor;
 use neon_api::NeonApi;
 use rpc::{EthApiImpl, NeonEthApiServer, NeonFilterApiServer};
+use solana_api::solana_api::SolanaApi;
+use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -74,6 +79,14 @@ struct Args {
     /// Solana endpoint
     solana_url: String,
 
+    #[arg(short('w'), long, default_value = "wss://api.mainnet-beta.solana.com")]
+    /// Solana websocket endpoint
+    solana_ws_url: String,
+
+    #[arg(long)]
+    /// Pyth mapping address
+    pyth_mapping_addr: Pubkey,
+
     #[arg(long, env, value_delimiter = ';')]
     /// Tracer db urls, comma separated
     neon_db_clickhouse_urls: Vec<String>,
@@ -97,6 +110,29 @@ struct Args {
     #[arg(long, requires = "operator_keypair")]
     /// Operator ETH address
     operator_address: Option<Address>,
+
+    #[arg(long, env, default_value = "SOL")]
+    /// Chain token name
+    chain_token_name: String,
+
+    #[arg(long, env, default_value = "NEON")]
+    /// Default token name
+    default_token_name: String,
+
+    #[arg(long, env, default_value = "1")]
+    /// Minimal gas price
+    minimal_gas_price: u128,
+
+    #[arg(long, env)]
+    /// Constant gas price
+    const_gas_price: Option<u128>,
+
+    #[arg(long, env, default_value = "50000")]
+    /// Operator fee
+    operator_fee: u128,
+
+    #[arg(long, env)]
+    symbology_path: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -127,6 +163,41 @@ async fn main() {
         opts.neon_config_pubkey,
         tracer_db_config,
     );
+    tracing::info!(%opts.pyth_mapping_addr, "loading symbology");
+    let pyth_symbology = if let Some(path) = opts.symbology_path.as_ref() {
+        let raw = std::fs::read_to_string(path).expect("failed to read symbology");
+        let symbology_raw: HashMap<String, String> =
+            serde_json::from_str(&raw).expect("failed to parse symbology json");
+        symbology_raw
+            .iter()
+            .map(|(k, v)| Pubkey::from_str(v).map(|pubkey| (k.clone(), pubkey)))
+            .collect::<Result<HashMap<String, Pubkey>, _>>()
+            .expect("failed to parse symbology")
+    } else {
+        let rpc_client = RpcClient::new(opts.solana_url.clone());
+        let symbology = mempool::pyth_collect_symbology(&opts.pyth_mapping_addr, &rpc_client)
+            .await
+            .expect("failed to collect pyth symbology");
+        drop(rpc_client);
+        symbology
+    };
+    let mp_gas_calculator_config = mempool::GasPriceCalculatorConfig {
+        operator_fee: opts.operator_fee,
+        min_gas_price: opts.minimal_gas_price,
+        const_gas_price: opts.const_gas_price,
+    };
+    let gas_prices_config = mempool::GasPricesConfig {
+        ws_url: opts.solana_ws_url.to_owned(),
+        base_token: opts.chain_token_name.to_owned(),
+        default_token: opts.default_token_name.to_owned(),
+    };
+    let mp_gas_prices = mempool::GasPrices::try_new(
+        gas_prices_config,
+        solana.clone(),
+        pyth_symbology,
+        mp_gas_calculator_config,
+    )
+    .expect("failed to create gas prices");
 
     let executor = if let Some((path, address)) = opts.operator_keypair.zip(opts.operator_address) {
         let operator = Keypair::read_from_file(path).expect("cannot read operator keypair");
@@ -145,7 +216,7 @@ async fn main() {
         None
     };
 
-    let eth = EthApiImpl::new(pool, solana, executor, opts.chain_id);
+    let eth = EthApiImpl::new(pool, solana, opts.chain_id, executor, mp_gas_prices);
     let mut module = jsonrpsee::server::RpcModule::new(());
     module
         .merge(<EthApiImpl as EthApiServer>::into_rpc(eth.clone()))

@@ -1,5 +1,11 @@
 use std::sync::Arc;
 
+use tokio::runtime::Builder;
+use tokio::sync::mpsc::{self, Sender};
+use tokio::sync::oneshot;
+use tokio::task::LocalSet;
+use tracing::{error, warn};
+
 use common::ethnum::U256;
 use common::neon_lib::commands::emulate::EmulateResponse;
 use common::neon_lib::commands::get_config::GetConfigResponse;
@@ -8,12 +14,7 @@ use common::neon_lib::tracing::tracers::TracerTypeEnum;
 use common::neon_lib::types::{BalanceAddress, ChDbConfig, EmulateRequest, TracerDb, TxParams};
 use common::neon_lib::{commands, NeonError};
 use common::solana_sdk::pubkey::Pubkey;
-use solana_rpc_client::nonblocking::rpc_client::RpcClient;
-use tokio::runtime::Builder;
-use tokio::sync::mpsc::{self, Sender};
-use tokio::sync::oneshot;
-use tokio::task::LocalSet;
-use tracing::{error, warn};
+use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
 #[derive(Debug)]
 struct Task {

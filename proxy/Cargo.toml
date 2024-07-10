@@ -8,21 +8,24 @@ edition = "2021"
 [dependencies]
 db = { path = "../db" }
 common = { path = '../common', package = "neon-proxy-common" }
-solana-api = { path = "../solana-api" }
+solana-api = { path = '../solana-api', package = "solana-api" }
 
 rpc-api = { git = "https://github.com/paradigmxyz/reth", package = "reth-rpc-api" }
 rpc-api-types = { git = "https://github.com/paradigmxyz/reth", package = "reth-rpc-types" }
 reth-primitives = { git = "https://github.com/paradigmxyz/reth", package = "reth-primitives" }
 
 anyhow.workspace = true
+dashmap = "6.0"
 sqlx = { version = "0.7", features = [
-  "runtime-tokio",
-  "postgres",
-  "macros",
+    "runtime-tokio",
+    "postgres",
+    "macros",
 ], default-features = false }
 jsonrpsee = { version = "0.22", features = ["server"] }
 # jsonrpsee-core = { version = "0.22", features = ["server"] }
 # jsonrpsee = { path = "../../../../opensource/jsonrpsee/jsonrpsee", features = ["server"] }
+pyth-sdk-solana = "0.9.0"
+rust_decimal = "1.35"
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
@@ -34,6 +37,7 @@ hex-literal = "0.4.1"
 futures-util = "0.3.30"
 solana-client = "1.17.34"
 solana-rpc-client = "1.17.34"
+solana-rpc-client-api = "1.17.34"
 alloy-consensus = { git = "https://github.com/alloy-rs/alloy", rev = "dd7a999", version = "0.1.0", default-features = false, features = ["k256"] }
 alloy-rlp = "0.3.4"
 
