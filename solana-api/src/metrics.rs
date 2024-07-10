@@ -29,6 +29,7 @@ pub struct TraverseMetrics {
     pub waiting_for_slot_time: Histogram,
     pub get_block_time: Histogram,
     pub process_transactions_time: Histogram,
+    pub decode_ui_transaction_time: Histogram,
 }
 
 pub fn metrics() -> &'static SolanaApiMetrics {
@@ -92,6 +93,11 @@ pub fn metrics() -> &'static SolanaApiMetrics {
             process_transactions_time: register_histogram!(
                 "process_transactions_time",
                 "Process transactions time"
+            )
+            .unwrap(),
+            decode_ui_transaction_time: register_histogram!(
+                "decode_ui_transaction_time",
+                "Decode UI transaction time"
             )
             .unwrap(),
         },

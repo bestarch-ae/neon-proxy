@@ -271,7 +271,10 @@ impl TraverseLedger {
                         {
                             continue;
                         }
+                        let decode_transaction_timer =
+                            metrics().traverse.decode_ui_transaction_time.start_timer();
                         let tx = decode_ui_transaction(tx, slot)?;
+                        drop(decode_transaction_timer);
                         if tx.has_key(target) {
                             txs.push(tx);
                         }
