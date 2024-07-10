@@ -1,14 +1,21 @@
+use std::path::PathBuf;
+
 use clap::Parser;
-use common::neon_lib::types::ChDbConfig;
+use common::neon_lib::types::{Address, ChDbConfig};
 use common::solana_sdk::pubkey::Pubkey;
+use common::solana_sdk::signature::Keypair;
+use common::solana_sdk::signer::EncodableKey;
 use jsonrpsee::types::ErrorCode;
 use rpc_api::{EthApiServer, EthFilterApiServer};
+use solana_api::solana_api::SolanaApi;
 use thiserror::Error;
 
 mod convert;
+mod executor;
 mod neon_api;
 mod rpc;
 
+use executor::Executor;
 use neon_api::NeonApi;
 use rpc::{EthApiImpl, NeonEthApiServer, NeonFilterApiServer};
 
@@ -82,6 +89,14 @@ struct Args {
     #[arg(long, env, default_value = "245022926")]
     // Neon chain id
     chain_id: u64,
+
+    #[arg(long, requires = "operator_address")]
+    /// Path to operator keypair
+    operator_keypair: Option<PathBuf>,
+
+    #[arg(long, requires = "operator_keypair_path")]
+    /// Operator ETH address
+    operator_address: Option<Address>,
 }
 
 #[tokio::main]
@@ -107,12 +122,30 @@ async fn main() {
 
     tracing::info!(%opts.neon_pubkey, %opts.neon_config_pubkey, "starting");
     let solana = NeonApi::new(
-        opts.solana_url,
+        opts.solana_url.clone(),
         opts.neon_pubkey,
         opts.neon_config_pubkey,
         tracer_db_config,
     );
-    let eth = EthApiImpl::new(pool, solana, opts.chain_id);
+
+    let executor = if let Some((path, address)) = opts.operator_keypair.zip(opts.operator_address) {
+        let operator = Keypair::read_from_file(path).expect("cannot read operator keypair");
+        Some(
+            Executor::initialize(
+                solana.clone(),
+                SolanaApi::new(opts.solana_url, false),
+                opts.neon_pubkey,
+                operator,
+                address,
+            )
+            .await
+            .expect("could not initialize executor"),
+        )
+    } else {
+        None
+    };
+
+    let eth = EthApiImpl::new(pool, solana, executor, opts.chain_id);
     let mut module = jsonrpsee::server::RpcModule::new(());
     module
         .merge(<EthApiImpl as EthApiServer>::into_rpc(eth.clone()))

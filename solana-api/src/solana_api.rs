@@ -4,6 +4,7 @@ mod mock;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use common::solana_sdk::account::Account;
 use common::solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use common::solana_sdk::hash::Hash;
 use common::solana_sdk::pubkey::Pubkey;
@@ -169,6 +170,18 @@ impl SolanaApi {
             .get_blocks_with_commitment(from, None, CommitmentConfig::finalized())
             .await
     }
+
+    pub async fn get_account(&self, key: &Pubkey) -> ClientResult<Option<Account>> {
+        self.client
+            .get_account_with_commitment(
+                key,
+                CommitmentConfig {
+                    commitment: self.commitment,
+                },
+            )
+            .await
+            .map(|response| response.value)
+    }
 }
 
 struct LoggedSender(HttpSender);
@@ -195,7 +208,6 @@ impl RpcSender for LoggedSender {
     }
 }
 
-#[cfg(test)]
 mod test_ext {
     use std::sync::Arc;
 
@@ -204,6 +216,7 @@ mod test_ext {
     use super::*;
 
     impl SolanaApi {
+        #[cfg(test)]
         pub fn test() -> (Self, Arc<mock::SharedMock>) {
             let sender = mock::MockSender::new();
             let control = sender.shared.clone();
@@ -211,7 +224,6 @@ mod test_ext {
             (Self::with_sender(sender), control)
         }
 
-        #[cfg(test)]
         pub fn with_sender(sender: impl RpcSender + Send + Sync + 'static) -> Self {
             let client = Arc::new(RpcClient::new_sender(sender, Default::default()));
             Self {
