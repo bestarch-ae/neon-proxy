@@ -1,37 +1,29 @@
 #[cfg(test)]
 mod tests;
+mod transactions;
 
 use std::future::Future;
-use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
 
 use alloy_consensus::TxEnvelope;
-use alloy_rlp::Encodable;
 use anyhow::Context;
 use dashmap::DashMap;
 use solana_api::solana_api::SolanaApi;
 use tokio::sync::Notify;
 use tokio::time::sleep;
 
-use common::ethnum::U256;
-use common::evm_loader::config::ACCOUNT_SEED_VERSION;
-use common::neon_instruction::tag;
-use common::neon_lib::commands::emulate::EmulateResponse;
 use common::neon_lib::types::{Address, TxParams};
-use common::solana_sdk::hash::Hash;
-use common::solana_sdk::instruction::{AccountMeta, Instruction};
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Keypair;
 use common::solana_sdk::signature::Signature;
-use common::solana_sdk::signer::Signer;
-use common::solana_sdk::system_program;
-use common::solana_sdk::transaction::Transaction;
 use common::solana_sdk::transaction::TransactionError;
 use common::solana_transaction_status::TransactionStatus;
 
 use crate::convert::ToNeon;
 use crate::neon_api::NeonApi;
+
+use self::transactions::{OngoingTransaction, TransactionBuilder};
 
 pub struct Executor {
     program_id: Pubkey,
@@ -39,11 +31,7 @@ pub struct Executor {
     neon_api: NeonApi,
     solana_api: SolanaApi,
 
-    treasury_pool_count: u32,
-    treasury_pool_seed: Vec<u8>,
-
-    operator: Keypair,
-    operator_addr: Address,
+    builder: TransactionBuilder,
 
     pending_transactions: DashMap<Signature, OngoingTransaction>,
     notify: Notify,
@@ -86,14 +74,19 @@ impl Executor {
             .to_vec();
         let notify = Notify::new();
 
+        let builder = TransactionBuilder::new(
+            neon_pubkey,
+            operator,
+            operator_addr,
+            treasury_pool_count,
+            treasury_pool_seed,
+        );
+
         Ok(Self {
             program_id: neon_pubkey,
             neon_api,
             solana_api,
-            treasury_pool_count,
-            treasury_pool_seed,
-            operator,
-            operator_addr,
+            builder,
             pending_transactions: DashMap::new(),
             notify,
         })
@@ -150,8 +143,7 @@ impl Executor {
             .await
             .context("could not emulate transaction")?;
 
-        let ix = self.build_simple(&tx, emulate_result, chain_id)?;
-        let tx = OngoingTransaction::new_eth(tx, &[ix], &self.operator.pubkey());
+        let tx = self.builder.build_simple(tx, emulate_result, chain_id)?;
         let signature = self.sign_and_send_transaction(tx).await?;
 
         Ok(signature)
@@ -169,17 +161,15 @@ impl Executor {
             .context("could not request blockhash")?; // TODO: force confirmed
 
         // This will replace bh and clear signatures in case it's a retry
-        tx.tx
-            .try_sign(&[&self.operator], blockhash)
-            .context("could not sign request")?;
+        let sol_tx = tx.sign(&[self.builder.keypair()], blockhash)?;
 
         let signature = self
             .solana_api
-            .send_transaction(&tx.tx)
+            .send_transaction(sol_tx)
             .await
             .context("could not send transaction")?;
 
-        tracing::info!(%signature, tx = ?tx.eth_tx, "sent new transaction");
+        tracing::info!(%signature, tx = ?tx.eth_tx(), "sent new transaction");
         let do_notify = self.pending_transactions.is_empty();
         self.pending_transactions.insert(signature, tx); // TODO: check none?
         if do_notify {
@@ -241,7 +231,7 @@ impl Executor {
         }
 
         let Some(status) = status else {
-            let hash = bail_if_absent!(self.pending_transactions.get(&signature)).blockhash;
+            let hash = *bail_if_absent!(self.pending_transactions.get(&signature)).blockhash();
             let is_valid = self
                 .solana_api
                 .is_blockhash_valid(&hash)
@@ -292,55 +282,8 @@ impl Executor {
         // TODO: do we request logs?
     }
 
-    fn build_simple(
-        &self,
-        tx: &TxEnvelope,
-        emulate: EmulateResponse,
-        chain_id: u64,
-    ) -> anyhow::Result<Instruction> {
-        let base_idx =
-            u32::from_le_bytes(*tx.tx_hash().0.first_chunk().expect("B256 is longer than 4"));
-        let treasury_pool_idx = base_idx % self.treasury_pool_count;
-        let (treasury_pool_address, _seed) = Pubkey::try_find_program_address(
-            &[&self.treasury_pool_seed, &treasury_pool_idx.to_le_bytes()],
-            &self.program_id,
-        )
-        .context("cannot find program address")?;
-
-        let operator_balance = self.operator_balance(chain_id);
-
-        let mut accounts = vec![
-            AccountMeta::new(self.operator.pubkey(), true),
-            AccountMeta::new(treasury_pool_address, false),
-            AccountMeta::new(operator_balance, false),
-            AccountMeta::new_readonly(system_program::ID, false),
-        ];
-        accounts.extend(emulate.solana_accounts.into_iter().map(|acc| AccountMeta {
-            pubkey: acc.pubkey,
-            is_writable: acc.is_writable,
-            is_signer: false,
-        }));
-
-        let data_len = mem::size_of::<u8>() // Tag
-            + mem::size_of::<u32>()
-            + tx.length();
-        let mut data = vec![0; data_len];
-
-        data[0] = tag::TX_EXEC_FROM_DATA;
-        data[1..1 + mem::size_of_val(&treasury_pool_idx)]
-            .copy_from_slice(&treasury_pool_idx.to_le_bytes());
-        tx.encode(&mut &mut data[(1 + mem::size_of::<u32>())..]);
-
-        let ix = Instruction {
-            program_id: self.program_id,
-            accounts,
-            data,
-        };
-        Ok(ix)
-    }
-
     async fn init_operator_balance(&self, chain_id: u64) -> anyhow::Result<Option<Signature>> {
-        let addr = self.operator_balance(chain_id);
+        let addr = self.builder.operator_balance(chain_id);
         if let Some(acc) = self
             .solana_api
             .get_account(&addr)
@@ -353,69 +296,9 @@ impl Executor {
             return Ok(None);
         }
 
-        const TAG_IDX: usize = 0;
-        const ADDR_IDX: usize = TAG_IDX + 1;
-        const CHAIN_ID_IDX: usize = ADDR_IDX + mem::size_of::<Address>();
-        const DATA_LEN: usize = CHAIN_ID_IDX + mem::size_of::<u64>();
-
-        let mut data = vec![0; DATA_LEN];
-        data[TAG_IDX] = tag::OPERATOR_BALANCE_CREATE;
-        data[ADDR_IDX..CHAIN_ID_IDX].copy_from_slice(&self.operator_addr.0);
-        data[CHAIN_ID_IDX..].copy_from_slice(&chain_id.to_le_bytes());
-
-        let accounts = vec![
-            AccountMeta::new(self.operator.pubkey(), true), // TODO: maybe readonly?
-            AccountMeta::new_readonly(system_program::ID, false),
-            AccountMeta::new(addr, false),
-        ];
-
-        let ix = Instruction {
-            program_id: self.program_id,
-            accounts,
-            data,
-        };
-        let tx = OngoingTransaction::new_operational(&[ix], &self.operator.pubkey());
+        let tx = self.builder.init_operator_balance(chain_id);
         let signature = self.sign_and_send_transaction(tx).await?;
 
         Ok(Some(signature))
-    }
-
-    fn operator_balance(&self, chain_id: u64) -> Pubkey {
-        let chain_id = U256::from(chain_id);
-        let opkey = self.operator.pubkey();
-
-        let seeds: &[&[u8]] = &[
-            &[ACCOUNT_SEED_VERSION],
-            opkey.as_ref(),
-            &self.operator_addr.0,
-            &chain_id.to_be_bytes(),
-        ];
-        Pubkey::find_program_address(seeds, &self.program_id).0
-    }
-}
-
-#[derive(Debug, Clone)]
-struct OngoingTransaction {
-    // holder_idx: Option<usize>,
-    eth_tx: Option<TxEnvelope>,
-    tx: Transaction,
-    blockhash: Hash,
-}
-
-impl OngoingTransaction {
-    fn new_eth(eth_tx: TxEnvelope, ixs: &[Instruction], payer: &Pubkey) -> Self {
-        Self {
-            eth_tx: Some(eth_tx),
-            tx: Transaction::new_with_payer(ixs, Some(payer)),
-            blockhash: Hash::default(),
-        }
-    }
-
-    fn new_operational(ixs: &[Instruction], payer: &Pubkey) -> Self {
-        Self {
-            eth_tx: None,
-            tx: Transaction::new_with_payer(ixs, Some(payer)),
-            blockhash: Hash::default(),
-        }
     }
 }
