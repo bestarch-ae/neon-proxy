@@ -132,6 +132,11 @@ impl RpcSender for BanksRpcMock {
                 let ui_account = get_account(rpc, &key, &config).await;
                 serde_json::to_value(self.with_context(commitment, ui_account).await)?
             }
+            RpcRequest::GetMinimumBalanceForRentExemption => {
+                let [size]: [usize; 1] = serde_json::from_value(params)?;
+                let result = rpc.get_rent().await.unwrap().minimum_balance(size);
+                serde_json::to_value(result)?
+            }
             RpcRequest::GetMultipleAccounts => {
                 let (keys, config): (Vec<String>, RpcAccountInfoConfig) =
                     serde_json::from_value(params)?;
@@ -239,7 +244,7 @@ impl RpcSender for BanksRpcMock {
                 };
                 serde_json::to_value(self.with_context(commitment, result).await)?
             }
-            request => panic!("unsupported request: {request}"),
+            request => panic!("unsupported request: {request} {params:?}"),
         };
 
         Ok(response)

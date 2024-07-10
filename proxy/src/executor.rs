@@ -35,6 +35,9 @@ pub struct Executor {
 
     pending_transactions: DashMap<Signature, OngoingTransaction>,
     notify: Notify,
+
+    #[cfg(test)]
+    test_ext: test_ext::TestExtension,
 }
 
 impl Executor {
@@ -90,6 +93,9 @@ impl Executor {
             builder,
             pending_transactions: DashMap::new(),
             notify,
+
+            #[cfg(test)]
+            test_ext: test_ext::TestExtension::new(),
         })
     }
 
@@ -189,6 +195,9 @@ impl Executor {
         let mut signatures = Vec::new();
         loop {
             if self.pending_transactions.is_empty() {
+                #[cfg(test)]
+                self.test_ext.notify.notify_waiters();
+
                 self.notify.notified().await;
             } else {
                 sleep(POLL_INTERVAL).await;
@@ -256,6 +265,9 @@ impl Executor {
         } else {
             self.handle_success(signature, tx, slot).await;
         }
+
+        #[cfg(test)]
+        self.test_ext.add(signature);
     }
 
     async fn handle_expired_transaction(&self, signature: Signature, tx: OngoingTransaction) {
@@ -316,5 +328,40 @@ impl Executor {
         let signature = self.sign_and_send_transaction(tx).await?;
 
         Ok(Some(signature))
+    }
+
+    #[cfg(test)]
+    async fn join_current_transactions(&self) -> Vec<Signature> {
+        self.test_ext.take().await
+    }
+}
+
+#[cfg(test)]
+mod test_ext {
+    use std::{mem, sync::Mutex};
+
+    use super::*;
+
+    pub struct TestExtension {
+        pub notify: Notify,
+        pub signatures: Mutex<Vec<Signature>>,
+    }
+
+    impl TestExtension {
+        pub fn new() -> Self {
+            Self {
+                notify: Notify::new(),
+                signatures: Mutex::new(Vec::new()),
+            }
+        }
+
+        pub fn add(&self, signature: Signature) {
+            self.signatures.lock().unwrap().push(signature);
+        }
+
+        pub async fn take(&self) -> Vec<Signature> {
+            self.notify.notified().await;
+            mem::take(self.signatures.lock().unwrap().as_mut())
+        }
     }
 }

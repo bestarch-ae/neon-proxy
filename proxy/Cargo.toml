@@ -48,6 +48,7 @@ alloy-signer-wallet= { git = "https://github.com/alloy-rs/alloy", rev = "dd7a999
 alloy-network = { git = "https://github.com/alloy-rs/alloy", rev = "dd7a999" }
 base64 = "0.21"
 bs58 = "0.5.1"
+hex = "0.4"
 solana-program-test = "1.17.34"
 solana-sdk = "1.17.34"
 solana-account-decoder = "1.17.34"

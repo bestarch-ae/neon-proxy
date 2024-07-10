@@ -4984,6 +4984,7 @@ dependencies = [
  "dashmap 6.0.1",
  "db",
  "futures-util",
+ "hex",
  "hex-literal",
  "jsonrpsee",
  "neon-proxy-common",
