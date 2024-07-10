@@ -94,7 +94,7 @@ struct Args {
     /// Path to operator keypair
     operator_keypair: Option<PathBuf>,
 
-    #[arg(long, requires = "operator_keypair_path")]
+    #[arg(long, requires = "operator_keypair")]
     /// Operator ETH address
     operator_address: Option<Address>,
 }
