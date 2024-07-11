@@ -450,12 +450,18 @@ impl EthApiServer for EthApiImpl {
     async fn call(
         &self,
         request: TransactionRequest,
-        _block_number: Option<BlockId>,
+        block_number: Option<BlockId>,
         _state_overrides: Option<StateOverride>,
         _block_overrides: Option<Box<BlockOverrides>>,
     ) -> RpcResult<Bytes> {
         use crate::convert::ToNeon;
         tracing::info!("call {:?}", request);
+
+        let slot = if let Some(block_number) = block_number {
+            self.get_slot_by_block_id(block_number).await?
+        } else {
+            None
+        };
 
         let tx = TxParams {
             nonce: request.nonce,
@@ -475,7 +481,7 @@ impl EthApiServer for EthApiImpl {
             actual_gas_used: None,
             chain_id: Some(self.chain_id),
         };
-        let data = self.neon_api.call(tx).await?;
+        let data = self.neon_api.call(tx, slot).await?;
         Ok(Bytes::from(data))
     }
 
