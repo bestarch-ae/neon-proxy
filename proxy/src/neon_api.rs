@@ -91,27 +91,37 @@ enum TaskCommand {
 }
 
 struct Context {
-    rpc: RpcEnum,
+    rpc_client: CloneRpcClient,
+    default_rpc: RpcEnum,
     neon_pubkey: Pubkey,
 }
 
-async fn build_rpc(
-    rpc_client: &CloneRpcClient,
-    tracer_db: Option<&TracerDb>,
-    slot: Option<u64>,
-    tx_index_in_block: Option<u64>,
-) -> Result<RpcEnum, NeonError> {
-    if let Some(slot) = slot {
-        if let Some(tracer_db) = tracer_db {
-            Ok(RpcEnum::CallDbClient(
-                CallDbClient::new(tracer_db.clone(), slot, tx_index_in_block).await?,
-            ))
+impl Context {
+    pub async fn new(
+        rpc_client: CloneRpcClient,
+        tracer_db: Option<&TracerDb>,
+        slot: Option<u64>,
+        tx_index_in_block: Option<u64>,
+        neon_pubkey: Pubkey,
+    ) -> Result<Self, NeonError> {
+        let default_rpc = if let Some(slot) = slot {
+            if let Some(tracer_db) = tracer_db {
+                RpcEnum::CallDbClient(
+                    CallDbClient::new(tracer_db.clone(), slot, tx_index_in_block).await?,
+                )
+            } else {
+                warn!("tracer_db is not configured, falling back to RpcClient");
+                RpcEnum::CloneRpcClient(rpc_client.clone())
+            }
         } else {
-            warn!("tracer_db is not configured, falling back to RpcClient");
-            Ok(RpcEnum::CloneRpcClient(rpc_client.clone()))
-        }
-    } else {
-        Ok(RpcEnum::CloneRpcClient(rpc_client.clone()))
+            RpcEnum::CloneRpcClient(rpc_client.clone())
+        };
+
+        Ok(Self {
+            rpc_client,
+            default_rpc,
+            neon_pubkey,
+        })
     }
 }
 
@@ -165,22 +175,17 @@ impl NeonApi {
                 } else {
                     Some(TracerDb::new(&tracer_db_config))
                 };
+
                 while let Some(task) = rx.recv().await {
-                    let rpc = match build_rpc(
-                        &client,
+                    let ctx = Context::new(
+                        client.clone(),
                         tracer_db.as_ref(),
                         task.slot,
                         task.tx_index_in_block,
+                        neon_pubkey,
                     )
                     .await
-                    {
-                        Ok(rpc) => rpc,
-                        Err(err) => {
-                            error!("failed to build rpc: {err:?}");
-                            continue;
-                        }
-                    };
-                    let ctx = Context { rpc, neon_pubkey };
+                    .expect("context creation failed");
                     tokio::task::spawn_local(Self::execute(task.cmd, ctx));
                 }
             });
@@ -244,7 +249,11 @@ impl NeonApi {
         Ok(rx.await.unwrap()?)
     }
 
-    pub async fn estimate_gas(&self, params: TxParams) -> Result<U256, NeonApiError> {
+    pub async fn estimate_gas(
+        &self,
+        params: TxParams,
+        slot: Option<u64>,
+    ) -> Result<U256, NeonApiError> {
         let (tx, rx) = oneshot::channel();
         self.channel
             .send(Task::new(
@@ -252,7 +261,7 @@ impl NeonApi {
                     tx: params.clone(),
                     response: tx,
                 },
-                None,
+                slot,
                 None,
             ))
             .await
@@ -298,7 +307,7 @@ impl NeonApi {
     async fn execute(task: TaskCommand, ctx: Context) {
         match task {
             TaskCommand::EstimateGas { tx, response } => {
-                let config = commands::get_config::execute(&ctx.rpc, ctx.neon_pubkey)
+                let config = commands::get_config::execute(&ctx.rpc_client, ctx.neon_pubkey)
                     .await
                     .expect("config didnt fail"); // TODO
 
@@ -311,7 +320,7 @@ impl NeonApi {
                     solana_overrides: None,
                 };
                 let resp = commands::emulate::execute(
-                    &ctx.rpc,
+                    &ctx.default_rpc,
                     ctx.neon_pubkey,
                     req,
                     None::<TracerTypeEnum>,
@@ -325,7 +334,7 @@ impl NeonApi {
             }
 
             TaskCommand::Emulate { tx, response } => {
-                let config = commands::get_config::execute(&ctx.rpc, ctx.neon_pubkey)
+                let config = commands::get_config::execute(&ctx.rpc_client, ctx.neon_pubkey)
                     .await
                     .expect("config didnt fail"); // TODO
 
@@ -338,7 +347,7 @@ impl NeonApi {
                     solana_overrides: None,
                 };
                 let resp = commands::emulate::execute(
-                    &ctx.rpc,
+                    &ctx.default_rpc,
                     ctx.neon_pubkey,
                     req,
                     None::<TracerTypeEnum>,
@@ -353,7 +362,7 @@ impl NeonApi {
 
             TaskCommand::EmulateCall { tx, response } => {
                 tracing::info!(?tx, "emulate_call");
-                let config = commands::get_config::execute(&ctx.rpc, ctx.neon_pubkey)
+                let config = commands::get_config::execute(&ctx.rpc_client, ctx.neon_pubkey)
                     .await
                     .expect("config didnt fail"); // TODO
 
@@ -366,7 +375,7 @@ impl NeonApi {
                     solana_overrides: None,
                 };
                 let resp = commands::emulate::execute(
-                    &ctx.rpc,
+                    &ctx.default_rpc,
                     ctx.neon_pubkey,
                     req,
                     None::<TracerTypeEnum>,
@@ -382,7 +391,8 @@ impl NeonApi {
 
             TaskCommand::GetBalance { addr, response } => {
                 let resp =
-                    commands::get_balance::execute(&ctx.rpc, &ctx.neon_pubkey, &[addr]).await;
+                    commands::get_balance::execute(&ctx.default_rpc, &ctx.neon_pubkey, &[addr])
+                        .await;
                 tracing::info!(?resp, "get_balance");
                 let resp = match resp {
                     Ok(resp) => {
@@ -399,7 +409,8 @@ impl NeonApi {
 
             TaskCommand::GetTransactionCount { addr, response } => {
                 let resp =
-                    commands::get_balance::execute(&ctx.rpc, &ctx.neon_pubkey, &[addr]).await;
+                    commands::get_balance::execute(&ctx.default_rpc, &ctx.neon_pubkey, &[addr])
+                        .await;
                 tracing::info!(?resp, "get_transaction_count");
                 let resp = match resp {
                     Ok(resp) => {
@@ -415,7 +426,7 @@ impl NeonApi {
             }
 
             TaskCommand::GetConfig(response) => {
-                let resp = commands::get_config::execute(&ctx.rpc, ctx.neon_pubkey).await;
+                let resp = commands::get_config::execute(&ctx.rpc_client, ctx.neon_pubkey).await;
                 let _ = response.send(resp);
             }
         }

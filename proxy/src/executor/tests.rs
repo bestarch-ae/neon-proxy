@@ -282,7 +282,7 @@ async fn basic() -> anyhow::Result<()> {
     let rpc = BanksRpcMock(env.banks_client.clone());
     let rpc = RpcClient::new_sender(rpc, Default::default());
     let neon_api =
-        NeonApi::new_with_custom_rpc_client(rpc, NEON_KEY, payer.pubkey(), Default::default());
+        NeonApi::new_with_custom_rpc_client(rpc, NEON_KEY, payer.pubkey(), Default::default(), 64);
 
     let rpc = BanksRpcMock(env.banks_client.clone());
     let solana_api = SolanaApi::with_sender(rpc);
