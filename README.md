@@ -97,5 +97,6 @@ export NEON_PROXY_REPO_NAME=neon-proxy
 export NEON_PROXY_TAG=latest
 export NEON_EVM_ADDRESS=53DfF883gyixYNXnM7s5xhdeyV8mVk9T4i2hGV9vG9io
 export NEON_EVM_COMMIT=67d1bd0ef32e5ab6f96393419ae25053080d2a9e
+export CONST_GAS_PRICE=1000000000
 docker-compose -f docker-compose-evm.yml up -d
 ```
