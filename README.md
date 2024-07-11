@@ -84,8 +84,11 @@ export NEON_PROXY_REPO_NAME=neon-proxy
 export NEON_PROXY_TAG=latest
 export NEON_EVM_ADDRESS=eeLSJgWzzxrqKv1UxtRVVH8FX3qCQWUs9QuAjJpETGU
 export SOLANA_URL=https://api.devnet.solana.com
+export SOLANA_WS_URL=wss://api.devnet.solana.com
+export PYTH_MAPPING_ADDR=BmA9Z6FjioHJPpjT39QazZyhDRUdZy2ezwx4GiDdE2u2
 docker-compose up -d
 ```
+PYTH_MAPPING_ADDR can be taken from https://pyth.network/developers/accounts from the `Mapping account` field 
 
 To run the built image on local Solana validator with Neon EVM, set-up environment variables and execute
 ```
