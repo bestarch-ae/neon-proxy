@@ -83,7 +83,7 @@ export DOCKERHUB_ORG_NAME=your-organization
 export NEON_PROXY_REPO_NAME=neon-proxy
 export NEON_PROXY_TAG=latest
 export NEON_EVM_ADDRESS=eeLSJgWzzxrqKv1UxtRVVH8FX3qCQWUs9QuAjJpETGU
-export SOLANA_URL=http://sol-devnet-01.tt-int.net:8899
+export SOLANA_URL=https://api.devnet.solana.com
 docker-compose up -d
 ```
 

@@ -75,6 +75,8 @@ services:
     restart: "always"
     entrypoint: ./proxy
     command: >-
+      ${NEON_EVM_ADDRESS}
+      -u http://solana:8899
       -l 0.0.0.0:8018
       --pg-url postgres://neon-proxy:neon-proxy-pass@postgres:5432/neon-db
     environment:
