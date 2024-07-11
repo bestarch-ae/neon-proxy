@@ -517,7 +517,7 @@ impl EthApiServer for EthApiImpl {
     async fn estimate_gas(
         &self,
         request: TransactionRequest,
-        _block_number: Option<BlockId>,
+        block_number: Option<BlockId>,
         _state_override: Option<StateOverride>,
     ) -> RpcResult<U256> {
         use crate::convert::{ToNeon, ToReth};
@@ -540,7 +540,18 @@ impl EthApiServer for EthApiImpl {
             actual_gas_used: None,
             chain_id: Some(self.chain_id),
         };
-        let gas = self.neon_api.estimate_gas(tx).await.map(ToReth::to_reth)?;
+
+        let slot = if let Some(block_number) = block_number {
+            self.get_slot_by_block_id(block_number).await?
+        } else {
+            None
+        };
+
+        let gas = self
+            .neon_api
+            .estimate_gas(tx, slot)
+            .await
+            .map(ToReth::to_reth)?;
         Ok(gas)
     }
 
