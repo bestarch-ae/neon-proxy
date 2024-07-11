@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 
 use jsonrpsee::types::ErrorCode;
 use rpc_api::{EthApiServer, EthFilterApiServer};
@@ -42,6 +42,11 @@ impl From<Error> for jsonrpsee::types::ErrorObjectOwned {
 }
 
 #[derive(Parser)]
+#[command(group(
+    ArgGroup::new("required_group")
+    .args(&["symbology_path", "const_gas_price", "pyth_mapping_addr"])
+    .required(true)
+))]
 struct Args {
     #[arg(short, long, default_value = None, value_name = "POSTGRES_URL")]
     /// Postgres url
@@ -85,7 +90,7 @@ struct Args {
 
     #[arg(long)]
     /// Pyth mapping address
-    pyth_mapping_addr: Pubkey,
+    pyth_mapping_addr: Option<Pubkey>,
 
     #[arg(long, env, value_delimiter = ';')]
     /// Tracer db urls, comma separated
@@ -163,8 +168,8 @@ async fn main() {
         opts.neon_config_pubkey,
         tracer_db_config,
     );
-    tracing::info!(%opts.pyth_mapping_addr, "loading symbology");
     let pyth_symbology = if let Some(path) = opts.symbology_path.as_ref() {
+        tracing::info!(?path, "loading symbology");
         let raw = std::fs::read_to_string(path).expect("failed to read symbology");
         let symbology_raw: HashMap<String, String> =
             serde_json::from_str(&raw).expect("failed to parse symbology json");
@@ -173,13 +178,16 @@ async fn main() {
             .map(|(k, v)| Pubkey::from_str(v).map(|pubkey| (k.clone(), pubkey)))
             .collect::<Result<HashMap<String, Pubkey>, _>>()
             .expect("failed to parse symbology")
-    } else {
+    } else if let Some(mapping_addr) = &opts.pyth_mapping_addr {
+        tracing::info!(%mapping_addr, "loading symbology");
         let rpc_client = RpcClient::new(opts.solana_url.clone());
-        let symbology = mempool::pyth_collect_symbology(&opts.pyth_mapping_addr, &rpc_client)
+        let symbology = mempool::pyth_collect_symbology(mapping_addr, &rpc_client)
             .await
             .expect("failed to collect pyth symbology");
         drop(rpc_client);
         symbology
+    } else {
+        HashMap::new()
     };
     let mp_gas_calculator_config = mempool::GasPriceCalculatorConfig {
         operator_fee: opts.operator_fee,
