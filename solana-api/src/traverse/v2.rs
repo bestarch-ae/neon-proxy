@@ -1,16 +1,11 @@
 use std::ops::RangeBounds;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 
-use futures_util::stream::FuturesOrdered;
-use futures_util::{Stream, StreamExt};
+use futures_util::{stream, Stream, StreamExt};
 use solana_client::client_error::{ClientError, ClientErrorKind};
 use solana_client::rpc_request::RpcError;
 use solana_rpc_client_api::custom_error;
 use thiserror::Error;
-use tokio::sync::mpsc;
-use tokio::task;
 use tokio::time::sleep;
 
 use common::solana_sdk::pubkey::Pubkey;
@@ -213,59 +208,31 @@ impl TraverseLedger {
     ) -> impl Stream<Item = Result<LedgerItem, TraverseError>> {
         tracing::info!(start = ?range.start_bound(), end = ?range.end_bound(), "traversing range");
         let api = self.api.clone();
-        let api2 = self.api.clone();
         let commitment = self.commitment;
         let is_finalized = matches!(self.commitment, CommitmentLevel::Finalized);
         let poll_interval = self.config.status_poll_interval;
         let target = self.config.target_key;
         let only_success = self.config.only_success;
+        let slots = stream::iter(range.step_by(1))
+            .map(move |slot| {
+                tokio::spawn(Self::process_slot(
+                    slot,
+                    api.clone(),
+                    commitment,
+                    target,
+                    only_success,
+                    is_finalized,
+                ))
+            })
+            .buffered(self.config.max_concurrent_tasks);
 
-        let active_tasks = Arc::new(AtomicUsize::new(0));
-        let max_concurrent_tasks = self.config.max_concurrent_tasks;
-
-        let (tx, mut rx) = mpsc::channel::<task::JoinHandle<Result<LedgerItem, TraverseError>>>(
-            max_concurrent_tasks + 2,
-        );
-        let tx_clone = tx.clone();
-
-        tokio::spawn(async move {
-            for slot in range.step_by(1) {
-                while active_tasks.load(Ordering::SeqCst) >= max_concurrent_tasks {
-                    tokio::task::yield_now().await;
-                }
-
-                active_tasks.fetch_add(1, Ordering::SeqCst);
-                tracing::info!(?active_tasks, "scheduling task");
-                let active_tasks_clone = active_tasks.clone();
-                let api_clone = api.clone();
-
-                let handle = task::spawn(async move {
-                    let result = Self::process_slot(
-                        slot,
-                        api_clone,
-                        commitment,
-                        target,
-                        only_success,
-                        is_finalized,
-                    )
-                    .await;
-                    active_tasks_clone.fetch_sub(1, Ordering::SeqCst);
-                    result
-                });
-
-                tx_clone.send(handle).await.expect("Failed to send handle");
-            }
-        });
-
-        let mut tasks = FuturesOrdered::new();
+        let api = self.api.clone();
         stream_generator::generate_try_stream(move |mut stream| async move {
-            let mut tracker = FinalizationTracker::init(api2, poll_interval).await?;
+            tokio::pin!(slots);
+            let mut tracker = FinalizationTracker::init(api, poll_interval).await?;
 
             loop {
                 tokio::select! {
-                    Some(handle) = rx.recv() => {
-                        tasks.push_back(handle);
-                    }
                     Ok(block_status) = tracker.next() => {
                         let (slot, is_finalized) = block_status;
                         stream.send(Ok(LedgerItem::BlockUpdate {
@@ -273,20 +240,21 @@ impl TraverseLedger {
                             commitment: is_finalized.then_some(CommitmentLevel::Finalized)
                         })).await;
                     }
-                    Some(item) = tasks.next() => {
+                    Some(item) = slots.next() => {
+                        let item = item.expect("task panicked, stream ended");
                         match item {
-                            Ok(Ok(missing @ LedgerItem::MissingBlock { .. })) => {
+                            Ok(missing @ LedgerItem::MissingBlock { .. }) => {
                                 stream.send(Ok(missing)).await;
                             }
-                            Ok(Ok(
+                            Ok(
                                 block @ LedgerItem::Block {
                                     commitment: CommitmentLevel::Finalized,
                                     ..
                                 },
-                            )) => {
+                            ) => {
                                 stream.send(Ok(block)).await;
                             }
-                            Ok(Ok(block @ LedgerItem::Block { .. })) => {
+                            Ok(block @ LedgerItem::Block { .. }) => {
                                 let slot = block.slot();
                                 let status = tracker.check_or_schedule_new_slot(slot);
                                 if matches!(status, BlockStatus::Finalized | BlockStatus::Purged) {
@@ -297,12 +265,9 @@ impl TraverseLedger {
                                 }
                                 stream.send(Ok(block)).await;
                             }
-                            Ok(Ok(update)) => stream.send(Ok(update)).await,
-                            Ok(Err(err)) => {
-                                stream.send(Err(err)).await;
-                            }
+                            Ok(update) => stream.send(Ok(update)).await,
                             Err(err) => {
-                                tracing::error!(%err, "task error");
+                                stream.send(Err(err)).await;
                             }
                         }
                     }
