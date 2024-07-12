@@ -10,7 +10,6 @@ use thiserror::Error;
 
 mod convert;
 mod executor;
-mod gas_limit_calculator;
 mod mempool;
 mod neon_api;
 mod rpc;

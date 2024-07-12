@@ -1,3 +1,5 @@
+mod gas_limit_calculator;
+
 use std::sync::Arc;
 
 use thiserror::Error;
@@ -17,7 +19,7 @@ use common::neon_lib::{commands, NeonError};
 use common::solana_sdk::pubkey::Pubkey;
 use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
-use crate::gas_limit_calculator::{GasLimitCalculator, GasLimitError};
+use self::gas_limit_calculator::{GasLimitCalculator, GasLimitError};
 
 #[derive(Debug, Error)]
 pub enum NeonApiError {
