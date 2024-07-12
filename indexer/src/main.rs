@@ -49,9 +49,9 @@ struct Args {
     /// Address for prometheus metrics
     metrics_addr: Option<std::net::SocketAddr>,
 
-    #[arg(long, default_value = "10")]
+    #[arg(long, default_value = "16")]
     /// Number of tasks to process slots in parallel
-    max_concurrent_tasks: usize,
+    max_traverse_tasks: usize,
 }
 
 #[tokio::main]
@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
         last_observed: None,
         finalized: !opts.confirmed,
         only_success: true,
-        max_concurrent_tasks: opts.max_concurrent_tasks,
+        max_concurrent_tasks: opts.max_traverse_tasks,
         ..Default::default()
     };
     let traverse = TraverseLedger::new(traverse_config);
