@@ -2,6 +2,7 @@ mod gas_limit_calculator;
 
 use std::sync::Arc;
 
+use jsonrpsee::types::ErrorCode;
 use thiserror::Error;
 use tokio::runtime::Builder;
 use tokio::sync::mpsc::{self, Sender};
@@ -30,9 +31,9 @@ pub enum NeonApiError {
 }
 
 impl NeonApiError {
-    pub const fn error_code(&self) -> u32 {
+    pub const fn error_code(&self) -> i32 {
         match self {
-            Self::NeonError(err) => err.error_code(),
+            Self::NeonError(err) => err.error_code() as i32,
             Self::GasLimitError(_) => 3,
         }
     }
@@ -40,11 +41,16 @@ impl NeonApiError {
 
 impl From<NeonApiError> for jsonrpsee::types::ErrorObjectOwned {
     fn from(value: NeonApiError) -> Self {
+        let error_code = value.error_code();
         match value {
-            NeonApiError::NeonError(err) => {
-                Self::owned(err.error_code() as i32, err.to_string(), None::<String>)
+            NeonApiError::NeonError(err) => Self::owned(
+                ErrorCode::InternalError.code(),
+                err.to_string(),
+                None::<String>,
+            ),
+            NeonApiError::GasLimitError(err) => {
+                Self::owned(error_code, err.to_string(), None::<String>)
             }
-            NeonApiError::GasLimitError(err) => Self::owned(3, err.to_string(), None::<String>),
         }
     }
 }
