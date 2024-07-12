@@ -1,7 +1,13 @@
 use std::ops::RangeBounds;
 use std::time::Duration;
 
-use crate::convert::{decode_ui_transaction, TxDecodeError};
+use futures_util::{stream, Stream, StreamExt};
+use solana_client::client_error::{ClientError, ClientErrorKind};
+use solana_client::rpc_request::RpcError;
+use solana_rpc_client_api::custom_error;
+use thiserror::Error;
+use tokio::time::sleep;
+
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::{ParseSignatureError, Signature};
 use common::solana_transaction_status::UiConfirmedBlock;
@@ -9,13 +15,8 @@ use common::{
     solana_sdk::commitment_config::CommitmentLevel,
     types::{SolanaBlock, SolanaTransaction},
 };
-use futures_util::{Stream, StreamExt};
-use solana_client::client_error::{ClientError, ClientErrorKind};
-use solana_client::rpc_request::RpcError;
-use solana_rpc_client_api::custom_error;
-use thiserror::Error;
-use tokio::time::sleep;
 
+use crate::convert::{decode_ui_transaction, TxDecodeError};
 use crate::metrics::metrics;
 use crate::solana_api::SolanaApi;
 
@@ -59,6 +60,7 @@ pub struct TraverseConfig {
     pub target_key: Pubkey,
     pub last_observed: Option<Signature>,
     pub signature_buffer_limit: Option<usize>,
+    pub max_concurrent_tasks: usize,
 }
 
 impl Default for TraverseConfig {
@@ -72,6 +74,7 @@ impl Default for TraverseConfig {
             target_key: Pubkey::default(),
             last_observed: None,
             signature_buffer_limit: None,
+            max_concurrent_tasks: 10,
         }
     }
 }
@@ -199,107 +202,34 @@ impl TraverseLedger {
         }
     }
 
-    pub fn in_range<R: RangeBounds<u64> + Iterator<Item = u64> + 'static>(
+    pub fn in_range<R: RangeBounds<u64> + Iterator<Item = u64> + Send + 'static>(
         &self,
         range: R,
     ) -> impl Stream<Item = Result<LedgerItem, TraverseError>> {
         tracing::info!(start = ?range.start_bound(), end = ?range.end_bound(), "traversing range");
         let api = self.api.clone();
-        let api2 = self.api.clone();
         let commitment = self.commitment;
         let is_finalized = matches!(self.commitment, CommitmentLevel::Finalized);
         let poll_interval = self.config.status_poll_interval;
         let target = self.config.target_key;
         let only_success = self.config.only_success;
+        let slots = stream::iter(range.step_by(1))
+            .map(move |slot| {
+                tokio::spawn(Self::process_slot(
+                    slot,
+                    api.clone(),
+                    commitment,
+                    target,
+                    only_success,
+                    is_finalized,
+                ))
+            })
+            .buffered(self.config.max_concurrent_tasks);
 
-        let inner_stream = stream_generator::generate_try_stream(
-            move |mut stream: stream_generator::Yielder<Result<LedgerItem, TraverseError>>| async move {
-                for slot in range.step_by(1) {
-                    tracing::debug!(%slot, "getting block");
-                    let _process_slot_timer = metrics()
-                        .traverse
-                        .process_slot_from_range_time
-                        .start_timer();
-                    let current_slot_timer = metrics().traverse.get_current_slot_time.start_timer();
-                    let mut current_slot = retry!(api.get_slot(commitment), "getting slot");
-                    drop(current_slot_timer);
-
-                    let waiting_for_slot_timer =
-                        metrics().traverse.waiting_for_slot_time.start_timer();
-                    while slot > current_slot {
-                        current_slot = retry!(api.get_slot(commitment), "waiting for slot");
-                    }
-                    drop(waiting_for_slot_timer);
-
-                    let get_block_timer = metrics().traverse.get_block_time.start_timer();
-                    let block = Self::get_block(&api, slot, true).await;
-                    drop(get_block_timer);
-
-                    let block = match block {
-                        None => {
-                            stream.send(Ok(LedgerItem::MissingBlock { slot })).await;
-                            continue;
-                        }
-                        Some(block) => block,
-                    };
-                    metrics().traverse.last_observed_slot.set(slot as i64);
-                    let process_transactions_timer =
-                        metrics().traverse.process_transactions_time.start_timer();
-                    let ui_txs = block.transactions;
-                    let block = SolanaBlock {
-                        slot,
-                        parent_slot: block.parent_slot,
-                        parent_hash: block
-                            .previous_blockhash
-                            .parse()
-                            .map_err(TxDecodeError::from)?,
-                        hash: block.blockhash.parse().map_err(TxDecodeError::from)?,
-                        time: block.block_time,
-                        is_finalized,
-                    };
-                    let Some(ui_txs) = ui_txs else {
-                        return Err(TxDecodeError::MissingTransactions.into());
-                    };
-                    let mut txs = Vec::new();
-                    for tx in ui_txs.into_iter() {
-                        if only_success
-                            && tx
-                                .meta
-                                .as_ref()
-                                .map(|meta| meta.status.is_err())
-                                .unwrap_or(false)
-                        {
-                            continue;
-                        }
-                        let decode_transaction_timer =
-                            metrics().traverse.decode_ui_transaction_time.start_timer();
-                        let tx = decode_ui_transaction(tx, slot)?;
-                        drop(decode_transaction_timer);
-                        if tx.has_key(target) {
-                            txs.push(tx);
-                        }
-                    }
-                    metrics()
-                        .traverse
-                        .transactions_per_block
-                        .observe(txs.len() as f64);
-
-                    tracing::debug!(%slot, count = txs.len(), "fetched transactions");
-                    drop(process_transactions_timer);
-                    stream
-                        .send(Ok(LedgerItem::Block {
-                            block,
-                            txs,
-                            commitment,
-                        }))
-                        .await;
-                }
-                Ok(())
-            },
-        );
+        let api = self.api.clone();
         stream_generator::generate_try_stream(move |mut stream| async move {
-            tokio::pin!(inner_stream);
-            let mut tracker = FinalizationTracker::init(api2, poll_interval).await?;
+            tokio::pin!(slots);
+            let mut tracker = FinalizationTracker::init(api, poll_interval).await?;
 
             loop {
                 tokio::select! {
@@ -310,7 +240,8 @@ impl TraverseLedger {
                             commitment: is_finalized.then_some(CommitmentLevel::Finalized)
                         })).await;
                     }
-                    Some(item) = inner_stream.next() => {
+                    Some(item) = slots.next() => {
+                        let item = item.expect("task panicked, stream ended");
                         match item {
                             Ok(missing @ LedgerItem::MissingBlock { .. }) => {
                                 stream.send(Ok(missing)).await;
@@ -342,6 +273,89 @@ impl TraverseLedger {
                     }
                 }
             }
+        })
+    }
+
+    async fn process_slot(
+        slot: u64,
+        api: SolanaApi,
+        commitment: CommitmentLevel,
+        target: Pubkey,
+        only_success: bool,
+        is_finalized: bool,
+    ) -> Result<LedgerItem, TraverseError> {
+        tracing::debug!(%slot, "getting block");
+        let _process_slot_timer = metrics()
+            .traverse
+            .process_slot_from_range_time
+            .start_timer();
+        let current_slot_timer = metrics().traverse.get_current_slot_time.start_timer();
+        let mut current_slot = retry!(api.get_slot(commitment), "getting slot");
+        drop(current_slot_timer);
+
+        let waiting_for_slot_timer = metrics().traverse.waiting_for_slot_time.start_timer();
+        while slot > current_slot {
+            current_slot = retry!(api.get_slot(commitment), "waiting for slot");
+        }
+        drop(waiting_for_slot_timer);
+
+        let get_block_timer = metrics().traverse.get_block_time.start_timer();
+        let block = Self::get_block(&api, slot, true).await;
+        drop(get_block_timer);
+
+        let block = match block {
+            None => {
+                return Ok(LedgerItem::MissingBlock { slot });
+            }
+            Some(block) => block,
+        };
+        metrics().traverse.last_observed_slot.set(slot as i64);
+        let process_transactions_timer = metrics().traverse.process_transactions_time.start_timer();
+        let ui_txs = block.transactions;
+        let block = SolanaBlock {
+            slot,
+            parent_slot: block.parent_slot,
+            parent_hash: block
+                .previous_blockhash
+                .parse()
+                .map_err(TxDecodeError::from)?,
+            hash: block.blockhash.parse().map_err(TxDecodeError::from)?,
+            time: block.block_time,
+            is_finalized,
+        };
+        let Some(ui_txs) = ui_txs else {
+            return Err(TxDecodeError::MissingTransactions.into());
+        };
+        let mut txs = Vec::new();
+        for tx in ui_txs.into_iter() {
+            if only_success
+                && tx
+                    .meta
+                    .as_ref()
+                    .map(|meta| meta.status.is_err())
+                    .unwrap_or(false)
+            {
+                continue;
+            }
+            let decode_transaction_timer =
+                metrics().traverse.decode_ui_transaction_time.start_timer();
+            let tx = decode_ui_transaction(tx, slot)?;
+            drop(decode_transaction_timer);
+            if tx.has_key(target) {
+                txs.push(tx);
+            }
+        }
+        metrics()
+            .traverse
+            .transactions_per_block
+            .observe(txs.len() as f64);
+
+        tracing::debug!(%slot, count = txs.len(), "fetched transactions");
+        drop(process_transactions_timer);
+        Ok(LedgerItem::Block {
+            block,
+            txs,
+            commitment,
         })
     }
 }

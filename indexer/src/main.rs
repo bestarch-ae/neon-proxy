@@ -2,12 +2,13 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
-use solana::traverse::v2::{TraverseConfig, TraverseLedger};
-use tokio::sync::mpsc;
-
 use common::solana_sdk::pubkey::Pubkey;
+// use futures::stream::StreamExt;
+
 use indexer::Indexer;
 use metrics::metrics;
+use solana::traverse::v2::{TraverseConfig, TraverseLedger};
+use tokio::sync::mpsc;
 use tokio_stream::{Stream, StreamExt};
 
 mod accountsdb;
@@ -47,6 +48,10 @@ struct Args {
     #[arg(long)]
     /// Address for prometheus metrics
     metrics_addr: Option<std::net::SocketAddr>,
+
+    #[arg(long, default_value = "16")]
+    /// Number of tasks to process slots in parallel
+    max_traverse_tasks: usize,
 }
 
 #[tokio::main]
@@ -69,6 +74,7 @@ async fn main() -> Result<()> {
         last_observed: None,
         finalized: !opts.confirmed,
         only_success: true,
+        max_concurrent_tasks: opts.max_traverse_tasks,
         ..Default::default()
     };
     let traverse = TraverseLedger::new(traverse_config);
