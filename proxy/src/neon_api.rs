@@ -3,6 +3,7 @@ mod gas_limit_calculator;
 use std::sync::Arc;
 
 use jsonrpsee::types::ErrorCode;
+use reth_primitives::BlockNumberOrTag;
 use thiserror::Error;
 use tokio::runtime::Builder;
 use tokio::sync::mpsc::{self, Sender};
@@ -56,23 +57,21 @@ impl From<NeonApiError> for jsonrpsee::types::ErrorObjectOwned {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum SlotId {
-    Slot(u64),
-    Pending,
-}
-
 #[derive(Debug)]
 struct Task {
-    slot_id: Option<SlotId>,
+    tag: Option<BlockNumberOrTag>,
     tx_index_in_block: Option<u64>,
     cmd: TaskCommand,
 }
 
 impl Task {
-    pub fn new(cmd: TaskCommand, slot_id: Option<SlotId>, tx_index_in_block: Option<u64>) -> Self {
+    pub fn new(
+        cmd: TaskCommand,
+        tag: Option<BlockNumberOrTag>,
+        tx_index_in_block: Option<u64>,
+    ) -> Self {
         Self {
-            slot_id,
+            tag,
             tx_index_in_block,
             cmd,
         }
@@ -112,25 +111,48 @@ struct Context {
 }
 
 async fn build_rpc(
-    rpc_client_finalized: &CloneRpcClient,
-    rpc_client_processed: &CloneRpcClient,
+    mut client_builder: impl FnMut(CommitmentConfig) -> RpcClient,
     tracer_db: Option<&TracerDb>,
-    slot_id: Option<SlotId>,
+    tag: Option<BlockNumberOrTag>,
     tx_index_in_block: Option<u64>,
+    config_key: Pubkey,
 ) -> Result<RpcEnum, NeonError> {
-    match slot_id {
-        Some(SlotId::Slot(slot)) => {
+    match tag {
+        Some(BlockNumberOrTag::Number(slot)) => {
             if let Some(tracer_db) = tracer_db {
                 Ok(RpcEnum::CallDbClient(
                     CallDbClient::new(tracer_db.clone(), slot, tx_index_in_block).await?,
                 ))
             } else {
                 warn!("tracer_db is not configured, falling back to RpcClient");
-                Ok(RpcEnum::CloneRpcClient(rpc_client_finalized.clone()))
+                Ok(RpcEnum::CloneRpcClient(CloneRpcClient {
+                    rpc: Arc::new(client_builder(CommitmentConfig::finalized())),
+                    max_retries: 10,
+                    key_for_config: config_key,
+                }))
             }
         }
-        Some(SlotId::Pending) => Ok(RpcEnum::CloneRpcClient(rpc_client_processed.clone())),
-        None => Ok(RpcEnum::CloneRpcClient(rpc_client_finalized.clone())),
+        Some(BlockNumberOrTag::Pending | BlockNumberOrTag::Latest) => {
+            Ok(RpcEnum::CloneRpcClient(CloneRpcClient {
+                rpc: Arc::new(client_builder(CommitmentConfig::processed())),
+                max_retries: 10,
+                key_for_config: config_key,
+            }))
+        }
+        Some(BlockNumberOrTag::Safe) => Ok(RpcEnum::CloneRpcClient(CloneRpcClient {
+            rpc: Arc::new(client_builder(CommitmentConfig::confirmed())),
+            max_retries: 10,
+            key_for_config: config_key,
+        })),
+        // Earliest should resolved into a slot number using db by that moment,
+        // if it wasn't done, just ignoring it
+        None | Some(BlockNumberOrTag::Finalized | BlockNumberOrTag::Earliest) => {
+            Ok(RpcEnum::CloneRpcClient(CloneRpcClient {
+                rpc: Arc::new(client_builder(CommitmentConfig::finalized())),
+                max_retries: 10,
+                key_for_config: config_key,
+            }))
+        }
     }
 }
 
@@ -148,11 +170,9 @@ impl NeonApi {
         tracer_db_config: ChDbConfig,
         max_tx_account_cnt: usize,
     ) -> Self {
-        let client_finalized = RpcClient::new(url.clone());
-        let client_processed = RpcClient::new_with_commitment(url, CommitmentConfig::processed());
+        let url_cloned = url.clone();
         Self::new_with_custom_rpc_clients(
-            client_finalized,
-            client_processed,
+            move |commitment| RpcClient::new_with_commitment(url_cloned.clone(), commitment),
             neon_pubkey,
             config_key,
             tracer_db_config,
@@ -161,8 +181,7 @@ impl NeonApi {
     }
 
     pub fn new_with_custom_rpc_clients(
-        client_finalized: RpcClient,
-        client_processed: RpcClient,
+        mut client_builder: impl FnMut(CommitmentConfig) -> RpcClient + Send + 'static,
         neon_pubkey: Pubkey,
         config_key: Pubkey,
         tracer_db_config: ChDbConfig,
@@ -176,16 +195,6 @@ impl NeonApi {
             let local = LocalSet::new();
 
             local.spawn_local(async move {
-                let rpc_finalized = CloneRpcClient {
-                    rpc: Arc::new(client_finalized),
-                    max_retries: 10,
-                    key_for_config: config_key,
-                };
-                let rpc_processed = CloneRpcClient {
-                    rpc: Arc::new(client_processed),
-                    max_retries: 10,
-                    key_for_config: config_key,
-                };
                 let tracer_db = if tracer_db_config.clickhouse_url.is_empty() {
                     warn!("Clickhouse url is empty, tracer db will not be used");
                     None
@@ -193,13 +202,18 @@ impl NeonApi {
                     Some(TracerDb::new(&tracer_db_config))
                 };
 
+                let finalized_client = CloneRpcClient {
+                    rpc: Arc::new(client_builder(CommitmentConfig::finalized())),
+                    max_retries: 10,
+                    key_for_config: config_key,
+                };
                 while let Some(task) = rx.recv().await {
                     let rpc = match build_rpc(
-                        &rpc_finalized,
-                        &rpc_processed,
+                        &mut client_builder,
                         tracer_db.as_ref(),
-                        task.slot_id,
+                        task.tag,
                         task.tx_index_in_block,
+                        config_key,
                     )
                     .await
                     {
@@ -210,7 +224,7 @@ impl NeonApi {
                         }
                     };
                     let ctx = Context {
-                        rpc_client: rpc_finalized.clone(),
+                        rpc_client: finalized_client.clone(),
                         default_rpc: rpc,
                         neon_pubkey,
                     };
@@ -230,13 +244,13 @@ impl NeonApi {
     pub async fn get_balance(
         &self,
         addr: BalanceAddress,
-        slot_id: Option<SlotId>,
+        tag: Option<BlockNumberOrTag>,
     ) -> Result<U256, NeonApiError> {
         let (tx, rx) = oneshot::channel();
         self.channel
             .send(Task::new(
                 TaskCommand::GetBalance { addr, response: tx },
-                slot_id,
+                tag,
                 None,
             ))
             .await
@@ -247,13 +261,13 @@ impl NeonApi {
     pub async fn get_transaction_count(
         &self,
         addr: BalanceAddress,
-        slot_id: Option<SlotId>,
+        tag: Option<BlockNumberOrTag>,
     ) -> Result<u64, NeonApiError> {
         let (tx, rx) = oneshot::channel();
         self.channel
             .send(Task::new(
                 TaskCommand::GetTransactionCount { addr, response: tx },
-                slot_id,
+                tag,
                 None,
             ))
             .await
@@ -280,7 +294,7 @@ impl NeonApi {
     pub async fn estimate_gas(
         &self,
         params: TxParams,
-        slot_id: Option<SlotId>,
+        tag: Option<BlockNumberOrTag>,
     ) -> Result<U256, NeonApiError> {
         let (tx, rx) = oneshot::channel();
         self.channel
@@ -289,7 +303,7 @@ impl NeonApi {
                     tx: params.clone(),
                     response: tx,
                 },
-                slot_id,
+                tag,
                 None,
             ))
             .await
