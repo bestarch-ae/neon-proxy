@@ -1,4 +1,5 @@
-use reth_primitives::{Address, Signature, Transaction, TxKind, TxLegacy, U256};
+use alloy_rlp::Encodable;
+use reth_primitives::{Address, Signature, Transaction, TransactionSigned, TxKind, TxLegacy, U256};
 use thiserror::Error;
 use tracing::debug;
 
@@ -77,9 +78,9 @@ impl GasLimitCalculator {
             s: U256::ZERO,
             odd_y_parity: false,
         };
-        let mut out = Vec::new();
-        eth_tx.encode_with_signature(&signature, &mut out, true);
-        let eth_tx_len = out.len() as u64;
+
+        let eth_tx_len =
+            TransactionSigned::from_transaction_and_signature(eth_tx, signature).length() as u64;
         (eth_tx_len / holder_msg_size + 1) * 5000
     }
 
