@@ -279,10 +279,18 @@ async fn basic() -> anyhow::Result<()> {
     init_neon(&mut env).await?;
     let payer = env.payer.insecure_clone();
 
-    let rpc = BanksRpcMock(env.banks_client.clone());
-    let rpc = RpcClient::new_sender(rpc, Default::default());
-    let neon_api =
-        NeonApi::new_with_custom_rpc_client(rpc, NEON_KEY, payer.pubkey(), Default::default(), 64);
+    let rpc0 = BanksRpcMock(env.banks_client.clone());
+    let rpc0 = RpcClient::new_sender(rpc0, Default::default());
+    let rpc1 = BanksRpcMock(env.banks_client.clone());
+    let rpc1 = RpcClient::new_sender(rpc1, Default::default());
+    let neon_api = NeonApi::new_with_custom_rpc_clients(
+        rpc0,
+        rpc1,
+        NEON_KEY,
+        payer.pubkey(),
+        Default::default(),
+        64,
+    );
 
     let rpc = BanksRpcMock(env.banks_client.clone());
     let solana_api = SolanaApi::with_sender(rpc);

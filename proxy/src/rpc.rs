@@ -37,7 +37,7 @@ use crate::convert::{
 };
 use crate::executor::Executor;
 use crate::mempool;
-use crate::neon_api::NeonApi;
+use crate::neon_api::{NeonApi, SlotId};
 use crate::Error;
 
 #[derive(Clone)]
@@ -127,7 +127,7 @@ impl EthApiImpl {
     }
 
     /// Returns none for latest, and pending
-    async fn get_slot_by_block_id(&self, block_id: BlockId) -> RpcResult<Option<u64>> {
+    async fn get_slot_id_by_block_id(&self, block_id: BlockId) -> RpcResult<Option<SlotId>> {
         match block_id {
             BlockId::Hash(hash) => {
                 use common::solana_sdk::hash::Hash;
@@ -135,10 +135,11 @@ impl EthApiImpl {
                 let block = self
                     .get_block(db::BlockBy::Hash(hash), false, false)
                     .await?;
-                Ok(block.and_then(|block| block.header.number))
+                Ok(block.and_then(|block| block.header.number.map(SlotId::Slot)))
             }
-            BlockId::Number(BlockNumberOrTag::Pending | BlockNumberOrTag::Latest) => Ok(None),
-            BlockId::Number(tag) => Ok(Some(self.find_slot(tag).await?)),
+            BlockId::Number(BlockNumberOrTag::Pending) => Ok(Some(SlotId::Pending)),
+            BlockId::Number(BlockNumberOrTag::Latest) => Ok(None),
+            BlockId::Number(tag) => Ok(Some(SlotId::Slot(self.find_slot(tag).await?))),
         }
     }
 
@@ -376,8 +377,8 @@ impl EthApiServer for EthApiImpl {
         use crate::convert::ToReth;
         use common::evm_loader::types::Address;
 
-        let slot = if let Some(block_number) = block_number {
-            self.get_slot_by_block_id(block_number).await?
+        let slot_id = if let Some(block_number) = block_number {
+            self.get_slot_id_by_block_id(block_number).await?
         } else {
             None
         };
@@ -386,7 +387,7 @@ impl EthApiServer for EthApiImpl {
             address: Address::from(<[u8; 20]>::from(address.0)),
             chain_id: self.chain_id,
         };
-        let balance = self.neon_api.get_balance(balance_address, slot).await?;
+        let balance = self.neon_api.get_balance(balance_address, slot_id).await?;
 
         Ok(balance.to_reth())
     }
@@ -410,7 +411,7 @@ impl EthApiServer for EthApiImpl {
         use common::evm_loader::types::Address;
 
         let slot = if let Some(block_number) = block_number {
-            self.get_slot_by_block_id(block_number).await?
+            self.get_slot_id_by_block_id(block_number).await?
         } else {
             None
         };
@@ -541,15 +542,15 @@ impl EthApiServer for EthApiImpl {
             chain_id: Some(self.chain_id),
         };
 
-        let slot = if let Some(block_number) = block_number {
-            self.get_slot_by_block_id(block_number).await?
+        let slot_id = if let Some(block_number) = block_number {
+            self.get_slot_id_by_block_id(block_number).await?
         } else {
             None
         };
 
         let gas = self
             .neon_api
-            .estimate_gas(tx, slot)
+            .estimate_gas(tx, slot_id)
             .await
             .map(ToReth::to_reth)?;
         Ok(gas)
