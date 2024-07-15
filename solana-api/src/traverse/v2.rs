@@ -1,4 +1,4 @@
-use std::ops::RangeBounds;
+use std::ops::{Bound, RangeBounds};
 use std::time::Duration;
 
 use futures_util::{stream, Stream, StreamExt};
@@ -22,7 +22,8 @@ use crate::solana_api::SolanaApi;
 
 use crate::finalization_tracker::{BlockStatus, FinalizationTracker};
 
-const RECHECK_INTERVAL: Duration = Duration::from_secs(1);
+const ERROR_RECHECK_INTERVAL: Duration = Duration::from_secs(1);
+const REGULAR_RECHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 macro_rules! retry {
     ($val:expr, $message:literal) => {
@@ -30,8 +31,8 @@ macro_rules! retry {
             match $val.await {
                 Ok(val) => break val,
                 Err(err) => {
-                    tracing::warn!(%err, retry_in = ?RECHECK_INTERVAL, $message);
-                    sleep(RECHECK_INTERVAL).await
+                    tracing::warn!(%err, retry_in = ?ERROR_RECHECK_INTERVAL, $message);
+                    sleep(ERROR_RECHECK_INTERVAL).await
                 }
             }
         }
@@ -195,7 +196,7 @@ impl TraverseLedger {
                 }
                 Err(err) => {
                     tracing::warn!(?err, "error fetching block");
-                    sleep(RECHECK_INTERVAL).await;
+                    sleep(ERROR_RECHECK_INTERVAL).await;
                     continue;
                 }
             }
@@ -213,18 +214,44 @@ impl TraverseLedger {
         let poll_interval = self.config.status_poll_interval;
         let target = self.config.target_key;
         let only_success = self.config.only_success;
-        let slots = stream::iter(range.step_by(1))
-            .map(move |slot| {
-                tokio::spawn(Self::process_slot(
-                    slot,
-                    api.clone(),
-                    commitment,
-                    target,
-                    only_success,
-                    is_finalized,
-                ))
-            })
-            .buffered(self.config.max_concurrent_tasks);
+        let start_slot = match range.start_bound() {
+            Bound::Included(slot) => *slot,
+            Bound::Excluded(slot) => slot + 1,
+            Bound::Unbounded => 0,
+        };
+        let end_slot = match range.end_bound() {
+            Bound::Included(slot) => *slot,
+            Bound::Excluded(slot) => slot - 1,
+            Bound::Unbounded => u64::MAX,
+        };
+        let slots = stream::unfold((0, start_slot), move |(mut current_slot, slot)| {
+            let api = api.clone();
+            async move {
+                if slot < end_slot {
+                    while current_slot < slot {
+                        tracing::debug!(%slot, %current_slot, "waiting for slot (calling get_slot)");
+                        let current_slot_timer =
+                            metrics().traverse.get_current_slot_time.start_timer();
+                        current_slot = retry!(api.get_slot(commitment), "getting slot");
+                        drop(current_slot_timer);
+                        tracing::debug!(%current_slot, "got slot");
+                        sleep(REGULAR_RECHECK_INTERVAL).await;
+                    }
+                    let task = tokio::spawn(Self::process_slot(
+                        slot,
+                        api.clone(),
+                        commitment,
+                        target,
+                        only_success,
+                        is_finalized,
+                    ));
+                    Some((task, (current_slot, slot + 1)))
+                } else {
+                    None
+                }
+            }
+        })
+        .buffered(self.config.max_concurrent_tasks);
 
         let api = self.api.clone();
         stream_generator::generate_try_stream(move |mut stream| async move {
@@ -285,20 +312,6 @@ impl TraverseLedger {
         is_finalized: bool,
     ) -> Result<LedgerItem, TraverseError> {
         tracing::debug!(%slot, "getting block");
-        let _process_slot_timer = metrics()
-            .traverse
-            .process_slot_from_range_time
-            .start_timer();
-        let current_slot_timer = metrics().traverse.get_current_slot_time.start_timer();
-        let mut current_slot = retry!(api.get_slot(commitment), "getting slot");
-        drop(current_slot_timer);
-
-        let waiting_for_slot_timer = metrics().traverse.waiting_for_slot_time.start_timer();
-        while slot > current_slot {
-            current_slot = retry!(api.get_slot(commitment), "waiting for slot");
-        }
-        drop(waiting_for_slot_timer);
-
         let get_block_timer = metrics().traverse.get_block_time.start_timer();
         let block = Self::get_block(&api, slot, true).await;
         drop(get_block_timer);

@@ -24,9 +24,7 @@ pub struct TraverseMetrics {
 
     pub transactions_per_block: Histogram,
 
-    pub process_slot_from_range_time: Histogram,
     pub get_current_slot_time: Histogram,
-    pub waiting_for_slot_time: Histogram,
     pub get_block_time: Histogram,
     pub process_transactions_time: Histogram,
     pub decode_ui_transaction_time: Histogram,
@@ -74,19 +72,9 @@ pub fn metrics() -> &'static SolanaApiMetrics {
                 linear_buckets(1., 1., 10).unwrap()
             )
             .unwrap(),
-            process_slot_from_range_time: register_histogram!(
-                "process_slot_from_range_time",
-                "Time to process slot from range",
-            )
-            .unwrap(),
             get_current_slot_time: register_histogram!(
                 "get_current_slot_time",
                 "Get current slot time"
-            )
-            .unwrap(),
-            waiting_for_slot_time: register_histogram!(
-                "waiting_for_slot_time",
-                "Waiting for slot time"
             )
             .unwrap(),
             get_block_time: register_histogram!("get_block_time", "Get block time").unwrap(),
