@@ -461,8 +461,8 @@ impl EthApiServer for EthApiImpl {
         use crate::convert::ToNeon;
         tracing::info!("call {:?}", request);
 
-        let slot = if let Some(block_number) = block_number {
-            self.get_slot_by_block_id(block_number).await?
+        let tag = if let Some(block_number) = block_number {
+            Some(self.get_tag_by_block_id(block_number).await?)
         } else {
             None
         };
@@ -485,7 +485,7 @@ impl EthApiServer for EthApiImpl {
             actual_gas_used: None,
             chain_id: Some(self.chain_id),
         };
-        let data = self.neon_api.call(tx, slot).await?;
+        let data = self.neon_api.call(tx, tag).await?;
         Ok(Bytes::from(data))
     }
 

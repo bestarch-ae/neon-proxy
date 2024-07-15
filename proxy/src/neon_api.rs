@@ -275,7 +275,11 @@ impl NeonApi {
         Ok(rx.await.unwrap()?)
     }
 
-    pub async fn call(&self, params: TxParams, slot: Option<u64>) -> Result<Vec<u8>, NeonApiError> {
+    pub async fn call(
+        &self,
+        params: TxParams,
+        tag: Option<BlockNumberOrTag>,
+    ) -> Result<Vec<u8>, NeonApiError> {
         let (tx, rx) = oneshot::channel();
         self.channel
             .send(Task::new(
@@ -283,7 +287,7 @@ impl NeonApi {
                     tx: params,
                     response: tx,
                 },
-                slot,
+                tag,
                 None,
             ))
             .await
