@@ -12,7 +12,7 @@ use common::evm_loader::account;
 use common::evm_loader::config::ACCOUNT_SEED_VERSION;
 use common::neon_instruction::tag;
 use common::neon_lib::commands::emulate::{EmulateResponse, SolanaAccount as NeonSolanaAccount};
-use common::neon_lib::types::Address;
+use common::neon_lib::types::{Address, TxParams};
 use common::solana_sdk::compute_budget::ComputeBudgetInstruction;
 use common::solana_sdk::hash::Hash;
 use common::solana_sdk::instruction::{AccountMeta, Instruction};
@@ -24,6 +24,9 @@ use common::solana_sdk::system_instruction;
 use common::solana_sdk::system_program;
 use common::solana_sdk::transaction::Transaction;
 use solana_api::solana_api::SolanaApi;
+
+use crate::convert::ToNeon;
+use crate::neon_api::NeonApi;
 
 #[derive(Debug)]
 pub struct OngoingTransaction {
@@ -75,6 +78,10 @@ impl OngoingTransaction {
         &self.blockhash // TODO: None if default?
     }
 
+    pub fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
+
     pub fn sign(&mut self, signers: &[&Keypair], blockhash: Hash) -> anyhow::Result<&Transaction> {
         self.tx
             .try_sign(signers, blockhash)
@@ -102,6 +109,7 @@ pub struct TransactionBuilder {
     program_id: Pubkey,
 
     solana_api: SolanaApi,
+    neon_api: NeonApi,
 
     operator: Keypair,
     operator_address: Address,
@@ -113,23 +121,37 @@ pub struct TransactionBuilder {
 }
 
 impl TransactionBuilder {
-    pub fn new(
+    pub async fn new(
         program_id: Pubkey,
         solana_api: SolanaApi,
+        neon_api: NeonApi,
         operator: Keypair,
         address: Address,
-        treasury_pool_count: u32,
-        treasury_pool_seed: Vec<u8>,
-    ) -> Self {
-        Self {
+    ) -> anyhow::Result<Self> {
+        let config = neon_api.get_config().await?;
+
+        let treasury_pool_count: u32 = config
+            .config
+            .get("NEON_TREASURY_POOL_COUNT")
+            .context("missing NEON_TREASURY_POOL_COUNT in config")?
+            .parse()?;
+        let treasury_pool_seed = config
+            .config
+            .get("NEON_TREASURY_POOL_SEED")
+            .context("missing NEON_TREASURY_POOL_SEED in config")?
+            .as_bytes()
+            .to_vec();
+
+        Ok(Self {
             program_id,
             solana_api,
+            neon_api,
             operator,
             operator_address: address,
             treasury_pool_count,
             treasury_pool_seed,
             holder_counter: AtomicU8::new(0),
-        }
+        })
     }
 
     pub fn keypair(&self) -> &Keypair {
@@ -164,12 +186,7 @@ impl TransactionBuilder {
         Ok((treasury_pool_idx, treasury_pool_address))
     }
 
-    pub async fn start_execution(
-        &self,
-        tx: TxEnvelope,
-        emulate: EmulateResponse,
-        chain_id: u64,
-    ) -> anyhow::Result<OngoingTransaction> {
+    pub async fn start_execution(&self, tx: TxEnvelope) -> anyhow::Result<OngoingTransaction> {
         // 1. holder
         // 2. payer
         // 3. treasury-pool-address,
@@ -178,6 +195,10 @@ impl TransactionBuilder {
         // +6: NeonProg.ID
         // +7: CbProg.ID
         const BASE_ACCOUNT_COUNT: usize = 7;
+
+        let request = get_neon_emulate_request(&tx)?;
+        let chain_id = request.chain_id.context("unknown chain id")?; // FIXME
+        let emulate = self.neon_api.emulate(request).await?;
 
         if tx.length() < PACKET_DATA_SIZE - BASE_ACCOUNT_COUNT * mem::size_of::<Pubkey>() {
             self.build_simple(tx, emulate, chain_id)
@@ -456,4 +477,47 @@ fn with_budget(ix: Instruction) -> [Instruction; 3] {
     let heap = ComputeBudgetInstruction::request_heap_frame(MAX_HEAP_SIZE);
 
     [cu, heap, ix]
+}
+
+fn get_neon_emulate_request(tx: &TxEnvelope) -> anyhow::Result<TxParams> {
+    let from = tx
+        .recover_signer()
+        .context("could not recover signer")?
+        .to_neon();
+    let request = match &tx {
+        TxEnvelope::Legacy(tx) => TxParams {
+            nonce: Some(tx.tx().nonce),
+            from,
+            to: tx.tx().to.to().copied().map(ToNeon::to_neon),
+            data: Some(tx.tx().input.0.to_vec()),
+            value: Some(tx.tx().value.to_neon()),
+            gas_limit: Some(tx.tx().gas_limit.into()),
+            actual_gas_used: None,
+            gas_price: Some(tx.tx().gas_price.into()),
+            access_list: None,
+            chain_id: tx.tx().chain_id,
+        },
+        TxEnvelope::Eip2930(tx) => TxParams {
+            nonce: Some(tx.tx().nonce),
+            from,
+            to: tx.tx().to.to().copied().map(ToNeon::to_neon),
+            data: Some(tx.tx().input.0.to_vec()),
+            value: Some(tx.tx().value.to_neon()),
+            gas_limit: Some(tx.tx().gas_limit.into()),
+            actual_gas_used: None,
+            gas_price: Some(tx.tx().gas_price.into()),
+            access_list: Some(
+                tx.tx()
+                    .access_list
+                    .iter()
+                    .cloned()
+                    .map(ToNeon::to_neon)
+                    .collect(),
+            ),
+            chain_id: Some(tx.tx().chain_id),
+        },
+        tx => anyhow::bail!("unsupported transaction: {:?}", tx.tx_type()),
+    };
+
+    Ok(request)
 }
