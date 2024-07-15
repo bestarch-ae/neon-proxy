@@ -23,7 +23,7 @@ use crate::solana_api::SolanaApi;
 use crate::finalization_tracker::{BlockStatus, FinalizationTracker};
 
 const ERROR_RECHECK_INTERVAL: Duration = Duration::from_secs(1);
-const REGULAR_RECHECK_INTERVAL: Duration = Duration::from_secs(1);
+const REGULAR_RECHECK_INTERVAL: Duration = Duration::from_millis(400);
 
 macro_rules! retry {
     ($val:expr, $message:literal) => {
@@ -234,7 +234,6 @@ impl TraverseLedger {
                             metrics().traverse.get_current_slot_time.start_timer();
                         current_slot = retry!(api.get_slot(commitment), "getting slot");
                         drop(current_slot_timer);
-                        tracing::debug!(%current_slot, "got slot");
                         sleep(REGULAR_RECHECK_INTERVAL).await;
                     }
                     let task = tokio::spawn(Self::process_slot(
