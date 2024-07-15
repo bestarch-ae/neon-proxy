@@ -105,6 +105,7 @@ services:
       -u http://solana:8899
       --pg-url postgres://neon-proxy:neon-proxy-pass@postgres:5432/neon-db
       --metrics-addr 0.0.0.0:8317
+      --max_traverse_tasks ${MAX_TRAVERSE_TASKS}
     environment:
       - RUST_LOG=info,indexer=debug,solana_api=debug,db=debug,parse=debug
     ports:
