@@ -33,7 +33,7 @@ enum TxStage {
     Operational,
     HolderFill {
         info: HolderInfo,
-        tx_data: TxData,
+        tx: TxEnvelope,
     },
     Execution {
         tx_data: TxData,
@@ -51,8 +51,8 @@ impl TxStage {
         }
     }
 
-    fn holder_fill(info: HolderInfo, tx_data: TxData) -> Self {
-        Self::HolderFill { info, tx_data }
+    fn holder_fill(info: HolderInfo, tx: TxEnvelope) -> Self {
+        Self::HolderFill { info, tx }
     }
 
     fn execute_data(tx_data: TxData) -> Self {
@@ -113,9 +113,11 @@ impl OngoingTransaction {
 
     pub fn eth_tx(&self) -> Option<&TxEnvelope> {
         match &self.stage {
-            TxStage::HolderFill { tx_data, .. } | TxStage::Execution { tx_data, .. } => {
-                Some(&tx_data.envelope)
-            }
+            TxStage::HolderFill { tx: envelope, .. }
+            | TxStage::Execution {
+                tx_data: TxData { envelope, .. },
+                ..
+            } => Some(envelope),
             TxStage::Operational => None,
         }
     }
@@ -308,19 +310,23 @@ impl TransactionBuilder {
         println!("emulate: {emulate:#?}");
 
         if tx.length() < PACKET_DATA_SIZE - BASE_ACCOUNT_COUNT * mem::size_of::<Pubkey>() {
-            self.start_data_execution(tx, emulate, chain_id)
+            self.start_data_execution(tx, chain_id).await
         } else {
-            self.start_holder_execution(tx, emulate, chain_id).await
+            self.start_holder_execution(tx, chain_id).await
         }
     }
 
-    pub fn next_step(&self, tx: OngoingTransaction) -> anyhow::Result<Option<OngoingTransaction>> {
+    pub async fn next_step(
+        &self,
+        tx: OngoingTransaction,
+    ) -> anyhow::Result<Option<OngoingTransaction>> {
         match tx.stage {
-            TxStage::HolderFill { info, tx_data } if info.is_empty() => self
-                .execute_from_holder(info, tx_data, tx.chain_id)
+            TxStage::HolderFill { info, tx: envelope } if info.is_empty() => self
+                .execute_from_holder(info, envelope, tx.chain_id)
+                .await
                 .map(Some),
-            TxStage::HolderFill { info, tx_data } => {
-                Ok(Some(self.fill_holder(info, tx_data, tx.chain_id)))
+            TxStage::HolderFill { info, tx: envelope } => {
+                Ok(Some(self.fill_holder(info, envelope, tx.chain_id)))
             }
             TxStage::Execution {
                 tx_data,
@@ -335,12 +341,14 @@ impl TransactionBuilder {
         }
     }
 
-    fn start_data_execution(
+    async fn start_data_execution(
         &self,
         tx: TxEnvelope,
-        emulate: EmulateResponse,
         chain_id: u64,
     ) -> anyhow::Result<OngoingTransaction> {
+        let request = get_neon_emulate_request(&tx)?;
+        let emulate = self.neon_api.emulate(request).await?;
+
         let (accounts, mut data) = self.execute_simple_base(
             tag::TX_EXEC_FROM_DATA,
             tx.tx_hash(),
@@ -369,39 +377,35 @@ impl TransactionBuilder {
     async fn start_holder_execution(
         &self,
         tx: TxEnvelope,
-        emulate: EmulateResponse,
         chain_id: u64,
     ) -> anyhow::Result<OngoingTransaction> {
         let holder =
             self.new_holder_info(self.holder_counter.fetch_add(1, Ordering::Relaxed), &tx)?;
         let ixs = self.create_holder(&holder).await?;
 
-        Ok(
-            TxStage::holder_fill(holder, TxData::new(tx, emulate)).to_ongoing(
-                &ixs,
-                &self.pubkey(),
-                chain_id,
-            ),
-        )
+        Ok(TxStage::holder_fill(holder, tx).to_ongoing(&ixs, &self.pubkey(), chain_id))
     }
 
-    fn fill_holder(&self, info: HolderInfo, tx_data: TxData, chain_id: u64) -> OngoingTransaction {
+    fn fill_holder(&self, info: HolderInfo, tx: TxEnvelope, chain_id: u64) -> OngoingTransaction {
         let mut info = info;
         let ix = self.write_next_holder_chunk(&mut info);
-        TxStage::holder_fill(info, tx_data).to_ongoing(&[ix], &self.pubkey(), chain_id)
+        TxStage::holder_fill(info, tx).to_ongoing(&[ix], &self.pubkey(), chain_id)
     }
 
-    fn execute_from_holder(
+    async fn execute_from_holder(
         &self,
         holder: HolderInfo,
-        tx_data: TxData,
+        tx: TxEnvelope,
         chain_id: u64,
     ) -> anyhow::Result<OngoingTransaction> {
+        let request = get_neon_emulate_request(&tx)?;
+        let emulate = self.neon_api.emulate(request).await?;
+
         let (accounts, data) = self.execute_simple_base(
             tag::TX_EXEC_FROM_ACCOUNT,
             &holder.hash,
             chain_id,
-            &tx_data.emulate.solana_accounts,
+            &emulate.solana_accounts,
             Some(holder.pubkey),
             None,
         )?;
@@ -412,6 +416,7 @@ impl TransactionBuilder {
             data,
         };
 
+        let tx_data = TxData::new(tx, emulate);
         Ok(TxStage::execute_holder(holder.pubkey, tx_data).to_ongoing(
             &with_budget(ix),
             &self.pubkey(),
