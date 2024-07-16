@@ -218,7 +218,7 @@ impl Executor {
 
         // TODO: follow up transactions
         let hash = tx.eth_tx().map(|tx| tx.signature_hash());
-        match self.builder.next_step(tx) {
+        match self.builder.next_step(tx).await {
             Err(err) => {
                 tracing::error!(?hash, %signature, %err, "failed executing next transaction step")
             }

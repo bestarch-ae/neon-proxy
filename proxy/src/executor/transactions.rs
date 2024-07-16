@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use alloy_consensus::TxEnvelope;
 use alloy_eips::eip2718::Encodable2718;
 use alloy_rlp::Encodable;
-use anyhow::{bail, Context};
+use anyhow::Context;
 use reth_primitives::B256;
 
 use common::ethnum::U256;
@@ -35,15 +35,20 @@ enum TxStage {
         info: HolderInfo,
         tx: TxEnvelope,
     },
-    Execution {
+    IterativeExecution {
+        tx_data: TxData,
+        holder: Pubkey,
+        iter_info: IterativeInfo,
+        from_data: bool,
+    },
+    SingleExecution {
         tx_data: TxData,
         holder: Option<Pubkey>,
-        iterations: Option<IterativeInfo>,
     },
 }
 
 impl TxStage {
-    fn to_ongoing(self, ixs: &[Instruction], payer: &Pubkey, chain_id: u64) -> OngoingTransaction {
+    fn ongoing(self, ixs: &[Instruction], payer: &Pubkey, chain_id: u64) -> OngoingTransaction {
         OngoingTransaction {
             stage: self,
             tx: Transaction::new_with_payer(ixs, Some(payer)),
@@ -56,33 +61,34 @@ impl TxStage {
     }
 
     fn execute_data(tx_data: TxData) -> Self {
-        Self::Execution {
+        Self::SingleExecution {
             tx_data,
             holder: None,
-            iterations: None,
         }
     }
 
     fn execute_holder(holder: Pubkey, tx_data: TxData) -> Self {
-        Self::Execution {
+        Self::SingleExecution {
             tx_data,
             holder: Some(holder),
-            iterations: None,
         }
     }
-    fn step_data(tx_data: TxData, iter_info: IterativeInfo) -> Self {
-        Self::Execution {
+
+    fn step_data(holder: Pubkey, tx_data: TxData, iter_info: IterativeInfo) -> Self {
+        Self::IterativeExecution {
             tx_data,
-            holder: None,
-            iterations: Some(iter_info),
+            holder,
+            iter_info,
+            from_data: true,
         }
     }
 
     fn step_holder(holder: Pubkey, tx_data: TxData, iter_info: IterativeInfo) -> Self {
-        Self::Execution {
+        Self::IterativeExecution {
             tx_data,
-            holder: Some(holder),
-            iterations: Some(iter_info),
+            holder,
+            iter_info,
+            from_data: false,
         }
     }
 }
@@ -108,13 +114,17 @@ impl TxData {
 
 impl OngoingTransaction {
     fn new_operational(ixs: &[Instruction], payer: &Pubkey, chain_id: u64) -> Self {
-        TxStage::Operational.to_ongoing(ixs, payer, chain_id)
+        TxStage::Operational.ongoing(ixs, payer, chain_id)
     }
 
     pub fn eth_tx(&self) -> Option<&TxEnvelope> {
         match &self.stage {
             TxStage::HolderFill { tx: envelope, .. }
-            | TxStage::Execution {
+            | TxStage::IterativeExecution {
+                tx_data: TxData { envelope, .. },
+                ..
+            }
+            | TxStage::SingleExecution {
                 tx_data: TxData { envelope, .. },
                 ..
             } => Some(envelope),
@@ -142,6 +152,7 @@ impl OngoingTransaction {
 #[derive(Clone, Debug)]
 struct IterativeInfo {
     step_count: u32,
+    #[allow(dead_code)]
     iterations: u32,
     unique_idx: u32,
 }
@@ -155,14 +166,14 @@ impl IterativeInfo {
         }
     }
 
-    fn step_count(&self) -> u32 {
-        self.step_count
-    }
-
     fn next_idx(&mut self) -> u32 {
         let out = self.unique_idx;
         self.unique_idx += 1;
         out
+    }
+
+    fn is_finished(&self) -> bool {
+        self.unique_idx >= self.iterations
     }
 }
 
@@ -282,15 +293,20 @@ impl TransactionBuilder {
     }
 
     fn needs_iterative_execution(&self, emulate: &EmulateResponse) -> bool {
-        self.calculate_resize_iter_cnt(&emulate) > 0
+        self.calculate_resize_iter_cnt(emulate) > 0 || emulate.steps_executed >= 40
     }
 
     fn calculate_iterations(&self, emulate: &EmulateResponse) -> IterativeInfo {
         // TODO: non default
         let steps_per_iteration = self.evm_steps_min;
         let iterations =
-            self.calculate_exec_iter_cnt(&emulate) + self.calculate_wrap_iter_cnt(&emulate);
+            self.calculate_exec_iter_cnt(emulate) + self.calculate_wrap_iter_cnt(emulate);
         IterativeInfo::new(steps_per_iteration as u32, iterations as u32)
+    }
+
+    fn maybe_iter_info(&self, emulate: &EmulateResponse) -> Option<IterativeInfo> {
+        self.needs_iterative_execution(emulate)
+            .then(|| self.calculate_iterations(emulate))
     }
 
     pub async fn start_execution(&self, tx: TxEnvelope) -> anyhow::Result<OngoingTransaction> {
@@ -328,16 +344,14 @@ impl TransactionBuilder {
             TxStage::HolderFill { info, tx: envelope } => {
                 Ok(Some(self.fill_holder(info, envelope, tx.chain_id)))
             }
-            TxStage::Execution {
+            TxStage::IterativeExecution {
                 tx_data,
                 holder,
-                iterations: Some(iter_info),
-            } => Ok(None), // TODO
+                iter_info,
+                from_data,
+            } => self.step(iter_info, tx_data, holder, from_data, tx.chain_id),
             // Single iteration stuff
-            TxStage::Execution {
-                iterations: None, ..
-            }
-            | TxStage::Operational => Ok(None),
+            TxStage::SingleExecution { .. } | TxStage::Operational => Ok(None),
         }
     }
 
@@ -348,18 +362,29 @@ impl TransactionBuilder {
     ) -> anyhow::Result<OngoingTransaction> {
         let request = get_neon_emulate_request(&tx)?;
         let emulate = self.neon_api.emulate(request).await?;
+        let tx_data = TxData::new(tx, emulate);
+        if let Some(iter_info) = self.maybe_iter_info(&tx_data.emulate) {
+            let holder = self.new_holder_info(None)?;
+            let ixs = self.create_holder(&holder).await?;
+            let tx = TxStage::step_data(holder.pubkey, tx_data, iter_info).ongoing(
+                &ixs,
+                &self.pubkey(),
+                chain_id,
+            );
+            return Ok(tx);
+        }
 
-        let (accounts, mut data) = self.execute_simple_base(
+        let (accounts, mut data) = self.execute_base(
             tag::TX_EXEC_FROM_DATA,
-            tx.tx_hash(),
+            tx_data.envelope.tx_hash(),
             chain_id,
-            &emulate.solana_accounts.clone(), // TODO: Do we really need them later?
+            &tx_data.emulate.solana_accounts, // TODO: Do we really need them later?
             None,
             None,
         )?;
 
-        data.reserve(tx.encode_2718_len());
-        tx.encode_2718(&mut &mut data);
+        data.reserve(tx_data.envelope.encode_2718_len());
+        tx_data.envelope.encode_2718(&mut &mut data);
 
         let ix = Instruction {
             program_id: self.program_id,
@@ -367,11 +392,7 @@ impl TransactionBuilder {
             data,
         };
 
-        Ok(TxStage::execute_data(TxData::new(tx, emulate)).to_ongoing(
-            &with_budget(ix),
-            &self.pubkey(),
-            chain_id,
-        ))
+        Ok(TxStage::execute_data(tx_data).ongoing(&with_budget(ix), &self.pubkey(), chain_id))
     }
 
     async fn start_holder_execution(
@@ -379,17 +400,16 @@ impl TransactionBuilder {
         tx: TxEnvelope,
         chain_id: u64,
     ) -> anyhow::Result<OngoingTransaction> {
-        let holder =
-            self.new_holder_info(self.holder_counter.fetch_add(1, Ordering::Relaxed), &tx)?;
+        let holder = self.new_holder_info(Some(&tx))?;
         let ixs = self.create_holder(&holder).await?;
 
-        Ok(TxStage::holder_fill(holder, tx).to_ongoing(&ixs, &self.pubkey(), chain_id))
+        Ok(TxStage::holder_fill(holder, tx).ongoing(&ixs, &self.pubkey(), chain_id))
     }
 
     fn fill_holder(&self, info: HolderInfo, tx: TxEnvelope, chain_id: u64) -> OngoingTransaction {
         let mut info = info;
         let ix = self.write_next_holder_chunk(&mut info);
-        TxStage::holder_fill(info, tx).to_ongoing(&[ix], &self.pubkey(), chain_id)
+        TxStage::holder_fill(info, tx).ongoing(&[ix], &self.pubkey(), chain_id)
     }
 
     async fn execute_from_holder(
@@ -400,14 +420,20 @@ impl TransactionBuilder {
     ) -> anyhow::Result<OngoingTransaction> {
         let request = get_neon_emulate_request(&tx)?;
         let emulate = self.neon_api.emulate(request).await?;
+        let mut iter_info = self.maybe_iter_info(&emulate);
+        let tag = if iter_info.is_some() {
+            tag::TX_STEP_FROM_ACCOUNT
+        } else {
+            tag::TX_EXEC_FROM_ACCOUNT
+        };
 
-        let (accounts, data) = self.execute_simple_base(
-            tag::TX_EXEC_FROM_ACCOUNT,
+        let (accounts, data) = self.execute_base(
+            tag,
             &holder.hash,
             chain_id,
             &emulate.solana_accounts,
             Some(holder.pubkey),
-            None,
+            iter_info.as_mut(),
         )?;
 
         let ix = Instruction {
@@ -417,14 +443,62 @@ impl TransactionBuilder {
         };
 
         let tx_data = TxData::new(tx, emulate);
-        Ok(TxStage::execute_holder(holder.pubkey, tx_data).to_ongoing(
+        let stage = match iter_info {
+            Some(iter_info) => TxStage::step_holder(holder.pubkey, tx_data, iter_info),
+            None => TxStage::execute_holder(holder.pubkey, tx_data),
+        };
+        Ok(stage.ongoing(&with_budget(ix), &self.pubkey(), chain_id))
+    }
+
+    fn step(
+        &self,
+        iter_info: IterativeInfo,
+        tx_data: TxData,
+        holder: Pubkey,
+        from_data: bool,
+        chain_id: u64,
+    ) -> anyhow::Result<Option<OngoingTransaction>> {
+        if iter_info.is_finished() {
+            return Ok(None);
+        }
+        let mut iter_info = iter_info;
+        let tag = if from_data {
+            tag::TX_STEP_FROM_DATA
+        } else {
+            tag::TX_STEP_FROM_ACCOUNT
+        };
+
+        let (accounts, mut data) = self.execute_base(
+            tag,
+            tx_data.envelope.tx_hash(),
+            chain_id,
+            &tx_data.emulate.solana_accounts,
+            Some(holder),
+            Some(&mut iter_info),
+        )?;
+
+        if from_data {
+            data.reserve(tx_data.envelope.encode_2718_len());
+            tx_data.envelope.encode_2718(&mut &mut data);
+        }
+        let ix = Instruction {
+            program_id: self.program_id,
+            accounts,
+            data,
+        };
+
+        let stage = match from_data {
+            true => TxStage::step_data(holder, tx_data, iter_info),
+            false => TxStage::step_holder(holder, tx_data, iter_info),
+        };
+        Ok(Some(stage.ongoing(
             &with_budget(ix),
             &self.pubkey(),
             chain_id,
-        ))
+        )))
     }
 
-    fn execute_simple_base(
+    fn execute_base(
         &self,
         tag: u8,
         hash: &B256,
@@ -497,13 +571,18 @@ impl TransactionBuilder {
         OngoingTransaction::new_operational(&[ix], &self.operator.pubkey(), chain_id)
     }
 
-    fn new_holder_info(&self, idx: u8, tx: &TxEnvelope) -> anyhow::Result<HolderInfo> {
+    fn new_holder_info(&self, tx: Option<&TxEnvelope>) -> anyhow::Result<HolderInfo> {
+        let idx = self.holder_counter.fetch_add(1, Ordering::Relaxed);
         let seed = format!("holder{idx}");
         let pubkey = Pubkey::create_with_seed(&self.pubkey(), &seed, &self.program_id)
             .context("cannot create holder address")?;
-        let hash = *tx.tx_hash();
-        let mut data = Vec::with_capacity(tx.encode_2718_len());
-        tx.encode_2718(&mut &mut data);
+        let (hash, data) = if let Some(tx) = tx {
+            let mut data = Vec::with_capacity(tx.encode_2718_len());
+            tx.encode_2718(&mut &mut data);
+            (*tx.tx_hash(), data)
+        } else {
+            (Default::default(), Vec::new())
+        };
 
         Ok(HolderInfo {
             seed,
@@ -515,33 +594,43 @@ impl TransactionBuilder {
     }
 
     async fn create_holder(&self, holder: &HolderInfo) -> anyhow::Result<[Instruction; 2]> {
+        self.create_holder_inner(&holder.seed, holder.pubkey).await
+    }
+
+    async fn create_holder_inner(
+        &self,
+        seed: &str,
+        key: Pubkey,
+    ) -> anyhow::Result<[Instruction; 2]> {
+        const HOLDER_DATA_LEN: usize = 256 * 1024; // neon_proxy.py default
         const HOLDER_META_LEN: usize =
             account::ACCOUNT_PREFIX_LEN + mem::size_of::<account::HolderHeader>();
-        let holder_size = HOLDER_META_LEN + holder.data.len();
+        const HOLDER_SIZE: usize = HOLDER_META_LEN + HOLDER_DATA_LEN;
+
         let sp_ix = system_instruction::create_account_with_seed(
             &self.pubkey(),
-            &holder.pubkey,
+            &key,
             &self.pubkey(),
-            &holder.seed,
+            seed,
             self.solana_api
-                .minimum_rent_for_exemption(holder_size)
+                .minimum_rent_for_exemption(HOLDER_SIZE)
                 .await?,
-            holder_size as u64,
+            HOLDER_SIZE as u64,
             &self.program_id,
         );
 
         const TAG_IDX: usize = 0;
         const SEED_LEN_IDX: usize = TAG_IDX + mem::size_of::<u8>();
         const SEED_IDX: usize = SEED_LEN_IDX + mem::size_of::<u64>();
-        let seed_len = holder.seed.as_bytes().len();
+        let seed_len = seed.as_bytes().len();
 
         let mut data = vec![0; SEED_IDX + seed_len];
         data[TAG_IDX] = tag::HOLDER_CREATE;
         data[SEED_LEN_IDX..SEED_IDX].copy_from_slice(&(seed_len as u64).to_le_bytes());
-        data[SEED_IDX..].copy_from_slice(holder.seed.as_bytes());
+        data[SEED_IDX..].copy_from_slice(seed.as_bytes());
 
         let accounts = vec![
-            AccountMeta::new(holder.pubkey, false),
+            AccountMeta::new(key, false),
             AccountMeta::new_readonly(self.pubkey(), true),
         ];
 
