@@ -436,7 +436,7 @@ pub fn parse(
                 .requires_arg()
                 .then_some(rest)
                 .flatten()
-                .ok_or(Error::InvalidLog)?;
+                .ok_or(Error::InvalidLog);
             match mnemonic {
                 Mnemonic::Reset => {
                     tracing::warn!("reset mnemonic not supported");
@@ -446,25 +446,25 @@ pub fn parse(
                         warn!("HASH already exists");
                         continue;
                     }
-                    neon_tx_sig = Some(Mnemonic::decode_hash(rest)?);
+                    neon_tx_sig = Some(Mnemonic::decode_hash(rest?)?);
                 }
                 Mnemonic::Return => {
                     if neon_tx_return.is_some() {
                         warn!("RETURN already exists");
                         continue;
                     }
-                    neon_tx_return = Some(Mnemonic::decode_tx_return(neon_tx_ix.as_ref(), rest)?);
+                    neon_tx_return = Some(Mnemonic::decode_tx_return(neon_tx_ix.as_ref(), rest?)?);
                 }
                 Mnemonic::Log(n) => {
-                    let event = Mnemonic::decode_tx_event(n, rest)?;
+                    let event = Mnemonic::decode_tx_event(n, rest?)?;
                     event_list.push(event);
                 }
                 Mnemonic::Enter => {
-                    let event = Mnemonic::decode_tx_enter(rest)?;
+                    let event = Mnemonic::decode_tx_enter(rest?)?;
                     event_list.push(event);
                 }
                 Mnemonic::Exit => {
-                    let event = Mnemonic::decode_tx_exit(rest)?;
+                    let event = Mnemonic::decode_tx_exit(rest?)?;
                     event_list.push(event);
                 }
                 Mnemonic::Gas => {
@@ -472,14 +472,14 @@ pub fn parse(
                         warn!("GAS already exists");
                         continue;
                     }
-                    neon_tx_ix = Some(Mnemonic::decode_tx_gas(rest)?);
+                    neon_tx_ix = Some(Mnemonic::decode_tx_gas(rest?)?);
                 }
                 Mnemonic::Miner => {
                     // TODO
-                    Mnemonic::decode_miner(rest);
+                    Mnemonic::decode_miner(rest?);
                 }
                 Mnemonic::Steps => {
-                    neon_tx_steps = Some(Mnemonic::decode_steps(rest)?);
+                    neon_tx_steps = Some(Mnemonic::decode_steps(rest?)?);
                 }
             }
         }
