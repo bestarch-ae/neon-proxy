@@ -90,6 +90,34 @@ impl OngoingTransaction {
     }
 }
 
+// TODO: move to submodule to hide fields`
+#[derive(Clone)]
+struct IterativeInfo {
+    step_count: u32,
+    iterations: u32,
+    unique_idx: u32,
+}
+
+impl IterativeInfo {
+    fn new(step_count: u32, iterations: u32) -> Self {
+        Self {
+            step_count,
+            iterations,
+            unique_idx: 0,
+        }
+    }
+
+    fn step_count(&self) -> u32 {
+        self.step_count
+    }
+
+    fn next_idx(&mut self) -> u32 {
+        let out = self.unique_idx;
+        self.unique_idx += 1;
+        out
+    }
+}
+
 #[derive(Debug)]
 struct HolderInfo {
     seed: String,
@@ -116,6 +144,7 @@ pub struct TransactionBuilder {
 
     treasury_pool_count: u32,
     treasury_pool_seed: Vec<u8>,
+    evm_steps_min: u64,
 
     holder_counter: AtomicU8,
 }
@@ -141,6 +170,11 @@ impl TransactionBuilder {
             .context("missing NEON_TREASURY_POOL_SEED in config")?
             .as_bytes()
             .to_vec();
+        let evm_steps_min: u64 = config
+            .config
+            .get("NEON_EVM_STEPS_MIN")
+            .context("missing NEON_EVM_STEPS_MIN in config")?
+            .parse()?;
 
         Ok(Self {
             program_id,
@@ -150,6 +184,7 @@ impl TransactionBuilder {
             operator_address: address,
             treasury_pool_count,
             treasury_pool_seed,
+            evm_steps_min,
             holder_counter: AtomicU8::new(0),
         })
     }
@@ -186,6 +221,30 @@ impl TransactionBuilder {
         Ok((treasury_pool_idx, treasury_pool_address))
     }
 
+    fn calculate_resize_iter_cnt(&self, emulate: &EmulateResponse) -> u64 {
+        self.calculate_wrap_iter_cnt(emulate).saturating_sub(2)
+    }
+
+    fn calculate_exec_iter_cnt(&self, emulate: &EmulateResponse) -> u64 {
+        (emulate.steps_executed + self.evm_steps_min).saturating_sub(1) / self.evm_steps_min
+    }
+
+    fn calculate_wrap_iter_cnt(&self, emulate: &EmulateResponse) -> u64 {
+        emulate.iterations - self.calculate_exec_iter_cnt(emulate)
+    }
+
+    fn needs_iterative_execution(&self, emulate: &EmulateResponse) -> bool {
+        self.calculate_resize_iter_cnt(&emulate) > 0
+    }
+
+    fn calculate_iterations(&self, emulate: &EmulateResponse) -> IterativeInfo {
+        // TODO: non default
+        let steps_per_iteration = self.evm_steps_min;
+        let iterations =
+            self.calculate_exec_iter_cnt(&emulate) + self.calculate_wrap_iter_cnt(&emulate);
+        IterativeInfo::new(steps_per_iteration as u32, iterations as u32)
+    }
+
     pub async fn start_execution(&self, tx: TxEnvelope) -> anyhow::Result<OngoingTransaction> {
         // 1. holder
         // 2. payer
@@ -200,8 +259,10 @@ impl TransactionBuilder {
         let chain_id = request.chain_id.context("unknown chain id")?; // FIXME
         let emulate = self.neon_api.emulate(request).await?;
 
+        println!("emulate: {emulate:#?}");
+
         if tx.length() < PACKET_DATA_SIZE - BASE_ACCOUNT_COUNT * mem::size_of::<Pubkey>() {
-            self.build_simple(tx, emulate, chain_id)
+            self.start_data_execution(tx, emulate, chain_id)
         } else {
             self.start_holder_execution(tx, emulate, chain_id).await
         }
@@ -232,7 +293,7 @@ impl TransactionBuilder {
         }
     }
 
-    fn build_simple(
+    fn start_data_execution(
         &self,
         tx: TxEnvelope,
         emulate: EmulateResponse,
@@ -243,6 +304,7 @@ impl TransactionBuilder {
             tx.tx_hash(),
             chain_id,
             emulate.solana_accounts.clone(), // TODO: Do we really need them later?
+            None,
             None,
         )?;
 
@@ -274,6 +336,7 @@ impl TransactionBuilder {
             chain_id,
             emulate.solana_accounts,
             Some(holder.pubkey),
+            None,
         )?;
 
         let ix = Instruction {
@@ -297,6 +360,7 @@ impl TransactionBuilder {
         chain_id: u64,
         collected_accounts: Vec<NeonSolanaAccount>,
         holder: Option<Pubkey>,
+        iter_info: Option<&mut IterativeInfo>,
     ) -> anyhow::Result<(Vec<AccountMeta>, Vec<u8>)> {
         let (treasury_pool_idx, treasury_pool_address) = self.treasury_pool(hash)?;
         let operator_balance = self.operator_balance(chain_id);
@@ -319,11 +383,17 @@ impl TransactionBuilder {
 
         const TAG_IDX: usize = 0;
         const TREASURY_IDX_IDX: usize = TAG_IDX + mem::size_of::<u8>();
-        const DATA_IDX: usize = TREASURY_IDX_IDX + mem::size_of::<u32>();
-        let mut data = vec![0; DATA_IDX];
+        const STEP_COUNT_IDX: usize = TREASURY_IDX_IDX + mem::size_of::<u32>();
+        const UNIQ_IDX_IDX: usize = STEP_COUNT_IDX + mem::size_of::<u32>();
+        const END_IDX: usize = UNIQ_IDX_IDX + mem::size_of::<u32>();
+        let mut data = vec![0; iter_info.as_ref().map_or(STEP_COUNT_IDX, |_| END_IDX)];
 
         data[TAG_IDX] = tag;
-        data[TREASURY_IDX_IDX..DATA_IDX].copy_from_slice(&treasury_pool_idx.to_le_bytes());
+        data[TREASURY_IDX_IDX..STEP_COUNT_IDX].copy_from_slice(&treasury_pool_idx.to_le_bytes());
+        if let Some(iter_info) = iter_info {
+            data[STEP_COUNT_IDX..UNIQ_IDX_IDX].copy_from_slice(&iter_info.step_count.to_le_bytes());
+            data[UNIQ_IDX_IDX..END_IDX].copy_from_slice(&iter_info.next_idx().to_le_bytes());
+        }
 
         Ok((accounts, data))
     }
