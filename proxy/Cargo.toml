@@ -47,6 +47,7 @@ bincode = "1.3.3"
 alloy-signer = { git = "https://github.com/alloy-rs/alloy", rev = "dd7a999" }
 alloy-signer-wallet= { git = "https://github.com/alloy-rs/alloy", rev = "dd7a999" }
 alloy-network = { git = "https://github.com/alloy-rs/alloy", rev = "dd7a999" }
+alloy-sol-types = { version = "0.7.7", features = ["json"] }
 base64 = "0.21"
 bs58 = "0.5.1"
 hex = "0.4"
