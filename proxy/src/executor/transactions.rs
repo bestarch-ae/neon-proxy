@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use alloy_consensus::TxEnvelope;
 use alloy_eips::eip2718::Encodable2718;
 use alloy_rlp::Encodable;
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use reth_primitives::B256;
 
 use common::ethnum::U256;
@@ -15,6 +15,7 @@ use common::neon_lib::commands::emulate::{EmulateResponse, SolanaAccount as Neon
 use common::neon_lib::types::{Address, TxParams};
 use common::solana_sdk::compute_budget::ComputeBudgetInstruction;
 use common::solana_sdk::hash::Hash;
+use common::solana_sdk::instruction::InstructionError;
 use common::solana_sdk::instruction::{AccountMeta, Instruction};
 use common::solana_sdk::packet::PACKET_DATA_SIZE;
 use common::solana_sdk::pubkey::Pubkey;
@@ -23,10 +24,16 @@ use common::solana_sdk::signer::Signer;
 use common::solana_sdk::system_instruction;
 use common::solana_sdk::system_program;
 use common::solana_sdk::transaction::Transaction;
+use common::solana_sdk::transaction::TransactionError;
 use solana_api::solana_api::SolanaApi;
+use solana_client::rpc_client::SerializableTransaction;
 
 use crate::convert::ToNeon;
-use crate::neon_api::NeonApi;
+use crate::neon_api::{NeonApi, SimulateConfig};
+
+// Taken from neon-proxy.py
+const MAX_HEAP_SIZE: u32 = 256 * 1024;
+const MAX_COMPUTE_UNITS: u32 = 1_400_000;
 
 #[derive(Debug)]
 enum TxStage {
@@ -293,7 +300,7 @@ impl TransactionBuilder {
     }
 
     fn needs_iterative_execution(&self, emulate: &EmulateResponse) -> bool {
-        self.calculate_resize_iter_cnt(emulate) > 0 || emulate.steps_executed >= 40
+        self.calculate_resize_iter_cnt(emulate) > 0
     }
 
     fn calculate_iterations(&self, emulate: &EmulateResponse) -> IterativeInfo {
@@ -326,7 +333,8 @@ impl TransactionBuilder {
         println!("emulate: {emulate:#?}");
 
         if tx.length() < PACKET_DATA_SIZE - BASE_ACCOUNT_COUNT * mem::size_of::<Pubkey>() {
-            self.start_data_execution(tx, chain_id).await
+            self.preflight_check(self.start_data_execution(tx, chain_id).await?)
+                .await
         } else {
             self.start_holder_execution(tx, chain_id).await
         }
@@ -337,10 +345,12 @@ impl TransactionBuilder {
         tx: OngoingTransaction,
     ) -> anyhow::Result<Option<OngoingTransaction>> {
         match tx.stage {
-            TxStage::HolderFill { info, tx: envelope } if info.is_empty() => self
-                .execute_from_holder(info, envelope, tx.chain_id)
-                .await
-                .map(Some),
+            TxStage::HolderFill { info, tx: envelope } if info.is_empty() => {
+                let tx = self
+                    .execute_from_holder(info, envelope, tx.chain_id)
+                    .await?;
+                self.preflight_check(tx).await.map(Some)
+            }
             TxStage::HolderFill { info, tx: envelope } => {
                 Ok(Some(self.fill_holder(info, envelope, tx.chain_id)))
             }
@@ -355,6 +365,68 @@ impl TransactionBuilder {
         }
     }
 
+    pub async fn preflight_check(
+        &self,
+        tx: OngoingTransaction,
+    ) -> anyhow::Result<OngoingTransaction> {
+        match tx.stage {
+            TxStage::SingleExecution { tx_data, holder } => {
+                let config = SimulateConfig {
+                    compute_units: Some(MAX_COMPUTE_UNITS.into()),
+                    heap_size: Some(MAX_HEAP_SIZE),
+                    account_limit: None,
+                    verify: false,
+                    blockhash: *tx.tx.get_recent_blockhash(),
+                };
+                let res = self
+                    .neon_api
+                    .simulate(config, &[tx.tx.clone()])
+                    .await?
+                    .into_iter()
+                    .next()
+                    .context("empty simulation result")?;
+                if let Some(err) = res.error {
+                    match err {
+                        TransactionError::InstructionError(
+                            _,
+                            InstructionError::ProgramFailedToComplete,
+                        ) if res.logs.last().map_or(false, |log| {
+                            log.ends_with("exceeded CUs meter at BPF instruction")
+                        }) =>
+                        {
+                            let iter_info = self.calculate_iterations(&tx_data.emulate);
+                            match holder {
+                                Some(holder) => self
+                                    .step(iter_info, tx_data, holder, false, tx.chain_id)
+                                    .transpose()
+                                    .expect("must be some"),
+                                None => {
+                                    self.empty_holder_for_iterative_data(
+                                        iter_info,
+                                        tx_data,
+                                        tx.chain_id,
+                                    )
+                                    .await
+                                }
+                            }
+                        }
+                        error => Err(anyhow!(
+                            "transaction preflight error: {error} ({:?})",
+                            tx_data.envelope
+                        )),
+                    }
+                } else {
+                    Ok(OngoingTransaction {
+                        stage: TxStage::SingleExecution { tx_data, holder },
+                        tx: tx.tx,
+                        chain_id: tx.chain_id,
+                    })
+                }
+            }
+            _ => Ok(tx),
+        }
+    }
+
     async fn start_data_execution(
         &self,
         tx: TxEnvelope,
@@ -364,21 +436,16 @@ impl TransactionBuilder {
         let emulate = self.neon_api.emulate(request).await?;
         let tx_data = TxData::new(tx, emulate);
         if let Some(iter_info) = self.maybe_iter_info(&tx_data.emulate) {
-            let holder = self.new_holder_info(None)?;
-            let ixs = self.create_holder(&holder).await?;
-            let tx = TxStage::step_data(holder.pubkey, tx_data, iter_info).ongoing(
-                &ixs,
-                &self.pubkey(),
-                chain_id,
-            );
-            return Ok(tx);
+            return self
+                .empty_holder_for_iterative_data(iter_info, tx_data, chain_id)
+                .await;
         }
 
         let (accounts, mut data) = self.execute_base(
             tag::TX_EXEC_FROM_DATA,
             tx_data.envelope.tx_hash(),
             chain_id,
-            &tx_data.emulate.solana_accounts, // TODO: Do we really need them later?
+            &tx_data.emulate.solana_accounts,
             None,
             None,
         )?;
@@ -393,6 +460,22 @@ impl TransactionBuilder {
         };
 
         Ok(TxStage::execute_data(tx_data).ongoing(&with_budget(ix), &self.pubkey(), chain_id))
+    }
+
+    async fn empty_holder_for_iterative_data(
+        &self,
+        iter_info: IterativeInfo,
+        tx_data: TxData,
+        chain_id: u64,
+    ) -> anyhow::Result<OngoingTransaction> {
+        let holder = self.new_holder_info(None)?;
+        let ixs = self.create_holder(&holder).await?;
+        let tx = TxStage::step_data(holder.pubkey, tx_data, iter_info).ongoing(
+            &ixs,
+            &self.pubkey(),
+            chain_id,
+        );
+        Ok(tx)
     }
 
     async fn start_holder_execution(
@@ -680,10 +763,6 @@ impl TransactionBuilder {
 }
 
 fn with_budget(ix: Instruction) -> [Instruction; 3] {
-    // Taken from neon-proxy.py
-    const MAX_HEAP_SIZE: u32 = 256 * 1024;
-    const MAX_COMPUTE_UNITS: u32 = 1_400_000;
-
     let cu = ComputeBudgetInstruction::set_compute_unit_limit(MAX_COMPUTE_UNITS);
     let heap = ComputeBudgetInstruction::request_heap_frame(MAX_HEAP_SIZE);
 

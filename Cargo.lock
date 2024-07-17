@@ -5020,6 +5020,7 @@ dependencies = [
  "reth-rpc-api",
  "reth-rpc-types",
  "rust_decimal",
+ "serde",
  "serde_json",
  "solana-account-decoder",
  "solana-api",

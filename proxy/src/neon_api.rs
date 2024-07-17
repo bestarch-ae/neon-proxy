@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use jsonrpsee::types::ErrorCode;
 use reth_primitives::BlockNumberOrTag;
+use serde::Deserialize;
 use thiserror::Error;
 use tokio::runtime::Builder;
 use tokio::sync::mpsc::{self, Sender};
@@ -14,7 +15,9 @@ use tracing::{error, warn};
 use common::ethnum::U256;
 use common::neon_lib::commands::emulate::EmulateResponse;
 use common::neon_lib::commands::get_config::GetConfigResponse;
-use common::neon_lib::commands::simulate_solana::SimulateSolanaResponse;
+use common::neon_lib::commands::simulate_solana::{
+    SimulateSolanaResponse, SimulateSolanaTransactionResult,
+};
 use common::neon_lib::rpc::{CallDbClient, CloneRpcClient, RpcEnum};
 use common::neon_lib::tracing::tracers::TracerTypeEnum;
 use common::neon_lib::types::{
@@ -374,7 +377,7 @@ impl NeonApi {
         &self,
         config: SimulateConfig,
         txs: &[Transaction],
-    ) -> Result<SimulateSolanaResponse, NeonApiError> {
+    ) -> Result<Vec<SimulateSolanaTransactionResult>, NeonApiError> {
         let transactions = txs
             .iter()
             .map(|tx| bincode::serialize(&tx))
@@ -399,7 +402,19 @@ impl NeonApi {
             ))
             .await
             .unwrap();
-        rx.await.unwrap().map_err(Into::into)
+        let result = rx.await.unwrap()?;
+
+        // HACK: `transactions` is private in neonlib
+        #[derive(Deserialize, Debug, Default)]
+        struct SimulateSolanaResponseLocal {
+            transactions: Vec<SimulateSolanaTransactionResult>,
+        }
+
+        let value = serde_json::to_value(result).map_err(NeonError::from)?;
+        let result: SimulateSolanaResponseLocal =
+            serde_json::from_value(value).map_err(NeonError::from)?;
+
+        Ok(result.transactions)
     }
 
     async fn execute(task: TaskCommand, ctx: Context) {

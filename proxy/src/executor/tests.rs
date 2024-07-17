@@ -430,7 +430,7 @@ async fn iterations() -> anyhow::Result<()> {
     sol!(Counter, "tests/fixtures/Counter.abi");
     let call = Counter::moreInstructionCall {
         x: U256::from(0),
-        y: U256::from(100),
+        y: U256::from(500),
     }
     .abi_encode();
 
