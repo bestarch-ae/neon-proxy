@@ -170,7 +170,7 @@ async fn build_rpc(
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SimulateConfig {
     pub compute_units: Option<u64>,
     pub heap_size: Option<u32>,

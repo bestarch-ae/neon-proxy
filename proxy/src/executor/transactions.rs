@@ -6,6 +6,8 @@ use alloy_eips::eip2718::Encodable2718;
 use alloy_rlp::Encodable;
 use anyhow::{anyhow, Context};
 use reth_primitives::B256;
+use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
 
 use common::ethnum::U256;
 use common::evm_loader::account;
@@ -155,21 +157,23 @@ impl OngoingTransaction {
     }
 }
 
-// TODO: move to submodule to hide fields`
+// TODO: move to submodule to hide fields
 #[derive(Clone, Debug)]
 struct IterativeInfo {
     step_count: u32,
     #[allow(dead_code)]
     iterations: u32,
     unique_idx: u32,
+    cu_limit: u32,
 }
 
 impl IterativeInfo {
-    fn new(step_count: u32, iterations: u32) -> Self {
+    fn new(step_count: u32, iterations: u32, cu_limit: u32) -> Self {
         Self {
             step_count,
             iterations,
             unique_idx: 0,
+            cu_limit,
         }
     }
 
@@ -181,6 +185,14 @@ impl IterativeInfo {
 
     fn is_finished(&self) -> bool {
         self.unique_idx >= self.iterations
+    }
+
+    fn is_fresh(&self) -> bool {
+        self.unique_idx == 0
+    }
+
+    fn reset(&mut self) {
+        self.unique_idx = 0;
     }
 }
 
@@ -308,12 +320,82 @@ impl TransactionBuilder {
         let steps_per_iteration = self.evm_steps_min;
         let iterations =
             self.calculate_exec_iter_cnt(emulate) + self.calculate_wrap_iter_cnt(emulate);
-        IterativeInfo::new(steps_per_iteration as u32, iterations as u32)
+        IterativeInfo::new(
+            steps_per_iteration as u32,
+            iterations as u32,
+            MAX_COMPUTE_UNITS,
+        )
     }
 
     fn maybe_iter_info(&self, emulate: &EmulateResponse) -> Option<IterativeInfo> {
         self.needs_iterative_execution(emulate)
             .then(|| self.calculate_iterations(emulate))
+    }
+
+    async fn optimize_iterations(
+        &self,
+        emulate: &EmulateResponse,
+        f: impl FnMut(&mut IterativeInfo) -> anyhow::Result<Vec<Transaction>>,
+    ) -> anyhow::Result<IterativeInfo> {
+        let mut f = f;
+        let total_steps = emulate.steps_executed;
+        let wrap_iter = self.calculate_wrap_iter_cnt(emulate);
+        let mut iter_steps = self.evm_steps_min.max(emulate.steps_executed);
+        let max_cu_limit: u64 = (dec!(0.95) * Decimal::from(MAX_COMPUTE_UNITS))
+            .round()
+            .try_into()
+            .expect("rounded and fits");
+
+        for _ in 0..5 {
+            if iter_steps <= self.evm_steps_min {
+                break;
+            }
+
+            let exec_iter =
+                (total_steps / iter_steps) + if total_steps % iter_steps > 1 { 1 } else { 0 };
+            let iterations = exec_iter + wrap_iter;
+
+            let config = SimulateConfig {
+                compute_units: Some(u64::MAX),
+                verify: false,
+                ..SimulateConfig::default()
+            };
+
+            let mut iter_info =
+                IterativeInfo::new(iter_steps as u32, iterations as u32, MAX_COMPUTE_UNITS);
+            let txs = f(&mut iter_info)?;
+            let res = self.neon_api.simulate(config, &txs).await?;
+
+            if res.iter().any(|res| res.error.is_some()) {
+                break;
+            }
+
+            let used_cu_limit = res
+                .iter()
+                .map(|res| res.executed_units)
+                .max()
+                .context("empty simulate response")?;
+
+            if used_cu_limit <= max_cu_limit {
+                let used_cu_limit =
+                    (MAX_COMPUTE_UNITS as u64).min((used_cu_limit / 10_000) * 10_000 + 150_000);
+
+                iter_info.reset();
+                iter_info.cu_limit = used_cu_limit as u32;
+                return Ok(iter_info);
+            }
+
+            let ratio = dec!(0.9).min(
+                Decimal::from(max_cu_limit)
+                    .checked_div(used_cu_limit.into())
+                    .unwrap_or(Decimal::MAX),
+            );
+            iter_steps = self
+                .evm_steps_min
+                .max(ratio.saturating_mul(iter_steps.into()).try_into()?);
+        }
+
+        Ok(self.calculate_iterations(emulate))
     }
 
     pub async fn start_execution(&self, tx: TxEnvelope) -> anyhow::Result<OngoingTransaction> {
@@ -328,9 +410,6 @@ impl TransactionBuilder {
 
         let request = get_neon_emulate_request(&tx)?;
         let chain_id = request.chain_id.context("unknown chain id")?; // FIXME
-        let emulate = self.neon_api.emulate(request).await?;
-
-        println!("emulate: {emulate:#?}");
 
         if tx.length() < PACKET_DATA_SIZE - BASE_ACCOUNT_COUNT * mem::size_of::<Pubkey>() {
             self.preflight_check(self.start_data_execution(tx, chain_id).await?)
@@ -359,7 +438,10 @@ impl TransactionBuilder {
                 holder,
                 iter_info,
                 from_data,
-            } => self.step(iter_info, tx_data, holder, from_data, tx.chain_id),
+            } => {
+                self.step(iter_info, tx_data, holder, from_data, tx.chain_id)
+                    .await
+            }
             // Single iteration stuff
             TxStage::SingleExecution { .. } | TxStage::Operational => Ok(None),
         }
@@ -398,6 +480,7 @@ impl TransactionBuilder {
                             match holder {
                                 Some(holder) => self
                                     .step(iter_info, tx_data, holder, false, tx.chain_id)
+                                    .await
                                     .transpose()
                                     .expect("must be some"),
                                 None => {
@@ -459,7 +542,11 @@ impl TransactionBuilder {
             data,
         };
 
-        Ok(TxStage::execute_data(tx_data).ongoing(&with_budget(ix), &self.pubkey(), chain_id))
+        Ok(TxStage::execute_data(tx_data).ongoing(
+            &with_budget(ix, MAX_COMPUTE_UNITS),
+            &self.pubkey(),
+            chain_id,
+        ))
     }
 
     async fn empty_holder_for_iterative_data(
@@ -503,20 +590,28 @@ impl TransactionBuilder {
     ) -> anyhow::Result<OngoingTransaction> {
         let request = get_neon_emulate_request(&tx)?;
         let emulate = self.neon_api.emulate(request).await?;
-        let mut iter_info = self.maybe_iter_info(&emulate);
-        let tag = if iter_info.is_some() {
-            tag::TX_STEP_FROM_ACCOUNT
-        } else {
-            tag::TX_EXEC_FROM_ACCOUNT
-        };
+        let tx_data = TxData::new(tx, emulate);
+        if let Some(iter_info) = self.maybe_iter_info(&tx_data.emulate) {
+            let tx_hash = *tx_data.envelope.tx_hash();
+            return self
+                .step(iter_info, tx_data, holder.pubkey, false, chain_id)
+                .await
+                .transpose()
+                .with_context(|| {
+                    format!(
+                        "empty first iteration for transaction ({tx_hash}) from holder ({})",
+                        holder.pubkey
+                    )
+                })?;
+        }
 
         let (accounts, data) = self.execute_base(
-            tag,
+            tag::TX_EXEC_FROM_ACCOUNT,
             &holder.hash,
             chain_id,
-            &emulate.solana_accounts,
+            &tx_data.emulate.solana_accounts,
             Some(holder.pubkey),
-            iter_info.as_mut(),
+            None,
         )?;
 
         let ix = Instruction {
@@ -525,15 +620,15 @@ impl TransactionBuilder {
             data,
         };
 
-        let tx_data = TxData::new(tx, emulate);
-        let stage = match iter_info {
-            Some(iter_info) => TxStage::step_holder(holder.pubkey, tx_data, iter_info),
-            None => TxStage::execute_holder(holder.pubkey, tx_data),
-        };
-        Ok(stage.ongoing(&with_budget(ix), &self.pubkey(), chain_id))
+        let stage = TxStage::execute_holder(holder.pubkey, tx_data);
+        Ok(stage.ongoing(
+            &with_budget(ix, MAX_COMPUTE_UNITS),
+            &self.pubkey(),
+            chain_id,
+        ))
     }
 
-    fn step(
+    async fn step(
         &self,
         iter_info: IterativeInfo,
         tx_data: TxData,
@@ -541,9 +636,48 @@ impl TransactionBuilder {
         from_data: bool,
         chain_id: u64,
     ) -> anyhow::Result<Option<OngoingTransaction>> {
+        let mut iter_info = iter_info;
         if iter_info.is_finished() {
             return Ok(None);
         }
+        if iter_info.is_fresh() {
+            let build_tx = |iter_info: &mut IterativeInfo| {
+                let mut txs = Vec::new();
+                while !iter_info.is_finished() {
+                    let ix = self.build_step(iter_info, &tx_data, holder, from_data, chain_id)?;
+                    txs.push(Transaction::new_with_payer(
+                        &with_budget(ix, MAX_COMPUTE_UNITS),
+                        Some(&self.pubkey()),
+                    ));
+                }
+                Ok(txs)
+            };
+
+            iter_info = self.optimize_iterations(&tx_data.emulate, build_tx).await?;
+        }
+
+        let ix = self.build_step(&mut iter_info, &tx_data, holder, from_data, chain_id)?;
+        let cu_limit = iter_info.cu_limit;
+        let stage = match from_data {
+            true => TxStage::step_data(holder, tx_data, iter_info),
+            false => TxStage::step_holder(holder, tx_data, iter_info),
+        };
+
+        Ok(Some(stage.ongoing(
+            &with_budget(ix, cu_limit),
+            &self.pubkey(),
+            chain_id,
+        )))
+    }
+
+    fn build_step(
+        &self,
+        iter_info: &mut IterativeInfo,
+        tx_data: &TxData,
+        holder: Pubkey,
+        from_data: bool,
+        chain_id: u64,
+    ) -> anyhow::Result<Instruction> {
         let mut iter_info = iter_info;
         let tag = if from_data {
             tag::TX_STEP_FROM_DATA
@@ -564,21 +698,14 @@ impl TransactionBuilder {
             data.reserve(tx_data.envelope.encode_2718_len());
             tx_data.envelope.encode_2718(&mut &mut data);
         }
+
         let ix = Instruction {
             program_id: self.program_id,
             accounts,
             data,
         };
 
-        let stage = match from_data {
-            true => TxStage::step_data(holder, tx_data, iter_info),
-            false => TxStage::step_holder(holder, tx_data, iter_info),
-        };
-        Ok(Some(stage.ongoing(
-            &with_budget(ix),
-            &self.pubkey(),
-            chain_id,
-        )))
+        Ok(ix)
     }
 
     fn execute_base(
@@ -762,8 +889,8 @@ impl TransactionBuilder {
     }
 }
 
-fn with_budget(ix: Instruction) -> [Instruction; 3] {
-    let cu = ComputeBudgetInstruction::set_compute_unit_limit(MAX_COMPUTE_UNITS);
+fn with_budget(ix: Instruction, cu_limit: u32) -> [Instruction; 3] {
+    let cu = ComputeBudgetInstruction::set_compute_unit_limit(cu_limit);
     let heap = ComputeBudgetInstruction::request_heap_frame(MAX_HEAP_SIZE);
 
     [cu, heap, ix]
