@@ -34,7 +34,7 @@ use crate::neon_api::{NeonApi, SimulateConfig};
 
 use self::holder::HolderInfo;
 pub use self::ongoing::OngoingTransaction;
-use self::ongoing::{IterativeInfo, TxData, TxStage};
+use self::ongoing::{IterInfo, TxData, TxStage};
 
 // Taken from neon-proxy.py
 const MAX_HEAP_SIZE: u32 = 256 * 1024;
@@ -144,19 +144,19 @@ impl TransactionBuilder {
         self.calculate_resize_iter_cnt(emulate) > 0
     }
 
-    fn calculate_iterations(&self, emulate: &EmulateResponse) -> IterativeInfo {
+    fn calculate_iterations(&self, emulate: &EmulateResponse) -> IterInfo {
         // TODO: non default
         let steps_per_iteration = self.evm_steps_min;
         let iterations =
             self.calculate_exec_iter_cnt(emulate) + self.calculate_wrap_iter_cnt(emulate);
-        IterativeInfo::new(
+        IterInfo::new(
             steps_per_iteration as u32,
             iterations as u32,
             MAX_COMPUTE_UNITS,
         )
     }
 
-    fn maybe_iter_info(&self, emulate: &EmulateResponse) -> Option<IterativeInfo> {
+    fn maybe_iter_info(&self, emulate: &EmulateResponse) -> Option<IterInfo> {
         self.needs_iterative_execution(emulate)
             .then(|| self.calculate_iterations(emulate))
     }
@@ -164,8 +164,8 @@ impl TransactionBuilder {
     async fn optimize_iterations(
         &self,
         emulate: &EmulateResponse,
-        f: impl FnMut(&mut IterativeInfo) -> anyhow::Result<Vec<Transaction>>,
-    ) -> anyhow::Result<IterativeInfo> {
+        f: impl FnMut(&mut IterInfo) -> anyhow::Result<Vec<Transaction>>,
+    ) -> anyhow::Result<IterInfo> {
         let mut f = f;
         let total_steps = emulate.steps_executed;
         let wrap_iter = self.calculate_wrap_iter_cnt(emulate);
@@ -191,7 +191,7 @@ impl TransactionBuilder {
             };
 
             let mut iter_info =
-                IterativeInfo::new(iter_steps as u32, iterations as u32, MAX_COMPUTE_UNITS);
+                IterInfo::new(iter_steps as u32, iterations as u32, MAX_COMPUTE_UNITS);
             let txs = f(&mut iter_info)?;
             let res = self.neon_api.simulate(config, &txs).await?;
 
@@ -210,7 +210,7 @@ impl TransactionBuilder {
                     (MAX_COMPUTE_UNITS as u64).min((used_cu_limit / 10_000) * 10_000 + 150_000);
 
                 let iter_info =
-                    IterativeInfo::new(iter_steps as u32, iterations as u32, used_cu_limit as u32);
+                    IterInfo::new(iter_steps as u32, iterations as u32, used_cu_limit as u32);
                 return Ok(iter_info);
             }
 
@@ -373,7 +373,7 @@ impl TransactionBuilder {
 
     async fn empty_holder_for_iterative_data(
         &self,
-        iter_info: IterativeInfo,
+        iter_info: IterInfo,
         tx_data: TxData,
         chain_id: u64,
     ) -> anyhow::Result<OngoingTransaction> {
@@ -452,7 +452,7 @@ impl TransactionBuilder {
 
     async fn step(
         &self,
-        iter_info: IterativeInfo,
+        iter_info: IterInfo,
         tx_data: TxData,
         holder: Pubkey,
         from_data: bool,
@@ -463,7 +463,7 @@ impl TransactionBuilder {
             return Ok(None);
         }
         if iter_info.is_fresh() {
-            let build_tx = |iter_info: &mut IterativeInfo| {
+            let build_tx = |iter_info: &mut IterInfo| {
                 let mut txs = Vec::new();
                 while !iter_info.is_finished() {
                     let ix = self.build_step(iter_info, &tx_data, holder, from_data, chain_id)?;
@@ -494,7 +494,7 @@ impl TransactionBuilder {
 
     fn build_step(
         &self,
-        iter_info: &mut IterativeInfo,
+        iter_info: &mut IterInfo,
         tx_data: &TxData,
         holder: Pubkey,
         from_data: bool,
@@ -537,7 +537,7 @@ impl TransactionBuilder {
         chain_id: u64,
         collected_accounts: &[NeonSolanaAccount],
         holder: Option<Pubkey>,
-        iter_info: Option<&mut IterativeInfo>,
+        iter_info: Option<&mut IterInfo>,
     ) -> anyhow::Result<(Vec<AccountMeta>, Vec<u8>)> {
         let (treasury_pool_idx, treasury_pool_address) = self.treasury_pool(hash)?;
         let operator_balance = self.operator_balance(chain_id);

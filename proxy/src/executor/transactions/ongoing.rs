@@ -32,7 +32,7 @@ pub(super) enum TxStage {
     IterativeExecution {
         tx_data: TxData,
         holder: Pubkey,
-        iter_info: IterativeInfo,
+        iter_info: IterInfo,
         from_data: bool,
     },
     SingleExecution {
@@ -68,7 +68,7 @@ impl TxStage {
         }
     }
 
-    pub fn step_data(holder: Pubkey, tx_data: TxData, iter_info: IterativeInfo) -> Self {
+    pub fn step_data(holder: Pubkey, tx_data: TxData, iter_info: IterInfo) -> Self {
         Self::IterativeExecution {
             tx_data,
             holder,
@@ -77,7 +77,7 @@ impl TxStage {
         }
     }
 
-    pub fn step_holder(holder: Pubkey, tx_data: TxData, iter_info: IterativeInfo) -> Self {
+    pub fn step_holder(holder: Pubkey, tx_data: TxData, iter_info: IterInfo) -> Self {
         Self::IterativeExecution {
             tx_data,
             holder,
@@ -143,7 +143,7 @@ impl OngoingTransaction {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct IterativeInfo {
+pub(super) struct IterInfo {
     step_count: u32,
     #[allow(dead_code)]
     iterations: u32,
@@ -151,7 +151,7 @@ pub(super) struct IterativeInfo {
     cu_limit: u32,
 }
 
-impl IterativeInfo {
+impl IterInfo {
     pub fn new(step_count: u32, iterations: u32, cu_limit: u32) -> Self {
         Self {
             step_count,
