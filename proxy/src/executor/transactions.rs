@@ -53,6 +53,7 @@ pub struct TransactionBuilder {
     holder_counter: AtomicU8,
 }
 
+/// ## Utility methods.
 impl TransactionBuilder {
     pub async fn new(
         program_id: Pubkey,
@@ -126,6 +127,37 @@ impl TransactionBuilder {
         Ok((treasury_pool_idx, treasury_pool_address))
     }
 
+    pub fn init_operator_balance(&self, chain_id: u64) -> OngoingTransaction {
+        let addr = self.operator_balance(chain_id);
+
+        const TAG_IDX: usize = 0;
+        const ADDR_IDX: usize = TAG_IDX + 1;
+        const CHAIN_ID_IDX: usize = ADDR_IDX + mem::size_of::<Address>();
+        const DATA_LEN: usize = CHAIN_ID_IDX + mem::size_of::<u64>();
+
+        let mut data = vec![0; DATA_LEN];
+        data[TAG_IDX] = tag::OPERATOR_BALANCE_CREATE;
+        data[ADDR_IDX..CHAIN_ID_IDX].copy_from_slice(&self.operator_address.0);
+        data[CHAIN_ID_IDX..].copy_from_slice(&chain_id.to_le_bytes());
+
+        let accounts = vec![
+            AccountMeta::new(self.operator.pubkey(), true), // TODO: maybe readonly?
+            AccountMeta::new_readonly(system_program::ID, false),
+            AccountMeta::new(addr, false),
+        ];
+
+        let ix = Instruction {
+            program_id: self.program_id,
+            accounts,
+            data,
+        };
+
+        TxStage::operational().ongoing(&[ix], &self.operator.pubkey(), chain_id)
+    }
+}
+
+/// ## Transaction flow.
+impl TransactionBuilder {
     pub async fn start_execution(&self, tx: TxEnvelope) -> anyhow::Result<OngoingTransaction> {
         // 1. holder
         // 2. payer
@@ -172,7 +204,16 @@ impl TransactionBuilder {
             TxStage::SingleExecution { .. } | TxStage::Operational => Ok(None),
         }
     }
+}
 
+/// ## Execution from data.
+impl TransactionBuilder {
+    /// Execution (both iterative and non-iterative) from instruction data entrypoint.
+    ///
+    /// Returns new [`OngoingTransaction`] that contains:
+    /// - a `TransactionExecuteFromInstruction` in case input can be executed in one Solana tx and
+    ///   has no further steps,
+    /// - or a `HolderCreate` that will resolve into `TransactionStepFromInstruction` on the next step.
     async fn start_data_execution(
         &self,
         tx: TxEnvelope,
@@ -217,6 +258,8 @@ impl TransactionBuilder {
         Ok(TxStage::execute_data(tx_data).ongoing(&ixs, &self.pubkey(), chain_id))
     }
 
+    /// Creates empty holder account to be used during iterative execution.
+    /// Only used in [`Self::start_data_execution`] until proper holder managing implemented.
     async fn empty_holder_for_iterative_data(
         &self,
         tx_data: TxData,
@@ -231,7 +274,14 @@ impl TransactionBuilder {
         );
         Ok(tx)
     }
+}
 
+/// ## Execution from holder.
+impl TransactionBuilder {
+    /// Execution (both iterative and non-iterative) from holder account entrypoint.
+    ///
+    /// Returns new [`OngoingTransaction`] that creates holder account, fills it with input
+    /// transaction data on subsequent steps and eventually resolving into [`Self::execute_from_holder`].
     async fn start_holder_execution(
         &self,
         tx: TxEnvelope,
@@ -243,12 +293,19 @@ impl TransactionBuilder {
         Ok(TxStage::holder_fill(holder, tx).ongoing(&ixs, &self.pubkey(), chain_id))
     }
 
+    /// Write next data chunk into holder account.
     fn fill_holder(&self, info: HolderInfo, tx: TxEnvelope, chain_id: u64) -> OngoingTransaction {
         let mut info = info;
         let ix = self.write_next_holder_chunk(&mut info);
         TxStage::holder_fill(info, tx).ongoing(&[ix], &self.pubkey(), chain_id)
     }
 
+    /// Executes transaction from provided holder account.
+    ///
+    /// Returns new [`OngoingTransaction`] that contains:
+    /// - a `TransactionExecuteFromAccount` in case input can be executed in one Solana tx and
+    ///   has no further steps,
+    /// - or a `TransactionStepFromAccount`.
     async fn execute_from_holder(
         &self,
         holder: HolderInfo,
@@ -294,7 +351,14 @@ impl TransactionBuilder {
         let stage = TxStage::execute_holder(*holder.pubkey(), tx_data);
         Ok(stage.ongoing(&ixs, &self.pubkey(), chain_id))
     }
+}
 
+/// ## Iterative execution.
+impl TransactionBuilder {
+    /// Make iterative execution progress.
+    ///
+    /// Calculates number of optimal iterations if `iter_info` is absent, otherwise returns next
+    /// next step if needed. Must return `Some` if `iter_info` is `None`.
     async fn step(
         &self,
         iter_info: Option<IterInfo>,
@@ -377,7 +441,12 @@ impl TransactionBuilder {
 
         Ok(ix)
     }
+}
 
+/// ## Common Logic.
+impl TransactionBuilder {
+    /// Prepare common instruction data and account list for a `TransactionStep`/`TransactionExecute`
+    /// NEON EVM instructions.
     fn execute_base(
         &self,
         tag: u8,
@@ -406,9 +475,11 @@ impl TransactionBuilder {
             is_signer: false,
         }));
 
+        // Common data
         const TAG_IDX: usize = 0;
         const TREASURY_IDX_IDX: usize = TAG_IDX + mem::size_of::<u8>();
         const STEP_COUNT_IDX: usize = TREASURY_IDX_IDX + mem::size_of::<u32>();
+        // Step data
         const UNIQ_IDX_IDX: usize = STEP_COUNT_IDX + mem::size_of::<u32>();
         const END_IDX: usize = UNIQ_IDX_IDX + mem::size_of::<u32>();
         let mut data = vec![0; iter_info.as_ref().map_or(STEP_COUNT_IDX, |_| END_IDX)];
@@ -422,34 +493,6 @@ impl TransactionBuilder {
         }
 
         Ok((accounts, data))
-    }
-
-    pub fn init_operator_balance(&self, chain_id: u64) -> OngoingTransaction {
-        let addr = self.operator_balance(chain_id);
-
-        const TAG_IDX: usize = 0;
-        const ADDR_IDX: usize = TAG_IDX + 1;
-        const CHAIN_ID_IDX: usize = ADDR_IDX + mem::size_of::<Address>();
-        const DATA_LEN: usize = CHAIN_ID_IDX + mem::size_of::<u64>();
-
-        let mut data = vec![0; DATA_LEN];
-        data[TAG_IDX] = tag::OPERATOR_BALANCE_CREATE;
-        data[ADDR_IDX..CHAIN_ID_IDX].copy_from_slice(&self.operator_address.0);
-        data[CHAIN_ID_IDX..].copy_from_slice(&chain_id.to_le_bytes());
-
-        let accounts = vec![
-            AccountMeta::new(self.operator.pubkey(), true), // TODO: maybe readonly?
-            AccountMeta::new_readonly(system_program::ID, false),
-            AccountMeta::new(addr, false),
-        ];
-
-        let ix = Instruction {
-            program_id: self.program_id,
-            accounts,
-            data,
-        };
-
-        TxStage::operational().ongoing(&[ix], &self.operator.pubkey(), chain_id)
     }
 }
 
