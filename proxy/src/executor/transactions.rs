@@ -1,3 +1,5 @@
+mod ongoing;
+
 use std::mem;
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -16,7 +18,6 @@ use common::neon_instruction::tag;
 use common::neon_lib::commands::emulate::{EmulateResponse, SolanaAccount as NeonSolanaAccount};
 use common::neon_lib::types::{Address, TxParams};
 use common::solana_sdk::compute_budget::ComputeBudgetInstruction;
-use common::solana_sdk::hash::Hash;
 use common::solana_sdk::instruction::InstructionError;
 use common::solana_sdk::instruction::{AccountMeta, Instruction};
 use common::solana_sdk::packet::PACKET_DATA_SIZE;
@@ -28,173 +29,16 @@ use common::solana_sdk::system_program;
 use common::solana_sdk::transaction::Transaction;
 use common::solana_sdk::transaction::TransactionError;
 use solana_api::solana_api::SolanaApi;
-use solana_client::rpc_client::SerializableTransaction;
 
 use crate::convert::ToNeon;
 use crate::neon_api::{NeonApi, SimulateConfig};
 
+pub use self::ongoing::OngoingTransaction;
+use self::ongoing::{IterativeInfo, TxData, TxStage};
+
 // Taken from neon-proxy.py
 const MAX_HEAP_SIZE: u32 = 256 * 1024;
 const MAX_COMPUTE_UNITS: u32 = 1_400_000;
-
-#[derive(Debug)]
-enum TxStage {
-    Operational,
-    HolderFill {
-        info: HolderInfo,
-        tx: TxEnvelope,
-    },
-    IterativeExecution {
-        tx_data: TxData,
-        holder: Pubkey,
-        iter_info: IterativeInfo,
-        from_data: bool,
-    },
-    SingleExecution {
-        tx_data: TxData,
-        holder: Option<Pubkey>,
-    },
-}
-
-impl TxStage {
-    fn ongoing(self, ixs: &[Instruction], payer: &Pubkey, chain_id: u64) -> OngoingTransaction {
-        OngoingTransaction {
-            stage: self,
-            tx: Transaction::new_with_payer(ixs, Some(payer)),
-            chain_id,
-        }
-    }
-
-    fn holder_fill(info: HolderInfo, tx: TxEnvelope) -> Self {
-        Self::HolderFill { info, tx }
-    }
-
-    fn execute_data(tx_data: TxData) -> Self {
-        Self::SingleExecution {
-            tx_data,
-            holder: None,
-        }
-    }
-
-    fn execute_holder(holder: Pubkey, tx_data: TxData) -> Self {
-        Self::SingleExecution {
-            tx_data,
-            holder: Some(holder),
-        }
-    }
-
-    fn step_data(holder: Pubkey, tx_data: TxData, iter_info: IterativeInfo) -> Self {
-        Self::IterativeExecution {
-            tx_data,
-            holder,
-            iter_info,
-            from_data: true,
-        }
-    }
-
-    fn step_holder(holder: Pubkey, tx_data: TxData, iter_info: IterativeInfo) -> Self {
-        Self::IterativeExecution {
-            tx_data,
-            holder,
-            iter_info,
-            from_data: false,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct OngoingTransaction {
-    stage: TxStage,
-    tx: Transaction,
-    chain_id: u64,
-}
-
-#[derive(Debug)]
-struct TxData {
-    envelope: TxEnvelope,
-    emulate: EmulateResponse,
-}
-
-impl TxData {
-    fn new(envelope: TxEnvelope, emulate: EmulateResponse) -> Self {
-        Self { envelope, emulate }
-    }
-}
-
-impl OngoingTransaction {
-    fn new_operational(ixs: &[Instruction], payer: &Pubkey, chain_id: u64) -> Self {
-        TxStage::Operational.ongoing(ixs, payer, chain_id)
-    }
-
-    pub fn eth_tx(&self) -> Option<&TxEnvelope> {
-        match &self.stage {
-            TxStage::HolderFill { tx: envelope, .. }
-            | TxStage::IterativeExecution {
-                tx_data: TxData { envelope, .. },
-                ..
-            }
-            | TxStage::SingleExecution {
-                tx_data: TxData { envelope, .. },
-                ..
-            } => Some(envelope),
-            TxStage::Operational => None,
-        }
-    }
-
-    pub fn blockhash(&self) -> &Hash {
-        &self.tx.message.recent_blockhash // TODO: None if default?
-    }
-
-    pub fn chain_id(&self) -> u64 {
-        self.chain_id
-    }
-
-    pub fn sign(&mut self, signers: &[&Keypair], blockhash: Hash) -> anyhow::Result<&Transaction> {
-        self.tx
-            .try_sign(signers, blockhash)
-            .context("could not sign transactions")?;
-        Ok(&self.tx)
-    }
-}
-
-// TODO: move to submodule to hide fields
-#[derive(Clone, Debug)]
-struct IterativeInfo {
-    step_count: u32,
-    #[allow(dead_code)]
-    iterations: u32,
-    unique_idx: u32,
-    cu_limit: u32,
-}
-
-impl IterativeInfo {
-    fn new(step_count: u32, iterations: u32, cu_limit: u32) -> Self {
-        Self {
-            step_count,
-            iterations,
-            unique_idx: 0,
-            cu_limit,
-        }
-    }
-
-    fn next_idx(&mut self) -> u32 {
-        let out = self.unique_idx;
-        self.unique_idx += 1;
-        out
-    }
-
-    fn is_finished(&self) -> bool {
-        self.unique_idx >= self.iterations
-    }
-
-    fn is_fresh(&self) -> bool {
-        self.unique_idx == 0
-    }
-
-    fn reset(&mut self) {
-        self.unique_idx = 0;
-    }
-}
 
 #[derive(Debug)]
 struct HolderInfo {
@@ -380,8 +224,8 @@ impl TransactionBuilder {
                 let used_cu_limit =
                     (MAX_COMPUTE_UNITS as u64).min((used_cu_limit / 10_000) * 10_000 + 150_000);
 
-                iter_info.reset();
-                iter_info.cu_limit = used_cu_limit as u32;
+                let iter_info =
+                    IterativeInfo::new(iter_steps as u32, iterations as u32, used_cu_limit as u32);
                 return Ok(iter_info);
             }
 
@@ -423,15 +267,14 @@ impl TransactionBuilder {
         &self,
         tx: OngoingTransaction,
     ) -> anyhow::Result<Option<OngoingTransaction>> {
-        match tx.stage {
+        let (stage, chain_id) = tx.disassemble();
+        match stage {
             TxStage::HolderFill { info, tx: envelope } if info.is_empty() => {
-                let tx = self
-                    .execute_from_holder(info, envelope, tx.chain_id)
-                    .await?;
+                let tx = self.execute_from_holder(info, envelope, chain_id).await?;
                 self.preflight_check(tx).await.map(Some)
             }
             TxStage::HolderFill { info, tx: envelope } => {
-                Ok(Some(self.fill_holder(info, envelope, tx.chain_id)))
+                Ok(Some(self.fill_holder(info, envelope, chain_id)))
             }
             TxStage::IterativeExecution {
                 tx_data,
@@ -439,7 +282,7 @@ impl TransactionBuilder {
                 iter_info,
                 from_data,
             } => {
-                self.step(iter_info, tx_data, holder, from_data, tx.chain_id)
+                self.step(iter_info, tx_data, holder, from_data, chain_id)
                     .await
             }
             // Single iteration stuff
@@ -451,63 +294,57 @@ impl TransactionBuilder {
         &self,
         tx: OngoingTransaction,
     ) -> anyhow::Result<OngoingTransaction> {
-        match tx.stage {
-            TxStage::SingleExecution { tx_data, holder } => {
-                let config = SimulateConfig {
-                    compute_units: Some(MAX_COMPUTE_UNITS.into()),
-                    heap_size: Some(MAX_HEAP_SIZE),
-                    account_limit: None,
-                    verify: false,
-                    blockhash: *tx.tx.get_recent_blockhash(),
+        let blockhash = *tx.blockhash();
+        if matches!(tx.stage(), TxStage::SingleExecution { .. }) {
+            let config = SimulateConfig {
+                compute_units: Some(MAX_COMPUTE_UNITS.into()),
+                heap_size: Some(MAX_HEAP_SIZE),
+                account_limit: None,
+                verify: false,
+                blockhash,
+            };
+            let res = self
+                .neon_api
+                .simulate(config, &[tx.tx()])
+                .await?
+                .into_iter()
+                .next()
+                .context("empty simulation result")?;
+            if let Some(err) = res.error {
+                let (stage, chain_id) = tx.disassemble();
+                let TxStage::SingleExecution { tx_data, holder } = stage else {
+                    unreachable!("checked tx stage");
                 };
-                let res = self
-                    .neon_api
-                    .simulate(config, &[tx.tx.clone()])
-                    .await?
-                    .into_iter()
-                    .next()
-                    .context("empty simulation result")?;
-                if let Some(err) = res.error {
-                    match err {
-                        TransactionError::InstructionError(
-                            _,
-                            InstructionError::ProgramFailedToComplete,
-                        ) if res.logs.last().map_or(false, |log| {
-                            log.ends_with("exceeded CUs meter at BPF instruction")
-                        }) =>
-                        {
-                            let iter_info = self.calculate_iterations(&tx_data.emulate);
-                            match holder {
-                                Some(holder) => self
-                                    .step(iter_info, tx_data, holder, false, tx.chain_id)
+                return match err {
+                    TransactionError::InstructionError(
+                        _,
+                        InstructionError::ProgramFailedToComplete,
+                    ) if res.logs.last().map_or(false, |log| {
+                        log.ends_with("exceeded CUs meter at BPF instruction")
+                    }) =>
+                    {
+                        let iter_info = self.calculate_iterations(&tx_data.emulate);
+                        match holder {
+                            Some(holder) => self
+                                .step(iter_info, tx_data, holder, false, chain_id)
+                                .await
+                                .transpose()
+                                .expect("must be some"),
+                            None => {
+                                self.empty_holder_for_iterative_data(iter_info, tx_data, chain_id)
                                     .await
-                                    .transpose()
-                                    .expect("must be some"),
-                                None => {
-                                    self.empty_holder_for_iterative_data(
-                                        iter_info,
-                                        tx_data,
-                                        tx.chain_id,
-                                    )
-                                    .await
-                                }
                             }
                         }
-                        error => Err(anyhow!(
-                            "transaction preflight error: {error} ({:?})",
-                            tx_data.envelope
-                        )),
                     }
-                } else {
-                    Ok(OngoingTransaction {
-                        stage: TxStage::SingleExecution { tx_data, holder },
-                        tx: tx.tx,
-                        chain_id: tx.chain_id,
-                    })
-                }
+                    error => Err(anyhow!(
+                        "transaction preflight error: {error} ({:?})",
+                        tx_data.envelope
+                    )),
+                };
             }
-            _ => Ok(tx),
         }
+
+        Ok(tx)
     }
 
     async fn start_data_execution(
@@ -657,7 +494,7 @@ impl TransactionBuilder {
         }
 
         let ix = self.build_step(&mut iter_info, &tx_data, holder, from_data, chain_id)?;
-        let cu_limit = iter_info.cu_limit;
+        let cu_limit = iter_info.cu_limit();
         let stage = match from_data {
             true => TxStage::step_data(holder, tx_data, iter_info),
             false => TxStage::step_holder(holder, tx_data, iter_info),
@@ -746,7 +583,8 @@ impl TransactionBuilder {
         data[TAG_IDX] = tag;
         data[TREASURY_IDX_IDX..STEP_COUNT_IDX].copy_from_slice(&treasury_pool_idx.to_le_bytes());
         if let Some(iter_info) = iter_info {
-            data[STEP_COUNT_IDX..UNIQ_IDX_IDX].copy_from_slice(&iter_info.step_count.to_le_bytes());
+            data[STEP_COUNT_IDX..UNIQ_IDX_IDX]
+                .copy_from_slice(&iter_info.step_count().to_le_bytes());
             data[UNIQ_IDX_IDX..END_IDX].copy_from_slice(&iter_info.next_idx().to_le_bytes());
         }
 
@@ -778,7 +616,7 @@ impl TransactionBuilder {
             data,
         };
 
-        OngoingTransaction::new_operational(&[ix], &self.operator.pubkey(), chain_id)
+        TxStage::operational().ongoing(&[ix], &self.operator.pubkey(), chain_id)
     }
 
     fn new_holder_info(&self, tx: Option<&TxEnvelope>) -> anyhow::Result<HolderInfo> {
