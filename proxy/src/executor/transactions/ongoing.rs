@@ -32,7 +32,7 @@ pub(super) enum TxStage {
     IterativeExecution {
         tx_data: TxData,
         holder: Pubkey,
-        iter_info: IterInfo,
+        iter_info: Option<IterInfo>,
         from_data: bool,
     },
     SingleExecution {
@@ -69,7 +69,7 @@ impl TxStage {
         }
     }
 
-    pub fn step_data(holder: Pubkey, tx_data: TxData, iter_info: IterInfo) -> Self {
+    pub fn step_data(holder: Pubkey, tx_data: TxData, iter_info: Option<IterInfo>) -> Self {
         Self::IterativeExecution {
             tx_data,
             holder,
@@ -82,7 +82,7 @@ impl TxStage {
         Self::IterativeExecution {
             tx_data,
             holder,
-            iter_info,
+            iter_info: Some(iter_info),
             from_data: false,
         }
     }
@@ -162,10 +162,6 @@ impl IterInfo {
 
     pub fn is_finished(&self) -> bool {
         self.unique_idx >= self.iterations
-    }
-
-    pub fn is_fresh(&self) -> bool {
-        self.unique_idx == 0
     }
 
     pub fn step_count(&self) -> u32 {

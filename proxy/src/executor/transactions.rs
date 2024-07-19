@@ -156,11 +156,6 @@ impl TransactionBuilder {
         )
     }
 
-    fn maybe_iter_info(&self, emulate: &EmulateResponse) -> Option<IterInfo> {
-        self.needs_iterative_execution(emulate)
-            .then(|| self.calculate_iterations(emulate))
-    }
-
     async fn optimize_iterations(
         &self,
         emulate: &EmulateResponse,
@@ -319,10 +314,12 @@ impl TransactionBuilder {
         let request = get_neon_emulate_request(&tx)?;
         let emulate = self.neon_api.emulate(request).await?;
         let tx_data = TxData::new(tx, emulate);
-        if let Some(iter_info) = self.maybe_iter_info(&tx_data.emulate) {
-            return self
-                .empty_holder_for_iterative_data(iter_info, tx_data, chain_id)
-                .await;
+        let fallback_iterative = |tx_data| async move {
+            self.empty_holder_for_iterative_data(tx_data, chain_id)
+                .await
+        };
+        if self.needs_iterative_execution(&tx_data.emulate) {
+            return fallback_iterative(tx_data).await;
         }
 
         let (accounts, mut data) = self.execute_base(
@@ -347,10 +344,7 @@ impl TransactionBuilder {
             .check_single_execution(tx_data.envelope.tx_hash(), &ixs)
             .await?
         {
-            let iter_info = self.calculate_iterations(&tx_data.emulate);
-            return self
-                .empty_holder_for_iterative_data(iter_info, tx_data, chain_id)
-                .await;
+            return fallback_iterative(tx_data).await;
         }
 
         Ok(TxStage::execute_data(tx_data).ongoing(&ixs, &self.pubkey(), chain_id))
@@ -358,13 +352,12 @@ impl TransactionBuilder {
 
     async fn empty_holder_for_iterative_data(
         &self,
-        iter_info: IterInfo,
         tx_data: TxData,
         chain_id: u64,
     ) -> anyhow::Result<OngoingTransaction> {
         let holder = self.new_holder_info(None)?;
         let ixs = self.create_holder(&holder).await?;
-        let tx = TxStage::step_data(*holder.pubkey(), tx_data, iter_info).ongoing(
+        let tx = TxStage::step_data(*holder.pubkey(), tx_data, None).ongoing(
             &ixs,
             &self.pubkey(),
             chain_id,
@@ -398,18 +391,15 @@ impl TransactionBuilder {
         let request = get_neon_emulate_request(&tx)?;
         let emulate = self.neon_api.emulate(request).await?;
         let tx_data = TxData::new(tx, emulate);
-        if let Some(iter_info) = self.maybe_iter_info(&tx_data.emulate) {
-            let tx_hash = *tx_data.envelope.tx_hash();
-            return self
-                .step(iter_info, tx_data, *holder.pubkey(), false, chain_id)
+
+        let fallback_to_iterative = |tx_data, holder| async move {
+            self.step(None, tx_data, holder, false, chain_id)
                 .await
                 .transpose()
-                .with_context(|| {
-                    format!(
-                        "empty first iteration for transaction ({tx_hash}) from holder ({})",
-                        holder.pubkey()
-                    )
-                })?;
+                .expect("must be some")
+        };
+        if self.needs_iterative_execution(&tx_data.emulate) {
+            return fallback_to_iterative(tx_data, *holder.pubkey()).await;
         }
 
         let (accounts, data) = self.execute_base(
@@ -431,12 +421,7 @@ impl TransactionBuilder {
             .check_single_execution(tx_data.envelope.tx_hash(), &ixs)
             .await?
         {
-            let iter_info = self.calculate_iterations(&tx_data.emulate);
-            return self
-                .step(iter_info, tx_data, *holder.pubkey(), false, chain_id)
-                .await
-                .transpose()
-                .expect("must be some");
+            return fallback_to_iterative(tx_data, *holder.pubkey()).await;
         }
 
         let stage = TxStage::execute_holder(*holder.pubkey(), tx_data);
@@ -445,36 +430,37 @@ impl TransactionBuilder {
 
     async fn step(
         &self,
-        iter_info: IterInfo,
+        iter_info: Option<IterInfo>,
         tx_data: TxData,
         holder: Pubkey,
         from_data: bool,
         chain_id: u64,
     ) -> anyhow::Result<Option<OngoingTransaction>> {
-        let mut iter_info = iter_info;
-        if iter_info.is_finished() {
-            return Ok(None);
-        }
-        if iter_info.is_fresh() {
-            let build_tx = |iter_info: &mut IterInfo| {
-                let mut txs = Vec::new();
-                while !iter_info.is_finished() {
-                    let ix = self.build_step(iter_info, &tx_data, holder, from_data, chain_id)?;
-                    txs.push(Transaction::new_with_payer(
-                        &with_budget(ix, MAX_COMPUTE_UNITS),
-                        Some(&self.pubkey()),
-                    ));
-                }
-                Ok(txs)
-            };
+        let mut iter_info = match iter_info {
+            Some(iter_info) if iter_info.is_finished() => return Ok(None),
+            Some(info) => info,
+            None => {
+                let build_tx = |iter_info: &mut IterInfo| {
+                    let mut txs = Vec::new();
+                    while !iter_info.is_finished() {
+                        let ix =
+                            self.build_step(iter_info, &tx_data, holder, from_data, chain_id)?;
+                        txs.push(Transaction::new_with_payer(
+                            &with_budget(ix, MAX_COMPUTE_UNITS),
+                            Some(&self.pubkey()),
+                        ));
+                    }
+                    Ok(txs)
+                };
 
-            iter_info = self.optimize_iterations(&tx_data.emulate, build_tx).await?;
-        }
+                self.optimize_iterations(&tx_data.emulate, build_tx).await?
+            }
+        };
 
         let ix = self.build_step(&mut iter_info, &tx_data, holder, from_data, chain_id)?;
         let cu_limit = iter_info.cu_limit();
         let stage = match from_data {
-            true => TxStage::step_data(holder, tx_data, iter_info),
+            true => TxStage::step_data(holder, tx_data, Some(iter_info)),
             false => TxStage::step_holder(holder, tx_data, iter_info),
         };
 
