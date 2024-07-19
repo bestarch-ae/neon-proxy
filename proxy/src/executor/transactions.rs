@@ -1,7 +1,8 @@
+mod holder;
 mod ongoing;
 
 use std::mem;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::AtomicU8;
 
 use alloy_consensus::TxEnvelope;
 use alloy_eips::eip2718::Encodable2718;
@@ -12,7 +13,6 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
 use common::ethnum::U256;
-use common::evm_loader::account;
 use common::evm_loader::config::ACCOUNT_SEED_VERSION;
 use common::neon_instruction::tag;
 use common::neon_lib::commands::emulate::{EmulateResponse, SolanaAccount as NeonSolanaAccount};
@@ -24,7 +24,6 @@ use common::solana_sdk::packet::PACKET_DATA_SIZE;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Keypair;
 use common::solana_sdk::signer::Signer;
-use common::solana_sdk::system_instruction;
 use common::solana_sdk::system_program;
 use common::solana_sdk::transaction::Transaction;
 use common::solana_sdk::transaction::TransactionError;
@@ -33,27 +32,13 @@ use solana_api::solana_api::SolanaApi;
 use crate::convert::ToNeon;
 use crate::neon_api::{NeonApi, SimulateConfig};
 
+use self::holder::HolderInfo;
 pub use self::ongoing::OngoingTransaction;
 use self::ongoing::{IterativeInfo, TxData, TxStage};
 
 // Taken from neon-proxy.py
 const MAX_HEAP_SIZE: u32 = 256 * 1024;
 const MAX_COMPUTE_UNITS: u32 = 1_400_000;
-
-#[derive(Debug)]
-struct HolderInfo {
-    seed: String,
-    pubkey: Pubkey,
-    data: Vec<u8>,
-    current_offset: usize,
-    hash: B256,
-}
-
-impl HolderInfo {
-    fn is_empty(&self) -> bool {
-        self.current_offset >= self.data.len()
-    }
-}
 
 pub struct TransactionBuilder {
     program_id: Pubkey,
@@ -394,7 +379,7 @@ impl TransactionBuilder {
     ) -> anyhow::Result<OngoingTransaction> {
         let holder = self.new_holder_info(None)?;
         let ixs = self.create_holder(&holder).await?;
-        let tx = TxStage::step_data(holder.pubkey, tx_data, iter_info).ongoing(
+        let tx = TxStage::step_data(*holder.pubkey(), tx_data, iter_info).ongoing(
             &ixs,
             &self.pubkey(),
             chain_id,
@@ -431,23 +416,23 @@ impl TransactionBuilder {
         if let Some(iter_info) = self.maybe_iter_info(&tx_data.emulate) {
             let tx_hash = *tx_data.envelope.tx_hash();
             return self
-                .step(iter_info, tx_data, holder.pubkey, false, chain_id)
+                .step(iter_info, tx_data, *holder.pubkey(), false, chain_id)
                 .await
                 .transpose()
                 .with_context(|| {
                     format!(
                         "empty first iteration for transaction ({tx_hash}) from holder ({})",
-                        holder.pubkey
+                        holder.pubkey()
                     )
                 })?;
         }
 
         let (accounts, data) = self.execute_base(
             tag::TX_EXEC_FROM_ACCOUNT,
-            &holder.hash,
+            holder.hash(),
             chain_id,
             &tx_data.emulate.solana_accounts,
-            Some(holder.pubkey),
+            Some(*holder.pubkey()),
             None,
         )?;
 
@@ -457,7 +442,7 @@ impl TransactionBuilder {
             data,
         };
 
-        let stage = TxStage::execute_holder(holder.pubkey, tx_data);
+        let stage = TxStage::execute_holder(*holder.pubkey(), tx_data);
         Ok(stage.ongoing(
             &with_budget(ix, MAX_COMPUTE_UNITS),
             &self.pubkey(),
@@ -617,113 +602,6 @@ impl TransactionBuilder {
         };
 
         TxStage::operational().ongoing(&[ix], &self.operator.pubkey(), chain_id)
-    }
-
-    fn new_holder_info(&self, tx: Option<&TxEnvelope>) -> anyhow::Result<HolderInfo> {
-        let idx = self.holder_counter.fetch_add(1, Ordering::Relaxed);
-        let seed = format!("holder{idx}");
-        let pubkey = Pubkey::create_with_seed(&self.pubkey(), &seed, &self.program_id)
-            .context("cannot create holder address")?;
-        let (hash, data) = if let Some(tx) = tx {
-            let mut data = Vec::with_capacity(tx.encode_2718_len());
-            tx.encode_2718(&mut &mut data);
-            (*tx.tx_hash(), data)
-        } else {
-            (Default::default(), Vec::new())
-        };
-
-        Ok(HolderInfo {
-            seed,
-            pubkey,
-            data,
-            current_offset: 0,
-            hash,
-        })
-    }
-
-    async fn create_holder(&self, holder: &HolderInfo) -> anyhow::Result<[Instruction; 2]> {
-        self.create_holder_inner(&holder.seed, holder.pubkey).await
-    }
-
-    async fn create_holder_inner(
-        &self,
-        seed: &str,
-        key: Pubkey,
-    ) -> anyhow::Result<[Instruction; 2]> {
-        const HOLDER_DATA_LEN: usize = 256 * 1024; // neon_proxy.py default
-        const HOLDER_META_LEN: usize =
-            account::ACCOUNT_PREFIX_LEN + mem::size_of::<account::HolderHeader>();
-        const HOLDER_SIZE: usize = HOLDER_META_LEN + HOLDER_DATA_LEN;
-
-        let sp_ix = system_instruction::create_account_with_seed(
-            &self.pubkey(),
-            &key,
-            &self.pubkey(),
-            seed,
-            self.solana_api
-                .minimum_rent_for_exemption(HOLDER_SIZE)
-                .await?,
-            HOLDER_SIZE as u64,
-            &self.program_id,
-        );
-
-        const TAG_IDX: usize = 0;
-        const SEED_LEN_IDX: usize = TAG_IDX + mem::size_of::<u8>();
-        const SEED_IDX: usize = SEED_LEN_IDX + mem::size_of::<u64>();
-        let seed_len = seed.as_bytes().len();
-
-        let mut data = vec![0; SEED_IDX + seed_len];
-        data[TAG_IDX] = tag::HOLDER_CREATE;
-        data[SEED_LEN_IDX..SEED_IDX].copy_from_slice(&(seed_len as u64).to_le_bytes());
-        data[SEED_IDX..].copy_from_slice(seed.as_bytes());
-
-        let accounts = vec![
-            AccountMeta::new(key, false),
-            AccountMeta::new_readonly(self.pubkey(), true),
-        ];
-
-        let neon_ix = Instruction {
-            program_id: self.program_id,
-            accounts,
-            data,
-        };
-
-        Ok([sp_ix, neon_ix])
-    }
-
-    fn write_next_holder_chunk(&self, holder: &mut HolderInfo) -> Instruction {
-        const CHUNK_LEN: usize = 930;
-
-        if holder.is_empty() {
-            panic!("attempt to write empty holder");
-        }
-
-        const TAG_IDX: usize = 0;
-        const HASH_IDX: usize = TAG_IDX + mem::size_of::<u8>();
-        const OFFSET_IDX: usize = HASH_IDX + mem::size_of::<B256>();
-        const DATA_IDX: usize = OFFSET_IDX + mem::size_of::<u64>();
-
-        let chunk_end = holder.data.len().min(holder.current_offset + CHUNK_LEN);
-        let chunk_start = holder.current_offset;
-        let chunk = &holder.data[chunk_start..chunk_end];
-        holder.current_offset = chunk_end;
-
-        let mut data = vec![0; DATA_IDX + chunk.len()];
-        data[TAG_IDX] = tag::HOLDER_WRITE;
-        data[HASH_IDX..OFFSET_IDX].copy_from_slice(holder.hash.as_slice());
-        data[OFFSET_IDX..DATA_IDX].copy_from_slice(&chunk_start.to_le_bytes());
-        data[DATA_IDX..].copy_from_slice(chunk);
-
-        let accounts = vec![
-            AccountMeta::new(holder.pubkey, false),
-            AccountMeta::new(self.pubkey(), true),
-        ];
-
-        Instruction {
-            program_id: self.program_id,
-            accounts,
-            data,
-        }
     }
 }
 
