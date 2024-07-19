@@ -8,6 +8,7 @@ use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Keypair;
 use common::solana_sdk::transaction::Transaction;
 
+use super::emulator::IterInfo;
 use super::HolderInfo;
 
 #[derive(Debug)]
@@ -132,43 +133,5 @@ impl OngoingTransaction {
 
     pub(super) fn disassemble(self) -> (TxStage, u64) {
         (self.stage, self.chain_id)
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct IterInfo {
-    step_count: u32,
-    #[allow(dead_code)]
-    iterations: u32,
-    unique_idx: u32,
-    cu_limit: u32,
-}
-
-impl IterInfo {
-    pub fn new(step_count: u32, iterations: u32, cu_limit: u32) -> Self {
-        Self {
-            step_count,
-            iterations,
-            unique_idx: 0,
-            cu_limit,
-        }
-    }
-
-    pub fn next_idx(&mut self) -> u32 {
-        let out = self.unique_idx;
-        self.unique_idx += 1;
-        out
-    }
-
-    pub fn is_finished(&self) -> bool {
-        self.unique_idx >= self.iterations
-    }
-
-    pub fn step_count(&self) -> u32 {
-        self.step_count
-    }
-
-    pub fn cu_limit(&self) -> u32 {
-        self.cu_limit
     }
 }

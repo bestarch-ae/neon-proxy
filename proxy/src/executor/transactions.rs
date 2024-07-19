@@ -1,3 +1,4 @@
+mod emulator;
 mod holder;
 mod ongoing;
 
@@ -7,18 +8,15 @@ use std::sync::atomic::AtomicU8;
 use alloy_consensus::TxEnvelope;
 use alloy_eips::eip2718::Encodable2718;
 use alloy_rlp::Encodable;
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use reth_primitives::B256;
-use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
 
 use common::ethnum::U256;
 use common::evm_loader::config::ACCOUNT_SEED_VERSION;
 use common::neon_instruction::tag;
-use common::neon_lib::commands::emulate::{EmulateResponse, SolanaAccount as NeonSolanaAccount};
-use common::neon_lib::types::{Address, TxParams};
+use common::neon_lib::commands::emulate::SolanaAccount as NeonSolanaAccount;
+use common::neon_lib::types::Address;
 use common::solana_sdk::compute_budget::ComputeBudgetInstruction;
-use common::solana_sdk::instruction::InstructionError;
 use common::solana_sdk::instruction::{AccountMeta, Instruction};
 use common::solana_sdk::packet::PACKET_DATA_SIZE;
 use common::solana_sdk::pubkey::Pubkey;
@@ -26,15 +24,15 @@ use common::solana_sdk::signature::Keypair;
 use common::solana_sdk::signer::Signer;
 use common::solana_sdk::system_program;
 use common::solana_sdk::transaction::Transaction;
-use common::solana_sdk::transaction::TransactionError;
 use solana_api::solana_api::SolanaApi;
 
-use crate::convert::ToNeon;
-use crate::neon_api::{NeonApi, SimulateConfig};
+use crate::executor::transactions::emulator::get_neon_emulate_request;
+use crate::neon_api::NeonApi;
 
 use self::holder::HolderInfo;
 pub use self::ongoing::OngoingTransaction;
-use self::ongoing::{IterInfo, TxData, TxStage};
+use self::ongoing::{TxData, TxStage};
+use emulator::{Emulator, IterInfo};
 
 // Taken from neon-proxy.py
 const MAX_HEAP_SIZE: u32 = 256 * 1024;
@@ -44,15 +42,14 @@ pub struct TransactionBuilder {
     program_id: Pubkey,
 
     solana_api: SolanaApi,
-    neon_api: NeonApi,
 
     operator: Keypair,
     operator_address: Address,
 
     treasury_pool_count: u32,
     treasury_pool_seed: Vec<u8>,
-    evm_steps_min: u64,
 
+    emulator: Emulator,
     holder_counter: AtomicU8,
 }
 
@@ -83,15 +80,16 @@ impl TransactionBuilder {
             .context("missing NEON_EVM_STEPS_MIN in config")?
             .parse()?;
 
+        let emulator = Emulator::new(neon_api, evm_steps_min, operator.pubkey());
+
         Ok(Self {
             program_id,
             solana_api,
-            neon_api,
             operator,
             operator_address: address,
             treasury_pool_count,
             treasury_pool_seed,
-            evm_steps_min,
+            emulator,
             holder_counter: AtomicU8::new(0),
         })
     }
@@ -126,100 +124,6 @@ impl TransactionBuilder {
         )
         .context("cannot find program address")?;
         Ok((treasury_pool_idx, treasury_pool_address))
-    }
-
-    fn calculate_resize_iter_cnt(&self, emulate: &EmulateResponse) -> u64 {
-        self.calculate_wrap_iter_cnt(emulate).saturating_sub(2)
-    }
-
-    fn calculate_exec_iter_cnt(&self, emulate: &EmulateResponse) -> u64 {
-        (emulate.steps_executed + self.evm_steps_min).saturating_sub(1) / self.evm_steps_min
-    }
-
-    fn calculate_wrap_iter_cnt(&self, emulate: &EmulateResponse) -> u64 {
-        emulate.iterations - self.calculate_exec_iter_cnt(emulate)
-    }
-
-    fn needs_iterative_execution(&self, emulate: &EmulateResponse) -> bool {
-        self.calculate_resize_iter_cnt(emulate) > 0
-    }
-
-    fn calculate_iterations(&self, emulate: &EmulateResponse) -> IterInfo {
-        // TODO: non default
-        let steps_per_iteration = self.evm_steps_min;
-        let iterations =
-            self.calculate_exec_iter_cnt(emulate) + self.calculate_wrap_iter_cnt(emulate);
-        IterInfo::new(
-            steps_per_iteration as u32,
-            iterations as u32,
-            MAX_COMPUTE_UNITS,
-        )
-    }
-
-    async fn optimize_iterations(
-        &self,
-        emulate: &EmulateResponse,
-        f: impl FnMut(&mut IterInfo) -> anyhow::Result<Vec<Transaction>>,
-    ) -> anyhow::Result<IterInfo> {
-        let mut f = f;
-        let total_steps = emulate.steps_executed;
-        let wrap_iter = self.calculate_wrap_iter_cnt(emulate);
-        let mut iter_steps = self.evm_steps_min.max(emulate.steps_executed);
-        let max_cu_limit: u64 = (dec!(0.95) * Decimal::from(MAX_COMPUTE_UNITS))
-            .round()
-            .try_into()
-            .expect("rounded and fits");
-
-        for _ in 0..5 {
-            if iter_steps <= self.evm_steps_min {
-                break;
-            }
-
-            let exec_iter =
-                (total_steps / iter_steps) + if total_steps % iter_steps > 1 { 1 } else { 0 };
-            let iterations = exec_iter + wrap_iter;
-
-            let config = SimulateConfig {
-                compute_units: Some(u64::MAX),
-                verify: false,
-                ..SimulateConfig::default()
-            };
-
-            let mut iter_info =
-                IterInfo::new(iter_steps as u32, iterations as u32, MAX_COMPUTE_UNITS);
-            let txs = f(&mut iter_info)?;
-            let res = self.neon_api.simulate(config, &txs).await?;
-
-            if res.iter().any(|res| res.error.is_some()) {
-                break;
-            }
-
-            let used_cu_limit = res
-                .iter()
-                .map(|res| res.executed_units)
-                .max()
-                .context("empty simulate response")?;
-
-            if used_cu_limit <= max_cu_limit {
-                let used_cu_limit =
-                    (MAX_COMPUTE_UNITS as u64).min((used_cu_limit / 10_000) * 10_000 + 150_000);
-
-                let iter_info =
-                    IterInfo::new(iter_steps as u32, iterations as u32, used_cu_limit as u32);
-                return Ok(iter_info);
-            }
-
-            let ratio = dec!(0.9).min(
-                Decimal::from(max_cu_limit)
-                    .checked_div(used_cu_limit.into())
-                    .unwrap_or(Decimal::MAX),
-            );
-            iter_steps = self
-                .evm_steps_min
-                .max(ratio.saturating_mul(iter_steps.into()).try_into()?);
-        }
-
-        Ok(self.calculate_iterations(emulate))
     }
 
     pub async fn start_execution(&self, tx: TxEnvelope) -> anyhow::Result<OngoingTransaction> {
@@ -269,56 +173,18 @@ impl TransactionBuilder {
         }
     }
 
-    pub async fn check_single_execution(
-        &self,
-        tx_hash: &B256,
-        ixs: &[Instruction],
-    ) -> anyhow::Result<bool> {
-        let tx = Transaction::new_with_payer(ixs, Some(&self.pubkey()));
-        let config = SimulateConfig {
-            compute_units: Some(MAX_COMPUTE_UNITS.into()),
-            heap_size: Some(MAX_HEAP_SIZE),
-            verify: false,
-            ..SimulateConfig::default()
-        };
-        let res = self
-            .neon_api
-            .simulate(config, &[tx])
-            .await?
-            .into_iter()
-            .next()
-            .context("empty simulation result")?;
-        if let Some(err) = res.error {
-            match err {
-                TransactionError::InstructionError(
-                    _,
-                    InstructionError::ProgramFailedToComplete,
-                ) if res.logs.last().map_or(false, |log| {
-                    log.ends_with("exceeded CUs meter at BPF instruction")
-                }) =>
-                {
-                    Ok(false)
-                }
-                error => Err(anyhow!("transaction ({tx_hash}) preflight error: {error}")),
-            }
-        } else {
-            Ok(true)
-        }
-    }
-
     async fn start_data_execution(
         &self,
         tx: TxEnvelope,
         chain_id: u64,
     ) -> anyhow::Result<OngoingTransaction> {
-        let request = get_neon_emulate_request(&tx)?;
-        let emulate = self.neon_api.emulate(request).await?;
+        let emulate = self.emulator.emulate(&tx).await?;
         let tx_data = TxData::new(tx, emulate);
         let fallback_iterative = |tx_data| async move {
             self.empty_holder_for_iterative_data(tx_data, chain_id)
                 .await
         };
-        if self.needs_iterative_execution(&tx_data.emulate) {
+        if self.emulator.needs_iterative_execution(&tx_data.emulate) {
             return fallback_iterative(tx_data).await;
         }
 
@@ -341,6 +207,7 @@ impl TransactionBuilder {
         };
         let ixs = with_budget(ix, MAX_COMPUTE_UNITS);
         if !self
+            .emulator
             .check_single_execution(tx_data.envelope.tx_hash(), &ixs)
             .await?
         {
@@ -388,8 +255,7 @@ impl TransactionBuilder {
         tx: TxEnvelope,
         chain_id: u64,
     ) -> anyhow::Result<OngoingTransaction> {
-        let request = get_neon_emulate_request(&tx)?;
-        let emulate = self.neon_api.emulate(request).await?;
+        let emulate = self.emulator.emulate(&tx).await?;
         let tx_data = TxData::new(tx, emulate);
 
         let fallback_to_iterative = |tx_data, holder| async move {
@@ -398,7 +264,7 @@ impl TransactionBuilder {
                 .transpose()
                 .expect("must be some")
         };
-        if self.needs_iterative_execution(&tx_data.emulate) {
+        if self.emulator.needs_iterative_execution(&tx_data.emulate) {
             return fallback_to_iterative(tx_data, *holder.pubkey()).await;
         }
 
@@ -418,6 +284,7 @@ impl TransactionBuilder {
         };
         let ixs = with_budget(ix, MAX_COMPUTE_UNITS);
         if !self
+            .emulator
             .check_single_execution(tx_data.envelope.tx_hash(), &ixs)
             .await?
         {
@@ -453,7 +320,9 @@ impl TransactionBuilder {
                     Ok(txs)
                 };
 
-                self.optimize_iterations(&tx_data.emulate, build_tx).await?
+                self.emulator
+                    .calculate_iterations(&tx_data.emulate, build_tx)
+                    .await?
             }
         };
 
@@ -589,47 +458,4 @@ fn with_budget(ix: Instruction, cu_limit: u32) -> [Instruction; 3] {
     let heap = ComputeBudgetInstruction::request_heap_frame(MAX_HEAP_SIZE);
 
     [cu, heap, ix]
-}
-
-fn get_neon_emulate_request(tx: &TxEnvelope) -> anyhow::Result<TxParams> {
-    let from = tx
-        .recover_signer()
-        .context("could not recover signer")?
-        .to_neon();
-    let request = match &tx {
-        TxEnvelope::Legacy(tx) => TxParams {
-            nonce: Some(tx.tx().nonce),
-            from,
-            to: tx.tx().to.to().copied().map(ToNeon::to_neon),
-            data: Some(tx.tx().input.0.to_vec()),
-            value: Some(tx.tx().value.to_neon()),
-            gas_limit: Some(tx.tx().gas_limit.into()),
-            actual_gas_used: None,
-            gas_price: Some(tx.tx().gas_price.into()),
-            access_list: None,
-            chain_id: tx.tx().chain_id,
-        },
-        TxEnvelope::Eip2930(tx) => TxParams {
-            nonce: Some(tx.tx().nonce),
-            from,
-            to: tx.tx().to.to().copied().map(ToNeon::to_neon),
-            data: Some(tx.tx().input.0.to_vec()),
-            value: Some(tx.tx().value.to_neon()),
-            gas_limit: Some(tx.tx().gas_limit.into()),
-            actual_gas_used: None,
-            gas_price: Some(tx.tx().gas_price.into()),
-            access_list: Some(
-                tx.tx()
-                    .access_list
-                    .iter()
-                    .cloned()
-                    .map(ToNeon::to_neon)
-                    .collect(),
-            ),
-            chain_id: Some(tx.tx().chain_id),
-        },
-        tx => anyhow::bail!("unsupported transaction: {:?}", tx.tx_type()),
-    };
-
-    Ok(request)
 }
