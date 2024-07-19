@@ -37,6 +37,7 @@ pub(super) enum TxStage {
     },
     SingleExecution {
         tx_data: TxData,
+        #[allow(dead_code)]
         holder: Option<Pubkey>,
     },
 }
@@ -131,14 +132,6 @@ impl OngoingTransaction {
 
     pub(super) fn disassemble(self) -> (TxStage, u64) {
         (self.stage, self.chain_id)
-    }
-
-    pub(super) fn tx(&self) -> &Transaction {
-        &self.tx
-    }
-
-    pub(super) fn stage(&self) -> &TxStage {
-        &self.stage
     }
 }
 

@@ -241,8 +241,7 @@ impl TransactionBuilder {
         let chain_id = request.chain_id.context("unknown chain id")?; // FIXME
 
         if tx.length() < PACKET_DATA_SIZE - BASE_ACCOUNT_COUNT * mem::size_of::<Pubkey>() {
-            self.preflight_check(self.start_data_execution(tx, chain_id).await?)
-                .await
+            self.start_data_execution(tx, chain_id).await
         } else {
             self.start_holder_execution(tx, chain_id).await
         }
@@ -254,10 +253,10 @@ impl TransactionBuilder {
     ) -> anyhow::Result<Option<OngoingTransaction>> {
         let (stage, chain_id) = tx.disassemble();
         match stage {
-            TxStage::HolderFill { info, tx: envelope } if info.is_empty() => {
-                let tx = self.execute_from_holder(info, envelope, chain_id).await?;
-                self.preflight_check(tx).await.map(Some)
-            }
+            TxStage::HolderFill { info, tx: envelope } if info.is_empty() => self
+                .execute_from_holder(info, envelope, chain_id)
+                .await
+                .map(Some),
             TxStage::HolderFill { info, tx: envelope } => {
                 Ok(Some(self.fill_holder(info, envelope, chain_id)))
             }
@@ -275,61 +274,41 @@ impl TransactionBuilder {
         }
     }
 
-    pub async fn preflight_check(
+    pub async fn check_single_execution(
         &self,
-        tx: OngoingTransaction,
-    ) -> anyhow::Result<OngoingTransaction> {
-        let blockhash = *tx.blockhash();
-        if matches!(tx.stage(), TxStage::SingleExecution { .. }) {
-            let config = SimulateConfig {
-                compute_units: Some(MAX_COMPUTE_UNITS.into()),
-                heap_size: Some(MAX_HEAP_SIZE),
-                account_limit: None,
-                verify: false,
-                blockhash,
-            };
-            let res = self
-                .neon_api
-                .simulate(config, &[tx.tx()])
-                .await?
-                .into_iter()
-                .next()
-                .context("empty simulation result")?;
-            if let Some(err) = res.error {
-                let (stage, chain_id) = tx.disassemble();
-                let TxStage::SingleExecution { tx_data, holder } = stage else {
-                    unreachable!("checked tx stage");
-                };
-                return match err {
-                    TransactionError::InstructionError(
-                        _,
-                        InstructionError::ProgramFailedToComplete,
-                    ) if res.logs.last().map_or(false, |log| {
-                        log.ends_with("exceeded CUs meter at BPF instruction")
-                    }) =>
-                    {
-                        let iter_info = self.calculate_iterations(&tx_data.emulate);
-                        match holder {
-                            Some(holder) => self
-                                .step(iter_info, tx_data, holder, false, chain_id)
-                                .await
-                                .transpose()
-                                .expect("must be some"),
-                            None => {
-                                self.empty_holder_for_iterative_data(iter_info, tx_data, chain_id)
-                                    .await
-                            }
-                        }
-                    }
-                    error => Err(anyhow!(
-                        "transaction preflight error: {error} ({:?})",
-                        tx_data.envelope
-                    )),
-                };
+        tx_hash: &B256,
+        ixs: &[Instruction],
+    ) -> anyhow::Result<bool> {
+        let tx = Transaction::new_with_payer(ixs, Some(&self.pubkey()));
+        let config = SimulateConfig {
+            compute_units: Some(MAX_COMPUTE_UNITS.into()),
+            heap_size: Some(MAX_HEAP_SIZE),
+            verify: false,
+            ..SimulateConfig::default()
+        };
+        let res = self
+            .neon_api
+            .simulate(config, &[tx])
+            .await?
+            .into_iter()
+            .next()
+            .context("empty simulation result")?;
+        if let Some(err) = res.error {
+            match err {
+                TransactionError::InstructionError(
+                    _,
+                    InstructionError::ProgramFailedToComplete,
+                ) if res.logs.last().map_or(false, |log| {
+                    log.ends_with("exceeded CUs meter at BPF instruction")
+                }) =>
+                {
+                    Ok(false)
+                }
+                error => Err(anyhow!("transaction ({tx_hash}) preflight error: {error}")),
             }
+        } else {
+            Ok(true)
         }
-
-        Ok(tx)
     }
 
     async fn start_data_execution(
@@ -363,12 +342,18 @@ impl TransactionBuilder {
             accounts,
             data,
         };
+        let ixs = with_budget(ix, MAX_COMPUTE_UNITS);
+        if !self
+            .check_single_execution(tx_data.envelope.tx_hash(), &ixs)
+            .await?
+        {
+            let iter_info = self.calculate_iterations(&tx_data.emulate);
+            return self
+                .empty_holder_for_iterative_data(iter_info, tx_data, chain_id)
+                .await;
+        }
 
-        Ok(TxStage::execute_data(tx_data).ongoing(
-            &with_budget(ix, MAX_COMPUTE_UNITS),
-            &self.pubkey(),
-            chain_id,
-        ))
+        Ok(TxStage::execute_data(tx_data).ongoing(&ixs, &self.pubkey(), chain_id))
     }
 
     async fn empty_holder_for_iterative_data(
@@ -441,13 +426,21 @@ impl TransactionBuilder {
             accounts,
             data,
         };
+        let ixs = with_budget(ix, MAX_COMPUTE_UNITS);
+        if !self
+            .check_single_execution(tx_data.envelope.tx_hash(), &ixs)
+            .await?
+        {
+            let iter_info = self.calculate_iterations(&tx_data.emulate);
+            return self
+                .step(iter_info, tx_data, *holder.pubkey(), false, chain_id)
+                .await
+                .transpose()
+                .expect("must be some");
+        }
 
         let stage = TxStage::execute_holder(*holder.pubkey(), tx_data);
-        Ok(stage.ongoing(
-            &with_budget(ix, MAX_COMPUTE_UNITS),
-            &self.pubkey(),
-            chain_id,
-        ))
+        Ok(stage.ongoing(&ixs, &self.pubkey(), chain_id))
     }
 
     async fn step(
