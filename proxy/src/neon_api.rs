@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use jsonrpsee::types::ErrorCode;
 use reth_primitives::BlockNumberOrTag;
+use serde::Deserialize;
 use thiserror::Error;
 use tokio::runtime::Builder;
 use tokio::sync::mpsc::{self, Sender};
@@ -14,12 +15,19 @@ use tracing::{error, warn};
 use common::ethnum::U256;
 use common::neon_lib::commands::emulate::EmulateResponse;
 use common::neon_lib::commands::get_config::GetConfigResponse;
+use common::neon_lib::commands::simulate_solana::{
+    SimulateSolanaResponse, SimulateSolanaTransactionResult,
+};
 use common::neon_lib::rpc::{CallDbClient, CloneRpcClient, RpcEnum};
 use common::neon_lib::tracing::tracers::TracerTypeEnum;
-use common::neon_lib::types::{BalanceAddress, ChDbConfig, EmulateRequest, TracerDb, TxParams};
+use common::neon_lib::types::{
+    BalanceAddress, ChDbConfig, EmulateRequest, SimulateSolanaRequest, TracerDb, TxParams,
+};
 use common::neon_lib::{commands, NeonError};
 use common::solana_sdk::commitment_config::CommitmentConfig;
+use common::solana_sdk::hash::Hash;
 use common::solana_sdk::pubkey::Pubkey;
+use common::solana_sdk::transaction::Transaction;
 use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
 use self::gas_limit_calculator::{GasLimitCalculator, GasLimitError};
@@ -27,16 +35,19 @@ use self::gas_limit_calculator::{GasLimitCalculator, GasLimitError};
 #[derive(Debug, Error)]
 pub enum NeonApiError {
     #[error("neon error: {0}")]
-    NeonError(#[from] NeonError),
+    Neon(#[from] NeonError),
     #[error("gas limit error: {0}")]
-    GasLimitError(#[from] GasLimitError),
+    GasLimit(#[from] GasLimitError),
+    #[error("transaction serialization error: {0}")]
+    Bincode(#[from] bincode::Error),
 }
 
 impl NeonApiError {
     pub const fn error_code(&self) -> i32 {
         match self {
-            Self::NeonError(err) => err.error_code() as i32,
-            Self::GasLimitError(_) => 3,
+            Self::Neon(err) => err.error_code() as i32,
+            Self::GasLimit(_) => 3,
+            _ => ErrorCode::InternalError.code(),
         }
     }
 }
@@ -45,14 +56,13 @@ impl From<NeonApiError> for jsonrpsee::types::ErrorObjectOwned {
     fn from(value: NeonApiError) -> Self {
         let error_code = value.error_code();
         match value {
-            NeonApiError::NeonError(err) => Self::owned(
+            NeonApiError::Neon(err) => Self::owned(
                 ErrorCode::InternalError.code(),
                 err.to_string(),
                 None::<String>,
             ),
-            NeonApiError::GasLimitError(err) => {
-                Self::owned(error_code, err.to_string(), None::<String>)
-            }
+            NeonApiError::GasLimit(err) => Self::owned(error_code, err.to_string(), None::<String>),
+            _ => ErrorCode::InternalError.into(),
         }
     }
 }
@@ -102,6 +112,10 @@ enum TaskCommand {
         response: oneshot::Sender<Result<EmulateResponse, NeonError>>,
     },
     GetConfig(oneshot::Sender<Result<GetConfigResponse, NeonError>>),
+    Simulate {
+        request: SimulateSolanaRequest,
+        response: oneshot::Sender<Result<SimulateSolanaResponse, NeonError>>,
+    },
 }
 
 struct Context {
@@ -154,6 +168,15 @@ async fn build_rpc(
             }))
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SimulateConfig {
+    pub compute_units: Option<u64>,
+    pub heap_size: Option<u32>,
+    pub account_limit: Option<usize>,
+    pub verify: bool,
+    pub blockhash: Hash,
 }
 
 #[derive(Debug, Clone)]
@@ -350,6 +373,50 @@ impl NeonApi {
         rx.await.unwrap()
     }
 
+    pub async fn simulate(
+        &self,
+        config: SimulateConfig,
+        txs: &[Transaction],
+    ) -> Result<Vec<SimulateSolanaTransactionResult>, NeonApiError> {
+        let transactions = txs
+            .iter()
+            .map(|tx| bincode::serialize(&tx))
+            .collect::<Result<_, _>>()?;
+        let (tx, rx) = oneshot::channel();
+        let request = SimulateSolanaRequest {
+            compute_units: config.compute_units,
+            heap_size: config.heap_size,
+            account_limit: config.account_limit,
+            verify: Some(config.verify),
+            blockhash: config.blockhash.to_bytes(),
+            transactions,
+        };
+        self.channel
+            .send(Task::new(
+                TaskCommand::Simulate {
+                    request,
+                    response: tx,
+                },
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        let result = rx.await.unwrap()?;
+
+        // HACK: `transactions` is private in neonlib
+        #[derive(Deserialize, Debug, Default)]
+        struct SimulateSolanaResponseLocal {
+            transactions: Vec<SimulateSolanaTransactionResult>,
+        }
+
+        let value = serde_json::to_value(result).map_err(NeonError::from)?;
+        let result: SimulateSolanaResponseLocal =
+            serde_json::from_value(value).map_err(NeonError::from)?;
+
+        Ok(result.transactions)
+    }
+
     async fn execute(task: TaskCommand, ctx: Context) {
         match task {
             TaskCommand::EstimateGas { tx, response } => {
@@ -473,6 +540,11 @@ impl NeonApi {
 
             TaskCommand::GetConfig(response) => {
                 let resp = commands::get_config::execute(&ctx.rpc_client, ctx.neon_pubkey).await;
+                let _ = response.send(resp);
+            }
+
+            TaskCommand::Simulate { request, response } => {
+                let resp = commands::simulate_solana::execute(&ctx.rpc_client, request).await;
                 let _ = response.send(resp);
             }
         }

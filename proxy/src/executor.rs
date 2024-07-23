@@ -13,26 +13,22 @@ use solana_api::solana_api::SolanaApi;
 use tokio::sync::Notify;
 use tokio::time::sleep;
 
-use common::neon_lib::types::{Address, TxParams};
+use common::neon_lib::types::Address;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Keypair;
 use common::solana_sdk::signature::Signature;
 use common::solana_sdk::transaction::TransactionError;
 use common::solana_transaction_status::TransactionStatus;
 
-use crate::convert::ToNeon;
 use crate::neon_api::NeonApi;
 
 use self::transactions::{OngoingTransaction, TransactionBuilder};
 
 pub struct Executor {
     program_id: Pubkey,
-
-    neon_api: NeonApi,
     solana_api: SolanaApi,
 
     builder: TransactionBuilder,
-
     pending_transactions: DashMap<Signature, OngoingTransaction>,
     notify: Notify,
 
@@ -62,33 +58,19 @@ impl Executor {
         operator: Keypair,
         operator_addr: Address,
     ) -> anyhow::Result<Self> {
-        let config = neon_api.get_config().await?;
-
-        let treasury_pool_count: u32 = config
-            .config
-            .get("NEON_TREASURY_POOL_COUNT")
-            .context("missing NEON_TREASURY_POOL_COUNT in config")?
-            .parse()?;
-        let treasury_pool_seed = config
-            .config
-            .get("NEON_TREASURY_POOL_SEED")
-            .context("missing NEON_TREASURY_POOL_SEED in config")?
-            .as_bytes()
-            .to_vec();
         let notify = Notify::new();
 
         let builder = TransactionBuilder::new(
             neon_pubkey,
             solana_api.clone(),
+            neon_api.clone(),
             operator,
             operator_addr,
-            treasury_pool_count,
-            treasury_pool_seed,
-        );
+        )
+        .await?;
 
         Ok(Self {
             program_id: neon_pubkey,
-            neon_api,
             solana_api,
             builder,
             pending_transactions: DashMap::new(),
@@ -100,60 +82,12 @@ impl Executor {
     }
 
     pub async fn handle_transaction(&self, tx: TxEnvelope) -> anyhow::Result<Signature> {
-        let from = tx
-            .recover_signer()
-            .context("could not recover signer")?
-            .to_neon();
-        let request = match &tx {
-            TxEnvelope::Legacy(tx) => TxParams {
-                nonce: Some(tx.tx().nonce),
-                from,
-                to: tx.tx().to.to().copied().map(ToNeon::to_neon),
-                data: Some(tx.tx().input.0.to_vec()),
-                value: Some(tx.tx().value.to_neon()),
-                gas_limit: Some(tx.tx().gas_limit.into()),
-                actual_gas_used: None,
-                gas_price: Some(tx.tx().gas_price.into()),
-                access_list: None,
-                chain_id: tx.tx().chain_id,
-            },
-            TxEnvelope::Eip2930(tx) => TxParams {
-                nonce: Some(tx.tx().nonce),
-                from,
-                to: tx.tx().to.to().copied().map(ToNeon::to_neon),
-                data: Some(tx.tx().input.0.to_vec()),
-                value: Some(tx.tx().value.to_neon()),
-                gas_limit: Some(tx.tx().gas_limit.into()),
-                actual_gas_used: None,
-                gas_price: Some(tx.tx().gas_price.into()),
-                access_list: Some(
-                    tx.tx()
-                        .access_list
-                        .iter()
-                        .cloned()
-                        .map(ToNeon::to_neon)
-                        .collect(),
-                ),
-                chain_id: Some(tx.tx().chain_id),
-            },
-            tx => anyhow::bail!("unsupported transaction: {:?}", tx.tx_type()),
-        };
-        let chain_id = request.chain_id.context("unknown chain id")?; // FIXME
-        self.init_operator_balance(chain_id)
+        let tx = self.builder.start_execution(tx).await?;
+
+        self.init_operator_balance(tx.chain_id())
             .await
             .context("cannot init operator balance")?;
 
-        // TODO: store in ongoing transaction
-        let emulate_result = self
-            .neon_api
-            .emulate(request)
-            .await
-            .context("could not emulate transaction")?;
-
-        let tx = self
-            .builder
-            .start_execution(tx, emulate_result, chain_id)
-            .await?;
         let signature = self.sign_and_send_transaction(tx).await?;
 
         Ok(signature)
@@ -284,7 +218,7 @@ impl Executor {
 
         // TODO: follow up transactions
         let hash = tx.eth_tx().map(|tx| tx.signature_hash());
-        match self.builder.next_step(tx) {
+        match self.builder.next_step(tx).await {
             Err(err) => {
                 tracing::error!(?hash, %signature, %err, "failed executing next transaction step")
             }

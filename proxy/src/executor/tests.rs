@@ -7,9 +7,10 @@ use std::sync::Arc;
 use alloy_consensus::{SignableTransaction, TxLegacy};
 use alloy_network::TxSignerSync;
 use alloy_signer_wallet::LocalWallet;
+use alloy_sol_types::{sol, SolCall};
 use anyhow::{Context, Result};
 use jsonrpsee::core::async_trait;
-use reth_primitives::TxKind;
+use reth_primitives::{TxKind, U256};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_program_test::{ProgramTest, ProgramTestContext};
 
@@ -272,63 +273,91 @@ async fn mint_and_deposit_to_neon(
     Ok(())
 }
 
+struct ExecutorTestEnvironment {
+    test_ctx: ProgramTestContext,
+    rpc: CloneRpcClient,
+    test_kp: Wallet,
+    executor: Arc<Executor>,
+}
+
+impl ExecutorTestEnvironment {
+    async fn start() -> Result<Self> {
+        let mut ctx = ProgramTest::default();
+        ctx.prefer_bpf(true);
+        ctx.add_program("evm_loader", NEON_KEY, None);
+
+        let mut ctx = ctx.start_with_context().await;
+        init_neon(&mut ctx).await?;
+        let payer = ctx.payer.insecure_clone();
+
+        let banks_client = ctx.banks_client.clone();
+        let neon_api = NeonApi::new_with_custom_rpc_clients(
+            move |_| {
+                let rpc = BanksRpcMock(banks_client.clone());
+                RpcClient::new_sender(rpc, Default::default())
+            },
+            NEON_KEY,
+            payer.pubkey(),
+            Default::default(),
+            64,
+        );
+
+        let rpc = BanksRpcMock(ctx.banks_client.clone());
+        let solana_api = SolanaApi::with_sender(rpc);
+
+        let rpc = BanksRpcMock(ctx.banks_client.clone());
+        let rpc = RpcClient::new_sender(rpc, Default::default());
+        let rpc = CloneRpcClient {
+            rpc: Arc::new(rpc),
+            key_for_config: payer.pubkey(),
+            max_retries: 5,
+        };
+
+        let operator = Keypair::read_from_file("tests/keys/operator.json")
+            .map_err(|err| anyhow::anyhow!("{err}"))?;
+        let operator_signer = LocalWallet::from_slice(operator.secret().as_ref())?;
+        let address = operator_signer.address();
+        let ix =
+            system_instruction::transfer(&payer.pubkey(), &operator.pubkey(), 100 * 10u64.pow(9));
+        ctx.send_instructions(&[ix], &[&payer]).await?;
+        let (executor, task) = Executor::initialize_and_start(
+            neon_api.clone(),
+            solana_api,
+            NEON_KEY,
+            operator,
+            address.0 .0.into(),
+        )
+        .await
+        .context("failed initializing executor")?;
+        tokio::spawn(task);
+        executor.init_operator_balance(CHAIN_ID).await?.unwrap();
+        executor.join_current_transactions().await;
+
+        let kp = Wallet::new();
+        mint_and_deposit_to_neon(&mut ctx, &kp, 1_000).await?;
+
+        let env = Self {
+            test_ctx: ctx,
+            rpc,
+            test_kp: kp,
+            executor,
+        };
+        Ok(env)
+    }
+}
+
 #[tokio::test]
-async fn basic() -> anyhow::Result<()> {
-    let mut env = ProgramTest::default();
-    env.prefer_bpf(true);
-    env.add_program("evm_loader", NEON_KEY, None);
+async fn basic() -> Result<()> {
+    let ExecutorTestEnvironment {
+        rpc,
+        test_kp: kp1,
+        executor,
+        ..
+    } = ExecutorTestEnvironment::start().await?;
 
-    let mut env = env.start_with_context().await;
-    init_neon(&mut env).await?;
-    let payer = env.payer.insecure_clone();
-
-    let banks_client = env.banks_client.clone();
-    let neon_api = NeonApi::new_with_custom_rpc_clients(
-        move |_| {
-            let rpc = BanksRpcMock(banks_client.clone());
-            RpcClient::new_sender(rpc, Default::default())
-        },
-        NEON_KEY,
-        payer.pubkey(),
-        Default::default(),
-        64,
-    );
-
-    let rpc = BanksRpcMock(env.banks_client.clone());
-    let solana_api = SolanaApi::with_sender(rpc);
-
-    let rpc = BanksRpcMock(env.banks_client.clone());
-    let rpc = RpcClient::new_sender(rpc, Default::default());
-    let rpc = CloneRpcClient {
-        rpc: Arc::new(rpc),
-        key_for_config: payer.pubkey(),
-        max_retries: 5,
-    };
-
-    let operator = Keypair::new();
-    let operator_signer = LocalWallet::from_slice(operator.secret().as_ref())?;
-    let address = operator_signer.address();
-    let ix = system_instruction::transfer(&payer.pubkey(), &operator.pubkey(), 100 * 10u64.pow(9));
-    env.send_instructions(&[ix], &[&payer]).await?;
-    let (executor, task) = Executor::initialize_and_start(
-        neon_api.clone(),
-        solana_api,
-        NEON_KEY,
-        operator,
-        address.0 .0.into(),
-    )
-    .await
-    .context("failed initializing executor")?;
-    tokio::spawn(task);
-    executor.init_operator_balance(CHAIN_ID).await?.unwrap();
-    executor.join_current_transactions().await;
-
-    let kp1 = Wallet::new();
     let address1 = kp1.address();
     let kp2 = Wallet::new();
     let address2 = kp2.address();
-
-    mint_and_deposit_to_neon(&mut env, &kp1, 1_000).await?;
 
     // Transfer
     let balance = get_balances(&rpc, &[address1, address2]).await?;
@@ -360,49 +389,12 @@ async fn basic() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn deploy_contract() -> anyhow::Result<()> {
-    let mut env = ProgramTest::default();
-    env.prefer_bpf(true);
-    env.add_program("evm_loader", NEON_KEY, None);
-
-    let mut env = env.start_with_context().await;
-    init_neon(&mut env).await?;
-    let payer = env.payer.insecure_clone();
-
-    let banks_client = env.banks_client.clone();
-    let neon_api = NeonApi::new_with_custom_rpc_clients(
-        move |_| {
-            let rpc = BanksRpcMock(banks_client.clone());
-            RpcClient::new_sender(rpc, Default::default())
-        },
-        NEON_KEY,
-        payer.pubkey(),
-        Default::default(),
-        64,
-    );
-
-    let rpc = BanksRpcMock(env.banks_client.clone());
-    let solana_api = SolanaApi::with_sender(rpc);
-
-    let operator = Keypair::new();
-    let operator_signer = LocalWallet::from_slice(operator.secret().as_ref())?;
-    let address = operator_signer.address();
-    let ix = system_instruction::transfer(&payer.pubkey(), &operator.pubkey(), 100 * 10u64.pow(9));
-    env.send_instructions(&[ix], &[&payer]).await?;
-    let (executor, task) = Executor::initialize_and_start(
-        neon_api.clone(),
-        solana_api,
-        NEON_KEY,
-        operator,
-        address.0 .0.into(),
-    )
-    .await
-    .context("failed initializing executor")?;
-    tokio::spawn(task);
-    executor.init_operator_balance(CHAIN_ID).await?.unwrap();
-    executor.join_current_transactions().await;
-
-    let kp = Wallet::new();
-    mint_and_deposit_to_neon(&mut env, &kp, 1_000).await?;
+    let ExecutorTestEnvironment {
+        test_ctx: mut env,
+        test_kp: kp,
+        executor,
+        ..
+    } = ExecutorTestEnvironment::start().await?;
 
     let code = Contract::read("tests/fixtures/hello_world")?;
     let mut tx = code.deploy_tx();
@@ -421,6 +413,59 @@ async fn deploy_contract() -> anyhow::Result<()> {
         .await?
         .context("missing contract account")?;
     code.verify(contract_pubkey, account);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn iterations() -> anyhow::Result<()> {
+    let ExecutorTestEnvironment {
+        test_ctx: mut env,
+        test_kp: kp,
+        executor,
+        ..
+    } = ExecutorTestEnvironment::start().await?;
+
+    let code = Contract::read("tests/fixtures/Counter")?;
+    sol!(Counter, "tests/fixtures/Counter.abi");
+    let call = Counter::moreInstructionCall {
+        x: U256::from(0),
+        y: U256::from(1000),
+    }
+    .abi_encode();
+
+    let mut tx = code.deploy_tx();
+    let signature = kp.eth.sign_transaction_sync(&mut tx)?;
+    let tx = tx.into_signed(signature);
+    executor.handle_transaction(tx.into()).await?;
+
+    let txs = executor.join_current_transactions().await;
+    assert!(txs.len() > 1);
+
+    let contract_address = Address::from_create(&kp.address().0.into(), 0);
+    let (contract_pubkey, _) = contract_address.find_solana_address(&NEON_KEY);
+    let account = env
+        .banks_client
+        .get_account(contract_pubkey)
+        .await?
+        .context("missing contract account")?;
+    code.verify(contract_pubkey, account);
+
+    let mut tx = TxLegacy {
+        nonce: 1,
+        gas_price: 2,
+        gas_limit: u64::MAX.into(),
+        to: TxKind::Call(contract_address.0.into()),
+        value: eth_to_wei(0).to_reth(),
+        input: call.into(),
+        chain_id: Some(CHAIN_ID),
+    };
+    let signature = kp.eth.sign_transaction_sync(&mut tx)?;
+    let tx = tx.into_signed(signature);
+
+    executor.handle_transaction(tx.into()).await?;
+    let txs = executor.join_current_transactions().await;
+    assert!(txs.len() > 1);
 
     Ok(())
 }
@@ -465,7 +510,7 @@ impl Contract {
         TxLegacy {
             nonce: 0,
             gas_price: 2,
-            gas_limit: u128::MAX,
+            gas_limit: u64::MAX.into(),
             to: TxKind::Create,
             value: eth_to_wei(0).to_reth(),
             input: self.init.clone().into(),
