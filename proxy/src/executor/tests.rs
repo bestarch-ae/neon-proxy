@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use alloy_consensus::{SignableTransaction, TxLegacy};
 use alloy_network::TxSignerSync;
+use alloy_signer::Signature as EthSignature;
 use alloy_signer_wallet::LocalWallet;
 use alloy_sol_types::{sol, SolCall};
 use anyhow::{Context, Result};
@@ -326,6 +327,7 @@ impl ExecutorTestEnvironment {
             NEON_KEY,
             operator,
             address.0 .0.into(),
+            CHAIN_ID,
         )
         .await
         .context("failed initializing executor")?;
@@ -347,7 +349,7 @@ impl ExecutorTestEnvironment {
 }
 
 #[tokio::test]
-async fn basic() -> Result<()> {
+async fn transfer() -> Result<()> {
     let ExecutorTestEnvironment {
         rpc,
         test_kp: kp1,
@@ -366,8 +368,8 @@ async fn basic() -> Result<()> {
 
     let mut tx = TxLegacy {
         nonce: 0,
-        gas_price: 1_000_000,
-        gas_limit: u128::MAX,
+        gas_price: 2,
+        gas_limit: 2_000_000,
         to: TxKind::Call(address2.0.into()),
         value: eth_to_wei(900).to_reth(),
         input: Default::default(),
@@ -379,6 +381,50 @@ async fn basic() -> Result<()> {
 
     let txs = executor.join_current_transactions().await;
     assert_eq!(txs.len(), 1);
+
+    let balance = get_balances(&rpc, &[address1, address2]).await?;
+    assert!(balance[0].balance < eth_to_wei(100));
+    assert_eq!(balance[1].balance, eth_to_wei(900));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn transfer_no_chain_id() -> Result<()> {
+    let ExecutorTestEnvironment {
+        rpc,
+        test_kp: kp1,
+        executor,
+        ..
+    } = ExecutorTestEnvironment::start().await?;
+
+    let address1 = kp1.address();
+    let kp2 = Wallet::new();
+    let address2 = kp2.address();
+
+    // Transfer
+    let balance = get_balances(&rpc, &[address1, address2]).await?;
+    assert_eq!(balance[0].balance, eth_to_wei(1_000));
+    assert_eq!(balance[1].balance, eth_to_wei(0));
+
+    let mut tx = TxLegacy {
+        nonce: 0,
+        gas_price: 2,
+        gas_limit: 2_000,
+        to: TxKind::Call(address2.0.into()),
+        value: eth_to_wei(900).to_reth(),
+        input: Default::default(),
+        chain_id: None,
+    };
+    let signature = kp1.eth.sign_transaction_sync(&mut tx)?;
+    let v = signature.v().y_parity_byte() as u64 + 27;
+    let signature = EthSignature::from_signature_and_parity(*signature.inner(), v)?;
+
+    let tx = tx.into_signed(signature);
+    executor.handle_transaction(tx.into()).await?;
+
+    let txs = executor.join_current_transactions().await;
+    assert!(txs.len() > 1);
 
     let balance = get_balances(&rpc, &[address1, address2]).await?;
     assert!(balance[0].balance < eth_to_wei(100));

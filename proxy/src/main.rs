@@ -220,6 +220,7 @@ async fn main() {
             opts.neon_pubkey,
             operator,
             address,
+            opts.chain_id,
         )
         .await
         .expect("could not initialize executor");

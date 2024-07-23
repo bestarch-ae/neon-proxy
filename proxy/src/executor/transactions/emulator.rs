@@ -253,3 +253,11 @@ pub fn get_neon_emulate_request(tx: &TxEnvelope) -> anyhow::Result<TxParams> {
 
     Ok(request)
 }
+
+pub fn get_chain_id(tx: &TxEnvelope) -> Option<u64> {
+    match &tx {
+        TxEnvelope::Legacy(tx) => tx.tx().chain_id,
+        TxEnvelope::Eip2930(tx) => Some(tx.tx().chain_id),
+        _ => None,
+    }
+}
