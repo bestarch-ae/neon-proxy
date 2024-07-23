@@ -1,5 +1,6 @@
 mod gas_limit_calculator;
 
+use std::borrow::Borrow;
 use std::sync::Arc;
 
 use jsonrpsee::types::ErrorCode;
@@ -376,11 +377,11 @@ impl NeonApi {
     pub async fn simulate(
         &self,
         config: SimulateConfig,
-        txs: &[Transaction],
+        txs: &[impl Borrow<Transaction>],
     ) -> Result<Vec<SimulateSolanaTransactionResult>, NeonApiError> {
         let transactions = txs
             .iter()
-            .map(|tx| bincode::serialize(&tx))
+            .map(|tx| bincode::serialize(tx.borrow()))
             .collect::<Result<_, _>>()?;
         let (tx, rx) = oneshot::channel();
         let request = SimulateSolanaRequest {
