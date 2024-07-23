@@ -79,15 +79,19 @@ impl BlockRepo {
         };
         sqlx::query_as!(
             BlockRow,
-            r#"SELECT
-                block_slot as "block_slot!",
-                block_hash as "block_hash!: PgSolanaBlockHash",
-                block_time as "block_time!",
-                parent_block_slot as "parent_block_slot!",
-                parent_block_hash as "parent_block_hash!: PgSolanaBlockHash", 
-                is_finalized
-               FROM solana_blocks
-               WHERE (block_slot = $1 OR $2) AND (block_hash = $3 OR $4)
+            r#"WITH
+                current_block_slot AS
+                (SELECT block_slot FROM solana_blocks WHERE (block_slot = $1 OR $2) AND (block_hash = $3 OR $4))
+               SELECT
+                L.block_slot as "block_slot!",
+                L.block_hash as "block_hash!: PgSolanaBlockHash",
+                L.block_time as "block_time!",
+                R.block_slot as "parent_block_slot!",
+                R.block_hash as "parent_block_hash!: PgSolanaBlockHash",
+                L.is_finalized
+               FROM solana_blocks L
+               LEFT JOIN solana_blocks R ON R.block_slot = L.block_slot - 1
+               WHERE L.block_slot in (select block_slot from current_block_slot);
             "#,
             slot.unwrap_or(0),
             slot.is_none(),

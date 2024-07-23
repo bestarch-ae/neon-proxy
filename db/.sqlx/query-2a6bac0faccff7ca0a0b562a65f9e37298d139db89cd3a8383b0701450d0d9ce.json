@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT\n                block_slot as \"block_slot!\",\n                block_hash as \"block_hash!: PgSolanaBlockHash\",\n                block_time as \"block_time!\",\n                parent_block_slot as \"parent_block_slot!\",\n                parent_block_hash as \"parent_block_hash!: PgSolanaBlockHash\", \n                is_finalized\n               FROM solana_blocks\n               WHERE (block_slot = $1 OR $2) AND (block_hash = $3 OR $4)\n            ",
+  "query": "WITH\n                current_block_slot AS\n                (SELECT block_slot FROM solana_blocks WHERE (block_slot = $1 OR $2) AND (block_hash = $3 OR $4))\n               SELECT\n                L.block_slot as \"block_slot!\",\n                L.block_hash as \"block_hash!: PgSolanaBlockHash\",\n                L.block_time as \"block_time!\",\n                R.block_slot as \"parent_block_slot!\",\n                R.block_hash as \"parent_block_hash!: PgSolanaBlockHash\",\n                L.is_finalized\n               FROM solana_blocks L\n               LEFT JOIN solana_blocks R ON R.block_slot = L.block_slot - 1\n               WHERE L.block_slot in (select block_slot from current_block_slot);\n            ",
   "describe": {
     "columns": [
       {
@@ -51,5 +51,5 @@
       false
     ]
   },
-  "hash": "9693e44fd9433dcf92bddad78ce47f3506bf07c16cc397d238bf7f68fde39dc8"
+  "hash": "2a6bac0faccff7ca0a0b562a65f9e37298d139db89cd3a8383b0701450d0d9ce"
 }
