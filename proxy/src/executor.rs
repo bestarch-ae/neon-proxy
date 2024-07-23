@@ -43,9 +43,17 @@ impl Executor {
         neon_pubkey: Pubkey,
         operator: Keypair,
         operator_addr: Address, // TODO: derive from keypair
+        default_chain_id: u64,
     ) -> anyhow::Result<(Arc<Self>, impl Future<Output = anyhow::Result<()>>)> {
-        let this =
-            Self::initialize(neon_api, solana_api, neon_pubkey, operator, operator_addr).await?;
+        let this = Self::initialize(
+            neon_api,
+            solana_api,
+            neon_pubkey,
+            operator,
+            operator_addr,
+            default_chain_id,
+        )
+        .await?;
         let this = Arc::new(this);
         let this_to_run = this.clone();
         Ok((this, this_to_run.run()))
@@ -57,6 +65,7 @@ impl Executor {
         neon_pubkey: Pubkey,
         operator: Keypair,
         operator_addr: Address,
+        default_chain_id: u64,
     ) -> anyhow::Result<Self> {
         let notify = Notify::new();
 
@@ -66,6 +75,7 @@ impl Executor {
             neon_api.clone(),
             operator,
             operator_addr,
+            default_chain_id,
         )
         .await?;
 
@@ -84,7 +94,7 @@ impl Executor {
     pub async fn handle_transaction(&self, tx: TxEnvelope) -> anyhow::Result<Signature> {
         let tx = self.builder.start_execution(tx).await?;
 
-        self.init_operator_balance(tx.chain_id())
+        self.init_operator_balance(tx.chain_id().unwrap_or(self.builder.default_chain_id()))
             .await
             .context("cannot init operator balance")?;
 

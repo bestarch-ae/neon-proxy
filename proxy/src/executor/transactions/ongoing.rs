@@ -8,7 +8,7 @@ use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Keypair;
 use common::solana_sdk::transaction::Transaction;
 
-use super::emulator::IterInfo;
+use super::emulator::{get_chain_id, IterInfo};
 use super::HolderInfo;
 
 #[derive(Debug)]
@@ -44,11 +44,10 @@ pub(super) enum TxStage {
 }
 
 impl TxStage {
-    pub fn ongoing(self, ixs: &[Instruction], payer: &Pubkey, chain_id: u64) -> OngoingTransaction {
+    pub fn ongoing(self, ixs: &[Instruction], payer: &Pubkey) -> OngoingTransaction {
         OngoingTransaction {
             stage: self,
             tx: Transaction::new_with_payer(ixs, Some(payer)),
-            chain_id,
         }
     }
 
@@ -97,7 +96,6 @@ impl TxStage {
 pub struct OngoingTransaction {
     stage: TxStage,
     tx: Transaction,
-    chain_id: u64,
 }
 
 impl OngoingTransaction {
@@ -120,8 +118,23 @@ impl OngoingTransaction {
         &self.tx.message.recent_blockhash // TODO: None if default?
     }
 
-    pub fn chain_id(&self) -> u64 {
-        self.chain_id
+    pub fn chain_id(&self) -> Option<u64> {
+        match self.stage {
+            TxStage::IterativeExecution {
+                tx_data: TxData {
+                    envelope: ref tx, ..
+                },
+                ..
+            }
+            | TxStage::HolderFill { ref tx, .. }
+            | TxStage::SingleExecution {
+                tx_data: TxData {
+                    envelope: ref tx, ..
+                },
+                ..
+            } => get_chain_id(tx),
+            _ => None,
+        }
     }
 
     pub fn sign(&mut self, signers: &[&Keypair], blockhash: Hash) -> anyhow::Result<&Transaction> {
@@ -131,7 +144,7 @@ impl OngoingTransaction {
         Ok(&self.tx)
     }
 
-    pub(super) fn disassemble(self) -> (TxStage, u64) {
-        (self.stage, self.chain_id)
+    pub(super) fn disassemble(self) -> TxStage {
+        self.stage
     }
 }
