@@ -21,8 +21,8 @@ pub enum Error {
     InvalidBase64Slice(#[from] base64::DecodeSliceError),
     #[error("Invalid utf8")]
     InvalidUtf8(#[from] Utf8Error),
-    #[error("Invalid mnemonic")]
-    InvalidMnemonic(#[from] BadMnemonic),
+    #[error("Unknown mnemonic")]
+    UnknownMnemonic(#[from] BadMnemonic),
     #[error("Invalid event")]
     InvalidEvent,
     #[error("Invalid hash")]
@@ -430,7 +430,14 @@ pub fn parse(
 
         if inside_neon && neon_depth == invoke_depth && line.starts_with("Program data: ") {
             let line = line.strip_prefix("Program data: ").unwrap();
-            let (mnemonic, rest) = parse_mnemonic(line)?;
+            let (mnemonic, rest) = match parse_mnemonic(line) {
+                Ok((mnemonic, rest)) => (mnemonic, rest),
+                Err(Error::UnknownMnemonic(_)) => {
+                    tracing::warn!(%line, "skipped unknown mnemonic in log");
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             tracing::debug!(?mnemonic, "parsing mnemonic");
             let rest = mnemonic
                 .requires_arg()
