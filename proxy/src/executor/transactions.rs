@@ -1,3 +1,4 @@
+mod alt;
 mod emulator;
 mod holder;
 mod ongoing;
@@ -31,11 +32,12 @@ use solana_api::solana_api::SolanaApi;
 use crate::executor::transactions::emulator::get_neon_emulate_request;
 use crate::neon_api::NeonApi;
 
-use self::emulator::get_chain_id;
+use self::alt::AltInfo;
+use self::emulator::{get_chain_id, Emulator, IterInfo};
 use self::holder::HolderInfo;
-pub use self::ongoing::OngoingTransaction;
 use self::ongoing::{TxData, TxStage};
-use emulator::{Emulator, IterInfo};
+
+pub use self::ongoing::OngoingTransaction;
 
 const CU_IX_SIZE: usize = compiled_ix_size(0, 5 /* serialized data length */);
 // Taken from neon-proxy.py
@@ -204,12 +206,37 @@ impl TransactionBuilder {
             TxStage::HolderFill { info, tx: envelope } => {
                 Ok(Some(self.fill_holder(info, envelope)))
             }
+            TxStage::AltFill {
+                info,
+                tx_data,
+                holder: Some(holder),
+            } if info.is_empty() => self
+                .execute_from_holder_emulated(holder, tx_data, Some(info))
+                .await
+                .map(Some),
+            TxStage::AltFill {
+                info,
+                tx_data,
+                holder: None,
+            } if info.is_empty() => {
+                let chain_id = get_chain_id(&tx_data.envelope)
+                    .context("empty chain id in emulated from_data alt transaction")?;
+                self.execute_from_data_emulated(tx_data, chain_id, Some(info))
+                    .await
+                    .map(Some)
+            }
+            TxStage::AltFill {
+                info,
+                tx_data,
+                holder,
+            } => self.fill_alt(info, tx_data, holder).map(Some),
             TxStage::IterativeExecution {
                 tx_data,
                 holder,
                 iter_info,
+                alt,
                 from_data,
-            } => self.step(iter_info, tx_data, holder, from_data).await,
+            } => self.step(iter_info, tx_data, holder, from_data, alt).await,
             // Single iteration stuff
             TxStage::SingleExecution { .. } | TxStage::Operational => Ok(None),
         }
@@ -231,10 +258,28 @@ impl TransactionBuilder {
     ) -> anyhow::Result<OngoingTransaction> {
         let emulate = self.emulator.emulate(&tx).await?;
         let tx_data = TxData::new(tx, emulate);
+        if Self::from_data_tx_len(
+            tx_data.envelope.length(),
+            tx_data.emulate.solana_accounts.len(),
+        ) > PACKET_DATA_SIZE
+        {
+            self.start_from_alt(tx_data, None).await
+        } else {
+            self.execute_from_data_emulated(tx_data, chain_id, None)
+                .await
+        }
+    }
+
+    async fn execute_from_data_emulated(
+        &self,
+        tx_data: TxData,
+        chain_id: u64,
+        alt: Option<AltInfo>,
+    ) -> anyhow::Result<OngoingTransaction> {
         let fallback_iterative =
-            |tx_data| async move { self.empty_holder_for_iterative_data(tx_data).await };
+            |tx_data, alt| async move { self.empty_holder_for_iterative_data(tx_data, alt).await };
         if self.emulator.needs_iterative_execution(&tx_data.emulate) {
-            return fallback_iterative(tx_data).await;
+            return fallback_iterative(tx_data, alt).await;
         }
 
         let (accounts, mut data) = self.execute_base(
@@ -260,10 +305,10 @@ impl TransactionBuilder {
             .check_single_execution(tx_data.envelope.tx_hash(), &ixs)
             .await?
         {
-            return fallback_iterative(tx_data).await;
+            return fallback_iterative(tx_data, alt).await;
         }
 
-        Ok(TxStage::execute_data(tx_data).ongoing(&ixs, &self.pubkey()))
+        self.build_ongoing(TxStage::execute_data(tx_data), &ixs, alt)
     }
 
     /// Creates empty holder account to be used during iterative execution.
@@ -271,31 +316,17 @@ impl TransactionBuilder {
     async fn empty_holder_for_iterative_data(
         &self,
         tx_data: TxData,
+        alt: Option<AltInfo>,
     ) -> anyhow::Result<OngoingTransaction> {
         let holder = self.new_holder_info(None)?;
         let ixs = self.create_holder(&holder).await?;
-        let tx = TxStage::step_data(*holder.pubkey(), tx_data, None).ongoing(&ixs, &self.pubkey());
+        let tx =
+            TxStage::step_data(*holder.pubkey(), tx_data, None, alt).ongoing(&ixs, &self.pubkey());
         Ok(tx)
     }
 
     fn from_data_tx_len(tx_len: usize, add_accounts_len: usize) -> usize {
-        // Operator
-        // Treasury Pool
-        // Operator Balance
-        // System Program
-        // NEON EVM Program
-        // Compute Budget Program
-        const BASE_ACCOUNTS: usize = 6;
-        const BASE_DATA: usize = TransactionBuilder::NO_STEP_END_IDX;
-
-        serialized_tx_length(
-            [
-                CU_IX_SIZE,
-                CU_IX_SIZE,
-                compiled_ix_size(BASE_ACCOUNTS, BASE_DATA + tx_len),
-            ],
-            BASE_ACCOUNTS + add_accounts_len,
-        )
+        Self::tx_len_estimate(tx_len, add_accounts_len)
     }
 }
 
@@ -331,18 +362,34 @@ impl TransactionBuilder {
         tx: TxEnvelope,
     ) -> anyhow::Result<OngoingTransaction> {
         let emulate = self.emulator.emulate(&tx).await?;
-        let chain_id = get_chain_id(&tx);
         let tx_data = TxData::new(tx, emulate);
+        if Self::from_holder_tx_len(tx_data.emulate.solana_accounts.len()) > PACKET_DATA_SIZE {
+            self.start_from_alt(tx_data, Some(holder)).await
+        } else {
+            self.execute_from_holder_emulated(holder, tx_data, None)
+                .await
+        }
+    }
 
-        let fallback_to_iterative = |tx_data, holder| async move {
-            self.step(None, tx_data, holder, false)
+    async fn execute_from_holder_emulated(
+        &self,
+        holder: HolderInfo,
+        tx_data: TxData,
+        alt: Option<AltInfo>,
+    ) -> anyhow::Result<OngoingTransaction> {
+        let chain_id = get_chain_id(&tx_data.envelope);
+
+        let fallback_to_iterative = |tx_data, holder, alt| async move {
+            self.step(None, tx_data, holder, false, alt)
                 .await
                 .transpose()
                 .expect("must be some")
         };
         let needs_iterative = self.emulator.needs_iterative_execution(&tx_data.emulate);
         let chain_id = match (chain_id, needs_iterative) {
-            (None, _) | (_, true) => return fallback_to_iterative(tx_data, *holder.pubkey()).await,
+            (None, _) | (_, true) => {
+                return fallback_to_iterative(tx_data, *holder.pubkey(), alt).await
+            }
             (Some(chain_id), false) => chain_id,
         };
 
@@ -366,32 +413,15 @@ impl TransactionBuilder {
             .check_single_execution(tx_data.envelope.tx_hash(), &ixs)
             .await?
         {
-            return fallback_to_iterative(tx_data, *holder.pubkey()).await;
+            return fallback_to_iterative(tx_data, *holder.pubkey(), alt).await;
         }
 
         let stage = TxStage::execute_holder(*holder.pubkey(), tx_data);
-        Ok(stage.ongoing(&ixs, &self.pubkey()))
+        self.build_ongoing(stage, &ixs, alt)
     }
 
     fn from_holder_tx_len(add_accounts_len: usize) -> usize {
-        // Holder
-        // Operator
-        // Treasury Pool
-        // Operator Balance
-        // System Program
-        // NEON EVM Program
-        // Compute Budget Program
-        const BASE_ACCOUNTS: usize = 7;
-        const BASE_DATA: usize = TransactionBuilder::NO_STEP_END_IDX;
-
-        serialized_tx_length(
-            [
-                CU_IX_SIZE,
-                CU_IX_SIZE,
-                compiled_ix_size(BASE_ACCOUNTS, BASE_DATA),
-            ],
-            BASE_ACCOUNTS + add_accounts_len,
-        )
+        Self::tx_len_estimate(0, add_accounts_len)
     }
 }
 
@@ -407,6 +437,7 @@ impl TransactionBuilder {
         tx_data: TxData,
         holder: Pubkey,
         from_data: bool,
+        alt: Option<AltInfo>,
     ) -> anyhow::Result<Option<OngoingTransaction>> {
         let chain_id = get_chain_id(&tx_data.envelope);
         let mut iter_info = match iter_info {
@@ -435,14 +466,15 @@ impl TransactionBuilder {
         let ix = self.build_step(&mut iter_info, &tx_data, holder, from_data, chain_id)?;
         let cu_limit = iter_info.cu_limit();
         let stage = match (from_data, chain_id) {
-            (true, Some(_)) => TxStage::step_data(holder, tx_data, Some(iter_info)),
-            (false, Some(_)) | (false, None) => TxStage::step_holder(holder, tx_data, iter_info),
+            (true, Some(_)) => TxStage::step_data(holder, tx_data, Some(iter_info), alt.clone()),
+            (false, Some(_)) | (false, None) => {
+                TxStage::step_holder(holder, tx_data, iter_info, alt.clone())
+            }
             (true, None) => unreachable!("would have failed earlier"),
         };
 
-        Ok(Some(
-            stage.ongoing(&with_budget(ix, cu_limit), &self.pubkey()),
-        ))
+        self.build_ongoing(stage, &with_budget(ix, cu_limit), alt.clone())
+            .map(Some)
     }
 
     fn build_step(
@@ -482,31 +514,6 @@ impl TransactionBuilder {
         };
 
         Ok(ix)
-    }
-
-    fn step_holder_tx_len(add_accounts_len: usize) -> usize {
-        TransactionBuilder::step_from_data_tx_len(0, add_accounts_len)
-    }
-
-    fn step_from_data_tx_len(tx_len: usize, add_accounts_len: usize) -> usize {
-        // Holder
-        // Operator
-        // Treasury Pool
-        // Operator Balance
-        // System Program
-        // NEON EVM Program
-        // Compute Budget Program
-        const BASE_ACCOUNTS: usize = 7;
-        const BASE_DATA: usize = TransactionBuilder::STEP_END_IDX;
-
-        serialized_tx_length(
-            [
-                CU_IX_SIZE,
-                CU_IX_SIZE,
-                compiled_ix_size(BASE_ACCOUNTS, BASE_DATA + tx_len),
-            ],
-            BASE_ACCOUNTS + add_accounts_len,
-        )
     }
 }
 
@@ -568,6 +575,41 @@ impl TransactionBuilder {
         }
 
         Ok((accounts, data))
+    }
+
+    fn tx_len_estimate(tx_len: usize, add_accounts_len: usize) -> usize {
+        // Holder
+        // Operator
+        // Treasury Pool
+        // Operator Balance
+        // System Program
+        // NEON EVM Program
+        // Compute Budget Program
+        const BASE_ACCOUNTS: usize = 7;
+        // Use STEP_END for a more conservative estimate that remains valid
+        // for both single and iterative execution models
+        const BASE_DATA: usize = TransactionBuilder::STEP_END_IDX;
+
+        serialized_tx_length(
+            [
+                CU_IX_SIZE,
+                CU_IX_SIZE,
+                compiled_ix_size(BASE_ACCOUNTS, BASE_DATA + tx_len),
+            ],
+            BASE_ACCOUNTS + add_accounts_len,
+        )
+    }
+
+    fn build_ongoing(
+        &self,
+        stage: TxStage,
+        ixs: &[Instruction],
+        alt: Option<AltInfo>,
+    ) -> anyhow::Result<OngoingTransaction> {
+        Ok(match alt {
+            Some(alt) => stage.ongoing_alt(ixs, &self.pubkey(), alt.into_account())?,
+            None => stage.ongoing(ixs, &self.pubkey()),
+        })
     }
 }
 

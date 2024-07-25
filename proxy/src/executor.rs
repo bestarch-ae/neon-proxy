@@ -107,7 +107,6 @@ impl Executor {
     /// The only method in this module that can call `send_transaction`
     /// or insert into `pending_transactions` map.
     async fn sign_and_send_transaction(&self, tx: OngoingTransaction) -> anyhow::Result<Signature> {
-        let mut tx = tx;
         let blockhash = self
             .solana_api
             .get_recent_blockhash()
@@ -119,7 +118,7 @@ impl Executor {
 
         let signature = self
             .solana_api
-            .send_transaction(sol_tx)
+            .send_transaction(&sol_tx)
             .await
             .context("could not send transaction")?;
 
