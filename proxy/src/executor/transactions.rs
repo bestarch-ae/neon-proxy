@@ -17,10 +17,12 @@ use common::neon_instruction::tag;
 use common::neon_lib::commands::emulate::SolanaAccount as NeonSolanaAccount;
 use common::neon_lib::types::Address;
 use common::solana_sdk::compute_budget::ComputeBudgetInstruction;
+use common::solana_sdk::hash::HASH_BYTES;
 use common::solana_sdk::instruction::{AccountMeta, Instruction};
+use common::solana_sdk::message::MESSAGE_HEADER_LENGTH;
 use common::solana_sdk::packet::PACKET_DATA_SIZE;
-use common::solana_sdk::pubkey::Pubkey;
-use common::solana_sdk::signature::Keypair;
+use common::solana_sdk::pubkey::{Pubkey, PUBKEY_BYTES};
+use common::solana_sdk::signature::{Keypair, SIGNATURE_BYTES};
 use common::solana_sdk::signer::Signer;
 use common::solana_sdk::system_program;
 use common::solana_sdk::transaction::Transaction;
@@ -35,6 +37,7 @@ pub use self::ongoing::OngoingTransaction;
 use self::ongoing::{TxData, TxStage};
 use emulator::{Emulator, IterInfo};
 
+const CU_IX_SIZE: usize = compiled_ix_size(0, 5 /* serialized data length */);
 // Taken from neon-proxy.py
 const MAX_HEAP_SIZE: u32 = 256 * 1024;
 const MAX_COMPUTE_UNITS: u32 = 1_400_000;
@@ -274,6 +277,26 @@ impl TransactionBuilder {
         let tx = TxStage::step_data(*holder.pubkey(), tx_data, None).ongoing(&ixs, &self.pubkey());
         Ok(tx)
     }
+
+    fn from_data_tx_len(tx_len: usize, add_accounts_len: usize) -> usize {
+        // Operator
+        // Treasury Pool
+        // Operator Balance
+        // System Program
+        // NEON EVM Program
+        // Compute Budget Program
+        const BASE_ACCOUNTS: usize = 6;
+        const BASE_DATA: usize = TransactionBuilder::NO_STEP_END_IDX;
+
+        serialized_tx_length(
+            [
+                CU_IX_SIZE,
+                CU_IX_SIZE,
+                compiled_ix_size(BASE_ACCOUNTS, BASE_DATA + tx_len),
+            ],
+            BASE_ACCOUNTS + add_accounts_len,
+        )
+    }
 }
 
 /// ## Execution from holder.
@@ -348,6 +371,27 @@ impl TransactionBuilder {
 
         let stage = TxStage::execute_holder(*holder.pubkey(), tx_data);
         Ok(stage.ongoing(&ixs, &self.pubkey()))
+    }
+
+    fn from_holder_tx_len(add_accounts_len: usize) -> usize {
+        // Holder
+        // Operator
+        // Treasury Pool
+        // Operator Balance
+        // System Program
+        // NEON EVM Program
+        // Compute Budget Program
+        const BASE_ACCOUNTS: usize = 7;
+        const BASE_DATA: usize = TransactionBuilder::NO_STEP_END_IDX;
+
+        serialized_tx_length(
+            [
+                CU_IX_SIZE,
+                CU_IX_SIZE,
+                compiled_ix_size(BASE_ACCOUNTS, BASE_DATA),
+            ],
+            BASE_ACCOUNTS + add_accounts_len,
+        )
     }
 }
 
@@ -439,10 +483,45 @@ impl TransactionBuilder {
 
         Ok(ix)
     }
+
+    fn step_holder_tx_len(add_accounts_len: usize) -> usize {
+        TransactionBuilder::step_from_data_tx_len(0, add_accounts_len)
+    }
+
+    fn step_from_data_tx_len(tx_len: usize, add_accounts_len: usize) -> usize {
+        // Holder
+        // Operator
+        // Treasury Pool
+        // Operator Balance
+        // System Program
+        // NEON EVM Program
+        // Compute Budget Program
+        const BASE_ACCOUNTS: usize = 7;
+        const BASE_DATA: usize = TransactionBuilder::STEP_END_IDX;
+
+        serialized_tx_length(
+            [
+                CU_IX_SIZE,
+                CU_IX_SIZE,
+                compiled_ix_size(BASE_ACCOUNTS, BASE_DATA + tx_len),
+            ],
+            BASE_ACCOUNTS + add_accounts_len,
+        )
+    }
 }
 
 /// ## Common Logic.
 impl TransactionBuilder {
+    // Common data
+    const TAG_IDX: usize = 0;
+    const TREASURY_IDX_IDX: usize = Self::TAG_IDX + mem::size_of::<u8>();
+    // Step data
+    const STEP_COUNT_IDX: usize = Self::TREASURY_IDX_IDX + mem::size_of::<u32>();
+    const UNIQ_IDX_IDX: usize = Self::STEP_COUNT_IDX + mem::size_of::<u32>();
+    const STEP_END_IDX: usize = Self::UNIQ_IDX_IDX + mem::size_of::<u32>();
+    // No Step
+    const NO_STEP_END_IDX: usize = Self::STEP_COUNT_IDX;
+
     /// Prepare common instruction data and account list for a `TransactionStep`/`TransactionExecute`
     /// NEON EVM instructions.
     fn execute_base(
@@ -473,21 +552,19 @@ impl TransactionBuilder {
             is_signer: false,
         }));
 
-        // Common data
-        const TAG_IDX: usize = 0;
-        const TREASURY_IDX_IDX: usize = TAG_IDX + mem::size_of::<u8>();
-        const STEP_COUNT_IDX: usize = TREASURY_IDX_IDX + mem::size_of::<u32>();
-        // Step data
-        const UNIQ_IDX_IDX: usize = STEP_COUNT_IDX + mem::size_of::<u32>();
-        const END_IDX: usize = UNIQ_IDX_IDX + mem::size_of::<u32>();
-        let mut data = vec![0; iter_info.as_ref().map_or(STEP_COUNT_IDX, |_| END_IDX)];
+        let data_len = iter_info
+            .as_ref()
+            .map_or(Self::NO_STEP_END_IDX, |_| Self::STEP_END_IDX);
+        let mut data = vec![0; data_len];
 
-        data[TAG_IDX] = tag;
-        data[TREASURY_IDX_IDX..STEP_COUNT_IDX].copy_from_slice(&treasury_pool_idx.to_le_bytes());
+        data[Self::TAG_IDX] = tag;
+        data[Self::TREASURY_IDX_IDX..Self::STEP_COUNT_IDX]
+            .copy_from_slice(&treasury_pool_idx.to_le_bytes());
         if let Some(iter_info) = iter_info {
-            data[STEP_COUNT_IDX..UNIQ_IDX_IDX]
+            data[Self::STEP_COUNT_IDX..Self::UNIQ_IDX_IDX]
                 .copy_from_slice(&iter_info.step_count().to_le_bytes());
-            data[UNIQ_IDX_IDX..END_IDX].copy_from_slice(&iter_info.next_idx().to_le_bytes());
+            data[Self::UNIQ_IDX_IDX..Self::STEP_END_IDX]
+                .copy_from_slice(&iter_info.next_idx().to_le_bytes());
         }
 
         Ok((accounts, data))
@@ -499,4 +576,40 @@ fn with_budget(ix: Instruction, cu_limit: u32) -> [Instruction; 3] {
     let heap = ComputeBudgetInstruction::request_heap_frame(MAX_HEAP_SIZE);
 
     [cu, heap, ix]
+}
+
+/// Serialized compact u16 length in bytes
+const fn compact_u16_len(value: u16) -> usize {
+    match value {
+        0..=0x7f => 1,
+        0x80..=0x3fff => 2,
+        0x4000.. => 3, // Extremely unlikely
+    }
+}
+
+const fn serialized_tx_length<const N: usize>(ixs_lens: [usize; N], accounts_len: usize) -> usize {
+    let mut ix_sum = 0;
+    let mut idx = 0;
+    while idx < N {
+        ix_sum += ixs_lens[idx];
+        idx += 1;
+    }
+
+    1 // Sig array size is always `1` that is serialized as single byte (See compact U16) 
+        + SIGNATURE_BYTES                      // We always have only one solana signature
+        + MESSAGE_HEADER_LENGTH                // Message header
+        + compact_u16_len(accounts_len as u16) // Account array length (See compact U16)
+        + accounts_len * PUBKEY_BYTES          // Account keys
+        + HASH_BYTES                           // Recent Blockhash
+        + compact_u16_len(N as u16)            // Ixs array length
+        + ix_sum // Sum instruction data size
+}
+
+#[allow(clippy::identity_op)]
+const fn compiled_ix_size(accounts_len: usize, data_len: usize) -> usize {
+    1 // Program Id index
+    + compact_u16_len(accounts_len as u16) // Account Info array len
+    + accounts_len * 1                     // Account Info indice
+    + compact_u16_len(data_len as u16)     // Data array len
+    + data_len // Data
 }
