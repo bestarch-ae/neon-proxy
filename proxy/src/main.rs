@@ -1,12 +1,23 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::error::Error as StdError;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use clap::{ArgGroup, Parser};
-
+use futures_util::TryFutureExt;
+use hyper::body::HttpBody;
+use hyper::{Body, Request, Response};
+use jsonrpsee::server::Server;
 use jsonrpsee::types::ErrorCode;
+use jsonrpsee::RpcModule;
 use rpc_api::{EthApiServer, EthFilterApiServer};
+use serde_json::Value;
 use thiserror::Error;
+use tower::{Layer, Service};
 
 mod convert;
 mod executor;
@@ -18,6 +29,7 @@ use common::neon_lib::types::ChDbConfig;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Keypair;
 use common::solana_sdk::signer::EncodableKey;
+
 use executor::Executor;
 use neon_api::NeonApi;
 use rpc::{EthApiImpl, NeonEthApiServer, NeonFilterApiServer};
@@ -149,7 +161,7 @@ async fn main() {
     tracing::info!(
         neon_pubkey = %opts.neon_pubkey,
         neon_config = %opts.neon_config_pubkey,
-        chain_id = opts.chain_id,
+        default_token = opts.default_token_name,
         "starting"
     );
 
@@ -161,13 +173,34 @@ async fn main() {
     };
 
     tracing::info!(%opts.neon_pubkey, %opts.neon_config_pubkey, "starting");
-    let solana = NeonApi::new(
+    let neon_api = NeonApi::new(
         opts.solana_url.clone(),
         opts.neon_pubkey,
         opts.neon_config_pubkey,
         tracer_db_config,
         opts.max_tx_account_count,
     );
+
+    let config = neon_api
+        .get_config()
+        .await
+        .expect("failed to get EVM config");
+    let default_token_name = opts.default_token_name.to_lowercase();
+    let default_chain_id = config
+        .chains
+        .iter()
+        .find(|c| c.name == default_token_name)
+        .expect("default chain not found")
+        .id;
+    tracing::info!(%default_chain_id, %default_token_name, "default chain");
+    let additional_chains = config
+        .chains
+        .iter()
+        .filter(|&c| (c.id != default_chain_id))
+        .map(|c| (c.name.to_lowercase(), c.id))
+        .collect::<HashMap<_, _>>();
+    tracing::info!(?additional_chains, "additional chains");
+
     let pyth_symbology = if let Some(path) = opts.symbology_path.as_ref() {
         tracing::info!(?path, "loading symbology");
         let raw = std::fs::read_to_string(path).expect("failed to read symbology");
@@ -201,22 +234,82 @@ async fn main() {
     };
     let mp_gas_prices = mempool::GasPrices::try_new(
         gas_prices_config,
-        solana.clone(),
+        neon_api.clone(),
         pyth_symbology,
         mp_gas_calculator_config,
     )
     .expect("failed to create gas prices");
 
-    let executor = if let Some(path) = opts.executor.operator_keypair {
+    let default_executor = create_and_run_executor(
+        &neon_api,
+        &opts.solana_url,
+        opts.neon_pubkey,
+        default_chain_id,
+        &opts.executor,
+    )
+    .await;
+    let eth = EthApiImpl::new(
+        pool.clone(),
+        neon_api.clone(),
+        default_chain_id,
+        default_executor,
+        mp_gas_prices.clone(),
+    );
+    let mut other_tokens = HashSet::new();
+    let mut module = build_module(eth.clone(), None);
+    for (token_name, &chain_id) in additional_chains.iter() {
+        tracing::info!(%token_name, %chain_id, "adding chain");
+        let executor = create_and_run_executor(
+            &neon_api,
+            &opts.solana_url,
+            opts.neon_pubkey,
+            chain_id,
+            &opts.executor,
+        )
+        .await;
+        let new_eth = EthApiImpl::new(
+            pool.clone(),
+            neon_api.clone(),
+            chain_id,
+            executor,
+            mp_gas_prices.clone(),
+        );
+        let new_module = build_module(new_eth, Some(token_name));
+        module.merge(new_module).expect("no conflicts");
+        other_tokens.insert(token_name.clone());
+    }
+
+    let service_builder =
+        tower::ServiceBuilder::new().layer(ProxyTokenRequestLayer::new(other_tokens));
+
+    let server = Server::builder()
+        .set_http_middleware(service_builder)
+        .build(&opts.listen)
+        .await
+        .unwrap();
+
+    tracing::info!("Listening on {}", opts.listen);
+    let handle = server.start(module);
+    handle.stopped().await;
+}
+
+async fn create_and_run_executor(
+    neon_api: &NeonApi,
+    solana_url: &str,
+    neon_pubkey: Pubkey,
+    chain_id: u64,
+    executor_config: &executor::Config,
+) -> Option<Arc<Executor>> {
+    if let Some(path) = &executor_config.operator_keypair {
         let operator = Keypair::read_from_file(path).expect("cannot read operator keypair");
         let (executor, executor_task) = Executor::initialize_and_start(
-            solana.clone(),
-            SolanaApi::new(opts.solana_url, false),
-            opts.neon_pubkey,
+            neon_api.clone(),
+            SolanaApi::new(solana_url, false),
+            neon_pubkey,
             operator,
-            opts.executor.operator_address,
-            opts.chain_id,
-            opts.executor.init_operator_balance,
+            executor_config.operator_address,
+            chain_id,
+            executor_config.init_operator_balance,
         )
         .await
         .expect("could not initialize executor");
@@ -224,14 +317,15 @@ async fn main() {
         Some(executor)
     } else {
         None
-    };
+    }
+}
 
-    let eth = EthApiImpl::new(pool, solana, opts.chain_id, executor, mp_gas_prices);
-    let mut module = jsonrpsee::server::RpcModule::new(());
+fn build_module(eth: EthApiImpl, prefix: Option<&str>) -> RpcModule<()> {
+    let mut module = RpcModule::new(());
+
     module
         .merge(<EthApiImpl as EthApiServer>::into_rpc(eth.clone()))
         .expect("no conflicts");
-
     module.remove_method("eth_getTransactionReceipt");
 
     module
@@ -241,17 +335,133 @@ async fn main() {
     module
         .merge(<EthApiImpl as EthFilterApiServer>::into_rpc(eth.clone()))
         .expect("no conflicts");
-
     module.remove_method("eth_getLogs");
+
     module
         .merge(<EthApiImpl as NeonFilterApiServer>::into_rpc(eth.clone()))
         .expect("no conflicts");
 
-    let server = jsonrpsee::server::Server::builder()
-        .build(&opts.listen)
-        .await
-        .unwrap();
-    tracing::info!("Listening on {}", opts.listen);
-    let handle = server.start(module);
-    handle.stopped().await;
+    if let Some(prefix) = prefix {
+        rename_methods(&mut module, prefix);
+    }
+
+    module
+}
+
+fn rename_methods<T: Send + Sync + 'static>(module: &mut RpcModule<T>, prefix: &str) {
+    let method_names = module.method_names().collect::<Vec<_>>();
+    for name in method_names {
+        let new_name: &'static str = build_method_name_with_prefix(prefix, name);
+        module
+            .register_alias(new_name, name)
+            .expect("failed to register alias");
+        module.remove_method(name);
+    }
+}
+
+fn build_method_name_with_prefix(prefix: &str, method_name: &str) -> &'static str {
+    let new_name = format!("{prefix}_{method_name}");
+    Box::leak(new_name.into_boxed_str())
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyTokenRequest<S> {
+    inner: S,
+    token_names: Arc<HashSet<String>>,
+}
+
+impl<S> ProxyTokenRequest<S> {
+    pub fn new(inner: S, token_names: Arc<HashSet<String>>) -> Self {
+        Self { inner, token_names }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyTokenRequestLayer {
+    token_names: Arc<HashSet<String>>,
+}
+
+impl ProxyTokenRequestLayer {
+    pub fn new(token_names: HashSet<String>) -> Self {
+        Self {
+            token_names: Arc::new(token_names),
+        }
+    }
+}
+
+impl<S> Layer<S> for ProxyTokenRequestLayer {
+    type Service = ProxyTokenRequest<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        ProxyTokenRequest::new(inner, self.token_names.clone())
+    }
+}
+
+impl<S> Service<Request<Body>> for ProxyTokenRequest<S>
+where
+    S: Service<Request<Body>, Response = Response<Body>> + Clone + Send + 'static,
+    S::Response: 'static,
+    S::Error: Into<Box<dyn StdError + Send + Sync>> + 'static,
+    S::Future: Send + 'static,
+{
+    type Response = S::Response;
+    type Error = Box<dyn StdError + Send + Sync + 'static>;
+    type Future =
+        Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
+
+    #[inline]
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx).map_err(Into::into)
+    }
+
+    fn call(&mut self, req: Request<Body>) -> Self::Future {
+        let (parts, body) = req.into_parts();
+        let path = parts.uri.path().trim_matches('/').to_lowercase();
+        if self.token_names.contains(&path) {
+            tracing::info!(token_name=?path, "token request");
+            let mut inner = self.inner.clone();
+            let fut = async move {
+                let body_bytes = match body.collect().await {
+                    Ok(body) => body.to_bytes(),
+                    Err(err) => {
+                        tracing::warn!(?err, "Failed to read request body");
+                        let response = Response::builder()
+                            .status(400)
+                            .body(Body::from("Failed to read request body"))
+                            .unwrap();
+                        return Ok(response);
+                    }
+                };
+                let mut request_json: Value = match serde_json::from_slice(&body_bytes) {
+                    Ok(json) => json,
+                    Err(_) => {
+                        let response = Response::builder()
+                            .status(400)
+                            .body(Body::from("Invalid JSON in request body"))
+                            .unwrap();
+                        return Ok(response);
+                    }
+                };
+
+                if let Some(method) = request_json["method"].as_str() {
+                    let new_method = format!("{path}_{method}");
+                    request_json["method"] = Value::String(new_method);
+                }
+
+                let new_body = Body::from(request_json.to_string());
+                let new_req = Request::from_parts(parts, new_body);
+
+                inner.call(new_req).await.map_err(Into::into)
+            };
+
+            Box::pin(fut)
+        } else {
+            tracing::info!("default token request");
+            Box::pin(
+                self.inner
+                    .call(Request::from_parts(parts, body))
+                    .map_err(Into::into),
+            )
+        }
+    }
 }
