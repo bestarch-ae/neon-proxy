@@ -1,0 +1,1 @@
+[{"inputs":[{"internalType":"uint256","name":"_count","type":"uint256"}],"stateMutability":"nonpayable","type":"constructor"},{"inputs":[{"internalType":"uint256","name":"N","type":"uint256"}],"name":"fill","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"nonpayable","type":"function"}]

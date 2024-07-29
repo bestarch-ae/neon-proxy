@@ -10,7 +10,7 @@ use common::solana_sdk::hash::Hash;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
 use common::solana_sdk::slot_history::Slot;
-use common::solana_sdk::transaction::Transaction;
+use common::solana_sdk::transaction::VersionedTransaction;
 use common::solana_transaction_status::{
     EncodedConfirmedTransactionWithStatusMeta, TransactionDetails, UiConfirmedBlock,
 };
@@ -75,7 +75,10 @@ impl SolanaApi {
             .await
     }
 
-    pub async fn send_transaction(&self, transaction: &Transaction) -> ClientResult<Signature> {
+    pub async fn send_transaction(
+        &self,
+        transaction: &VersionedTransaction,
+    ) -> ClientResult<Signature> {
         self.client
             .send_transaction_with_config(
                 transaction,
