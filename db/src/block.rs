@@ -86,8 +86,8 @@ impl BlockRepo {
                 L.block_slot as "block_slot!",
                 L.block_hash as "block_hash!: PgSolanaBlockHash",
                 L.block_time as "block_time!",
-                R.block_slot as "parent_block_slot!",
-                R.block_hash as "parent_block_hash!: PgSolanaBlockHash",
+                coalesce(R.block_slot, L.parent_block_slot) as "parent_block_slot!",
+                coalesce(R.block_hash, L.parent_block_hash) as "parent_block_hash!: PgSolanaBlockHash",
                 L.is_finalized
                FROM solana_blocks L
                LEFT JOIN solana_blocks R ON R.block_slot = L.block_slot - 1
