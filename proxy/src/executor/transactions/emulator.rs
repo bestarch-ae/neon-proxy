@@ -109,6 +109,8 @@ impl Emulator {
             .into_iter()
             .next()
             .context("empty simulation result")?;
+        tracing::debug!(%tx_hash, result = ?res, "simulate");
+
         if let Some(err) = res.error {
             match err {
                 TransactionError::InstructionError(
@@ -129,9 +131,12 @@ impl Emulator {
 
     pub async fn calculate_iterations(
         &self,
+        tx_hash: &B256,
         emulate: &EmulateResponse,
         f: impl FnMut(&mut IterInfo) -> anyhow::Result<Vec<Transaction>>,
     ) -> anyhow::Result<IterInfo> {
+        const RETRIES: usize = 5;
+
         let mut f = f;
         let total_steps = emulate.steps_executed;
         let wrap_iter = self.calculate_wrap_iter_cnt(emulate);
@@ -141,7 +146,7 @@ impl Emulator {
             .try_into()
             .expect("rounded and fits");
 
-        for _ in 0..5 {
+        for retry in 0..RETRIES {
             if iter_steps <= self.evm_steps_min {
                 break;
             }
@@ -171,6 +176,7 @@ impl Emulator {
 
                 let iter_info =
                     IterInfo::new(iter_steps as u32, iterations as u32, used_cu_limit as u32);
+                tracing::debug!(%tx_hash, retry, ?iter_info, "calculated optimal iterations");
                 return Ok(iter_info);
             }
 
@@ -184,6 +190,7 @@ impl Emulator {
                 .max(ratio.saturating_mul(iter_steps.into()).try_into()?);
         }
 
+        tracing::warn!(%tx_hash, RETRIES, "fallback to default iterations");
         Ok(self.default_iter_info(emulate))
     }
 

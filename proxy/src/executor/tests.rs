@@ -297,6 +297,8 @@ struct ExecutorTestEnvironment {
 impl ExecutorTestEnvironment {
     async fn start() -> Result<Self> {
         let mut ctx = ProgramTest::default();
+        // let _ = tracing_log::LogTracer::init();
+
         ctx.prefer_bpf(true);
         ctx.add_program("evm_loader", NEON_KEY, None);
 

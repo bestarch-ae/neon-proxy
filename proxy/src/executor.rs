@@ -122,7 +122,7 @@ impl Executor {
             .await
             .context("could not send transaction")?;
 
-        tracing::info!(%signature, tx = ?tx.eth_tx(), "sent new transaction");
+        tracing::info!(%signature, ?tx, "sent new transaction");
         let do_notify = self.pending_transactions.is_empty();
         self.pending_transactions.insert(signature, tx); // TODO: check none?
         if do_notify {
@@ -180,7 +180,7 @@ impl Executor {
                 if let Some(value) = $kv {
                     value
                 } else {
-                    tracing::warn!(%signature, "missing pending transaction data");
+                    tracing::error!(%signature, "missing pending transaction data");
                     return;
                 }
             }
@@ -214,26 +214,27 @@ impl Executor {
     }
 
     async fn handle_expired_transaction(&self, signature: Signature, tx: OngoingTransaction) {
+        let tx_hash = tx.eth_tx().map(|tx| *tx.tx_hash());
         // TODO: retry counter
-        tracing::warn!(%signature, "transaction blockhash expired, retrying");
+        tracing::warn!(?tx_hash, %signature, "transaction blockhash expired, retrying");
         if let Err(error) = self.sign_and_send_transaction(tx).await {
-            tracing::error!(%signature, %error, "failed retrying transaction");
+            tracing::error!(?tx_hash, %signature, %error, "failed retrying transaction");
         }
     }
 
     async fn handle_success(&self, signature: Signature, tx: OngoingTransaction, slot: u64) {
+        let tx_hash = tx.eth_tx().map(|tx| *tx.tx_hash());
         // TODO: maybe add Instant to ongoing transaction.
-        tracing::info!(%signature, slot, "transaction was confirmed");
+        tracing::info!(?tx_hash, %signature, slot, "transaction was confirmed");
 
         // TODO: follow up transactions
-        let hash = tx.eth_tx().map(|tx| tx.signature_hash());
         match self.builder.next_step(tx).await {
             Err(err) => {
-                tracing::error!(?hash, %signature, %err, "failed executing next transaction step")
+                tracing::error!(?tx_hash, %signature, %err, "failed executing next transaction step")
             }
             Ok(Some(tx)) => {
                 if let Err(err) = self.sign_and_send_transaction(tx).await {
-                    tracing::error!(%signature, ?hash, %err, "failed sending transaction next step");
+                    tracing::error!(%signature, ?tx_hash, %err, "failed sending transaction next step");
                 }
             }
             Ok(None) => (),
@@ -243,11 +244,12 @@ impl Executor {
     async fn handle_error(
         &self,
         signature: Signature,
-        _tx: OngoingTransaction,
+        tx: OngoingTransaction,
         slot: u64,
         err: TransactionError,
     ) {
-        tracing::warn!(%signature, slot, %err, "transaction was confirmed, but failed");
+        let tx_hash = tx.eth_tx().map(|tx| *tx.tx_hash());
+        tracing::warn!(?tx_hash, %signature, slot, %err, "transaction was confirmed, but failed");
 
         // TODO: do we retry?
         // TODO: do we request logs?
@@ -267,6 +269,7 @@ impl Executor {
             return Ok(None);
         }
 
+        tracing::info!(chain_id, "initializing operator balance");
         let tx = self.builder.init_operator_balance(chain_id);
         let signature = self.sign_and_send_transaction(tx).await?;
 

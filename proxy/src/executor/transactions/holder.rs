@@ -1,3 +1,4 @@
+use std::fmt;
 use std::mem;
 use std::sync::atomic::Ordering;
 
@@ -19,13 +20,24 @@ const HOLDER_META_LEN: usize =
     account::ACCOUNT_PREFIX_LEN + mem::size_of::<account::HolderHeader>();
 const HOLDER_SIZE: usize = HOLDER_META_LEN + HOLDER_DATA_LEN;
 
-#[derive(Debug)]
 pub(super) struct HolderInfo {
     seed: String,
     pubkey: Pubkey,
     data: Vec<u8>,
     current_offset: usize,
     hash: B256,
+}
+
+impl fmt::Debug for HolderInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HolderInfo")
+            .field("seed", &self.seed)
+            .field("pubkey", &self.pubkey)
+            .field("data", &hex::encode(&self.data))
+            .field("current_offset", &self.current_offset)
+            .field("hash", &self.hash)
+            .finish()
+    }
 }
 
 impl HolderInfo {
@@ -36,6 +48,11 @@ impl HolderInfo {
     pub fn pubkey(&self) -> &Pubkey {
         &self.pubkey
     }
+
+    pub fn offset(&self) -> usize {
+        self.current_offset
+    }
+
     pub fn hash(&self) -> &B256 {
         &self.hash
     }

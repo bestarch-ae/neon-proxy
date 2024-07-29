@@ -29,7 +29,6 @@ use common::solana_sdk::system_program;
 use common::solana_sdk::transaction::Transaction;
 use solana_api::solana_api::SolanaApi;
 
-use crate::executor::transactions::emulator::get_neon_emulate_request;
 use crate::neon_api::NeonApi;
 
 use self::alt::AltInfo;
@@ -182,11 +181,17 @@ impl TransactionBuilder {
         // +7: CbProg.ID
         const BASE_ACCOUNT_COUNT: usize = 7;
 
-        let request = get_neon_emulate_request(&tx)?;
-        let chain_id = request.chain_id; // FIXME
+        let chain_id = get_chain_id(&tx);
         let fits_in_solana_tx =
             tx.length() < PACKET_DATA_SIZE - BASE_ACCOUNT_COUNT * mem::size_of::<Pubkey>();
 
+        tracing::debug!(
+            ?tx,
+            tx_hash = %tx.tx_hash(),
+            encoded_length = tx.length(),
+            fits_in_solana_tx,
+            "start execution"
+        );
         if let Some(chain_id) = fits_in_solana_tx.then_some(chain_id).flatten() {
             self.start_data_execution(tx, chain_id).await
         } else {
@@ -258,11 +263,17 @@ impl TransactionBuilder {
     ) -> anyhow::Result<OngoingTransaction> {
         let emulate = self.emulator.emulate(&tx).await?;
         let tx_data = TxData::new(tx, emulate);
-        if Self::from_data_tx_len(
+        let length_estimate = Self::from_data_tx_len(
             tx_data.envelope.length(),
             tx_data.emulate.solana_accounts.len(),
-        ) > PACKET_DATA_SIZE
-        {
+        );
+        tracing::debug!(
+            tx_hash = %tx_data.envelope.tx_hash(),
+            emulate = ?tx_data.emulate,
+            length_estimate,
+            "start data execution"
+        );
+        if length_estimate > PACKET_DATA_SIZE {
             self.start_from_alt(tx_data, None).await
         } else {
             self.execute_from_data_emulated(tx_data, chain_id, None)
@@ -279,6 +290,7 @@ impl TransactionBuilder {
         let fallback_iterative =
             |tx_data, alt| async move { self.empty_holder_for_iterative_data(tx_data, alt).await };
         if self.emulator.needs_iterative_execution(&tx_data.emulate) {
+            tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), "fallback to iterative, resize iter count");
             return fallback_iterative(tx_data, alt).await;
         }
 
@@ -305,6 +317,7 @@ impl TransactionBuilder {
             .check_single_execution(tx_data.envelope.tx_hash(), &ixs)
             .await?
         {
+            tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), "fallback to iterative, failed single execution simulation");
             return fallback_iterative(tx_data, alt).await;
         }
 
@@ -320,6 +333,7 @@ impl TransactionBuilder {
     ) -> anyhow::Result<OngoingTransaction> {
         let holder = self.new_holder_info(None)?;
         let ixs = self.create_holder(&holder).await?;
+        tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), ?holder, "creating new holder");
         let tx =
             TxStage::step_data(*holder.pubkey(), tx_data, None, alt).ongoing(&ixs, &self.pubkey());
         Ok(tx)
@@ -339,14 +353,17 @@ impl TransactionBuilder {
     async fn start_holder_execution(&self, tx: TxEnvelope) -> anyhow::Result<OngoingTransaction> {
         let holder = self.new_holder_info(Some(&tx))?;
         let ixs = self.create_holder(&holder).await?;
+        tracing::debug!(tx_hash = %tx.tx_hash(), ?holder, "start holder execution");
 
         Ok(TxStage::holder_fill(holder, tx).ongoing(&ixs, &self.pubkey()))
     }
 
     /// Write next data chunk into holder account.
     fn fill_holder(&self, info: HolderInfo, tx: TxEnvelope) -> OngoingTransaction {
+        let offset_before = info.offset();
         let mut info = info;
         let ix = self.write_next_holder_chunk(&mut info);
+        tracing::debug!(tx_hash = %tx.tx_hash(), holder = ?info, offset_before, "next holder chunk");
         TxStage::holder_fill(info, tx).ongoing(&[ix], &self.pubkey())
     }
 
@@ -363,7 +380,14 @@ impl TransactionBuilder {
     ) -> anyhow::Result<OngoingTransaction> {
         let emulate = self.emulator.emulate(&tx).await?;
         let tx_data = TxData::new(tx, emulate);
-        if Self::from_holder_tx_len(tx_data.emulate.solana_accounts.len()) > PACKET_DATA_SIZE {
+        let length_estimate = Self::from_holder_tx_len(tx_data.emulate.solana_accounts.len());
+        tracing::debug!(
+            tx_hash = %tx_data.envelope.tx_hash(),
+            emulate = ?tx_data.emulate,
+            length_estimate,
+            "execute from written holder"
+        );
+        if length_estimate > PACKET_DATA_SIZE {
             self.start_from_alt(tx_data, Some(holder)).await
         } else {
             self.execute_from_holder_emulated(holder, tx_data, None)
@@ -387,8 +411,13 @@ impl TransactionBuilder {
         };
         let needs_iterative = self.emulator.needs_iterative_execution(&tx_data.emulate);
         let chain_id = match (chain_id, needs_iterative) {
-            (None, _) | (_, true) => {
-                return fallback_to_iterative(tx_data, *holder.pubkey(), alt).await
+            (None, _) => {
+                tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), "fallback to iterative, no chain id");
+                return fallback_to_iterative(tx_data, *holder.pubkey(), alt).await;
+            }
+            (_, true) => {
+                tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), "fallback to iterative, resize iter count");
+                return fallback_to_iterative(tx_data, *holder.pubkey(), alt).await;
             }
             (Some(chain_id), false) => chain_id,
         };
@@ -413,6 +442,7 @@ impl TransactionBuilder {
             .check_single_execution(tx_data.envelope.tx_hash(), &ixs)
             .await?
         {
+            tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), "fallback to iterative, failed single execution simulation");
             return fallback_to_iterative(tx_data, *holder.pubkey(), alt).await;
         }
 
@@ -440,8 +470,12 @@ impl TransactionBuilder {
         alt: Option<AltInfo>,
     ) -> anyhow::Result<Option<OngoingTransaction>> {
         let chain_id = get_chain_id(&tx_data.envelope);
+        let tx_hash = tx_data.envelope.tx_hash();
         let mut iter_info = match iter_info {
-            Some(iter_info) if iter_info.is_finished() => return Ok(None),
+            Some(iter_info) if iter_info.is_finished() => {
+                tracing::debug!(%tx_hash, "iterations finished");
+                return Ok(None);
+            }
             Some(info) => info,
             None => {
                 let build_tx = |iter_info: &mut IterInfo| {
@@ -458,11 +492,12 @@ impl TransactionBuilder {
                 };
 
                 self.emulator
-                    .calculate_iterations(&tx_data.emulate, build_tx)
+                    .calculate_iterations(tx_hash, &tx_data.emulate, build_tx)
                     .await?
             }
         };
 
+        tracing::debug!(%tx_hash, ?iter_info, "new iteration");
         let ix = self.build_step(&mut iter_info, &tx_data, holder, from_data, chain_id)?;
         let cu_limit = iter_info.cu_limit();
         let stage = match (from_data, chain_id) {
@@ -542,6 +577,13 @@ impl TransactionBuilder {
     ) -> anyhow::Result<(Vec<AccountMeta>, Vec<u8>)> {
         let (treasury_pool_idx, treasury_pool_address) = self.treasury_pool(hash)?;
         let operator_balance = self.operator_balance(chain_id);
+
+        tracing::debug!(
+            tag, tx_hash = %hash, chain_id, %operator_balance,
+            treasury_pool_idx, %treasury_pool_address,
+            ?holder, ?iter_info,
+            "build execution transaction"
+        );
 
         let mut accounts: Vec<_> = holder
             .into_iter()
