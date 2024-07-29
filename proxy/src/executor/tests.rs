@@ -8,10 +8,13 @@ use alloy_consensus::{SignableTransaction, TxLegacy};
 use alloy_network::TxSignerSync;
 use alloy_signer::Signature as EthSignature;
 use alloy_signer_wallet::LocalWallet;
+#[allow(unused)] // for ALT test
+use alloy_sol_types::SolConstructor;
 use alloy_sol_types::{sol, SolCall};
 use anyhow::{Context, Result};
 use jsonrpsee::core::async_trait;
 use reth_primitives::{TxKind, U256};
+use serial_test::serial;
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_program_test::{ProgramTest, ProgramTestContext};
 
@@ -39,6 +42,7 @@ use common::solana_sdk::signer::{EncodableKey, Signer};
 use common::solana_sdk::transaction::Transaction;
 use common::solana_sdk::{bpf_loader_upgradeable, system_instruction, system_program};
 use solana_api::solana_api::SolanaApi;
+use solana_sdk::account::ReadableAccount;
 
 use super::Executor;
 use crate::convert::ToReth;
@@ -48,6 +52,7 @@ use mock::BanksRpcMock;
 
 const NEON_KEY: Pubkey = pubkey!("53DfF883gyixYNXnM7s5xhdeyV8mVk9T4i2hGV9vG9io");
 const NEON_TOKEN: Pubkey = pubkey!("HPsV9Deocecw3GeZv1FkAPNCBRfuVyfw9MMwjwRe1xaU");
+const FST_HOLDER_KEY: Pubkey = pubkey!("9X4CgVP88B3LeoX7oTmhj7vdkayBG9k73drCh2e4A61G");
 const CHAIN_ID: u64 = 111;
 
 #[derive(Debug)]
@@ -91,7 +96,7 @@ impl ContextExt for ProgramTestContext {
         ixs: &[Instruction],
         signers: &[&Keypair],
     ) -> anyhow::Result<()> {
-        let hash = self.get_new_latest_blockhash().await?;
+        let hash = self.banks_client.get_latest_blockhash().await?;
         let tx = Transaction::new_signed_with_payer(ixs, Some(&self.payer.pubkey()), signers, hash);
 
         self.banks_client.process_transaction(tx).await?;
@@ -177,6 +182,14 @@ async fn init_neon(ctx: &mut ProgramTestContext) -> anyhow::Result<()> {
     let lamports = rent.minimum_balance(data.len());
     let acc_data = AccountSharedData::new_data(lamports, &state, &bpf_loader_upgradeable::id())?;
     ctx.set_account(&program_data_address, &acc_data);
+
+    let mut acc = ctx
+        .banks_client
+        .get_account(ctx.payer.pubkey())
+        .await?
+        .expect("must exist");
+    acc.lamports -= lamports;
+    ctx.set_account(&ctx.payer.pubkey(), &acc.to_account_shared_data());
 
     let accounts = vec![
         AccountMeta::new(main_balance_address, false),
@@ -292,21 +305,20 @@ impl ExecutorTestEnvironment {
         let payer = ctx.payer.insecure_clone();
 
         let banks_client = ctx.banks_client.clone();
+        let mock = BanksRpcMock(banks_client.clone());
+        let rpc = mock.clone();
         let neon_api = NeonApi::new_with_custom_rpc_clients(
-            move |_| {
-                let rpc = BanksRpcMock(banks_client.clone());
-                RpcClient::new_sender(rpc, Default::default())
-            },
+            move |_| RpcClient::new_sender(rpc.clone(), Default::default()),
             NEON_KEY,
             payer.pubkey(),
             Default::default(),
             64,
         );
 
-        let rpc = BanksRpcMock(ctx.banks_client.clone());
+        let rpc = mock.clone();
         let solana_api = SolanaApi::with_sender(rpc);
 
-        let rpc = BanksRpcMock(ctx.banks_client.clone());
+        let rpc = mock.clone();
         let rpc = RpcClient::new_sender(rpc, Default::default());
         let rpc = CloneRpcClient {
             rpc: Arc::new(rpc),
@@ -349,6 +361,7 @@ impl ExecutorTestEnvironment {
 }
 
 #[tokio::test]
+#[serial]
 async fn transfer() -> Result<()> {
     let ExecutorTestEnvironment {
         rpc,
@@ -390,11 +403,13 @@ async fn transfer() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial]
 async fn transfer_no_chain_id() -> Result<()> {
     let ExecutorTestEnvironment {
         rpc,
         test_kp: kp1,
         executor,
+        mut test_ctx,
         ..
     } = ExecutorTestEnvironment::start().await?;
 
@@ -420,6 +435,8 @@ async fn transfer_no_chain_id() -> Result<()> {
     let v = signature.v().y_parity_byte() as u64 + 27;
     let signature = EthSignature::from_signature_and_parity(*signature.inner(), v)?;
 
+    // HACK: Fixes random AccountInUse error
+    let _ = test_ctx.banks_client.get_account(FST_HOLDER_KEY).await?;
     let tx = tx.into_signed(signature);
     executor.handle_transaction(tx.into()).await?;
 
@@ -434,6 +451,7 @@ async fn transfer_no_chain_id() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial]
 async fn deploy_contract() -> anyhow::Result<()> {
     let ExecutorTestEnvironment {
         test_ctx: mut env,
@@ -464,6 +482,7 @@ async fn deploy_contract() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+#[serial]
 async fn iterations() -> anyhow::Result<()> {
     let ExecutorTestEnvironment {
         test_ctx: mut env,
@@ -485,6 +504,8 @@ async fn iterations() -> anyhow::Result<()> {
     let tx = tx.into_signed(signature);
     executor.handle_transaction(tx.into()).await?;
 
+    // HACK: Fixes random AccountInUse error
+    let _ = env.banks_client.get_account(FST_HOLDER_KEY).await?;
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
 
@@ -496,6 +517,62 @@ async fn iterations() -> anyhow::Result<()> {
         .await?
         .context("missing contract account")?;
     code.verify(contract_pubkey, account);
+
+    let mut tx = TxLegacy {
+        nonce: 1,
+        gas_price: 2,
+        gas_limit: u64::MAX.into(),
+        to: TxKind::Call(contract_address.0.into()),
+        value: eth_to_wei(0).to_reth(),
+        input: call.into(),
+        chain_id: Some(CHAIN_ID),
+    };
+    let signature = kp.eth.sign_transaction_sync(&mut tx)?;
+    let tx = tx.into_signed(signature);
+
+    executor.handle_transaction(tx.into()).await?;
+    let txs = executor.join_current_transactions().await;
+    assert!(txs.len() > 1);
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore] // TODO: Include this when solana crates are updated
+async fn alt() -> anyhow::Result<()> {
+    let ExecutorTestEnvironment {
+        test_ctx: mut env,
+        test_kp: kp,
+        executor,
+        ..
+    } = ExecutorTestEnvironment::start().await?;
+
+    let mut code = Contract::read("tests/fixtures/ALT")?;
+    sol!(Alt, "tests/fixtures/ALT.abi");
+    let deploy_params = Alt::constructorCall {
+        _count: U256::from(35),
+    }
+    .abi_encode();
+    code.init.extend(deploy_params);
+    let call = Alt::fillCall { N: U256::from(8) }.abi_encode();
+
+    let mut tx = code.deploy_tx();
+    let signature = kp.eth.sign_transaction_sync(&mut tx)?;
+    let tx = tx.into_signed(signature);
+    executor.handle_transaction(tx.into()).await?;
+
+    let txs = executor.join_current_transactions().await;
+    assert!(txs.len() > 1);
+
+    let contract_address = Address::from_create(&kp.address().0.into(), 0);
+    let (contract_pubkey, _) = contract_address.find_solana_address(&NEON_KEY);
+    let account = env
+        .banks_client
+        .get_account(contract_pubkey)
+        .await?
+        .context("missing contract account")?;
+    code.verify(contract_pubkey, account);
+    env.warp_to_slot(10)?;
 
     let mut tx = TxLegacy {
         nonce: 1,

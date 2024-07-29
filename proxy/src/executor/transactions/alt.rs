@@ -69,7 +69,7 @@ impl TransactionBuilder {
             self.pubkey(),
             self.pubkey(),
             self.solana_api
-                .get_slot(CommitmentLevel::Confirmed)
+                .get_slot(CommitmentLevel::Finalized)
                 .await
                 .context("failed requesting recent slot")?,
         ))

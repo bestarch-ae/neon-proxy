@@ -11,6 +11,9 @@ use solana_client::rpc_response::{Response, RpcResponseContext, RpcSimulateTrans
 use solana_client::rpc_sender::{RpcSender, RpcTransportStats};
 use solana_program_test::BanksClient;
 use solana_sdk::commitment_config::CommitmentLevel;
+use solana_sdk::message::Message;
+use solana_sdk::packet::PACKET_DATA_SIZE;
+use solana_sdk::system_instruction;
 use solana_sdk::transaction::VersionedTransaction;
 use tarpc::context;
 
@@ -21,6 +24,7 @@ use common::solana_transaction_status::{
     TransactionConfirmationStatus, TransactionStatus, UiTransactionEncoding,
 };
 
+#[derive(Clone)]
 pub struct BanksRpcMock(pub BanksClient);
 
 impl BanksRpcMock {
@@ -89,6 +93,9 @@ impl RpcSender for BanksRpcMock {
                 Some(UiTransactionEncoding::Base58) => bs58::decode(tx).into_vec().unwrap(),
                 encoding => panic!("unsupported tx encoding: {encoding:?}"),
             };
+            if serialized.len() > PACKET_DATA_SIZE {
+                panic!("transaction too big");
+            }
             let transaction: VersionedTransaction = bincode::deserialize(&serialized).unwrap();
             transaction
         };
@@ -111,6 +118,11 @@ impl RpcSender for BanksRpcMock {
                 .cloned()
                 .map_or(Ok(CommitmentLevel::default()), serde_json::from_value)
         };
+        let rand_message = |blockhash| {
+            let message =
+                system_instruction::transfer(&Pubkey::new_unique(), &Pubkey::new_unique(), 10000);
+            Message::new_with_blockhash(&[message], Some(&Pubkey::new_unique()), &blockhash)
+        };
 
         let response: Value = match request {
             RpcRequest::GetVersion => {
@@ -123,7 +135,11 @@ impl RpcSender for BanksRpcMock {
                     .get_slot_with_context(context::current(), commitment)
                     .await
                     .unwrap();
-                serde_json::to_value(slot)?
+                serde_json::to_value(if commitment == CommitmentLevel::Finalized {
+                    0
+                } else {
+                    slot
+                })?
             }
             RpcRequest::GetBlockTime => serde_json::to_value(0)?,
             RpcRequest::GetAccountInfo => {
@@ -168,8 +184,14 @@ impl RpcSender for BanksRpcMock {
                 )?
             }
             RpcRequest::IsBlockhashValid => {
+                let (blockhash, params): (String, Value) = serde_json::from_value(params)?;
                 let commitment = get_commitment(&params)?;
-                serde_json::to_value(self.with_context(commitment, true).await)?
+                let result = rpc
+                    .get_fee_for_message(rand_message(blockhash.parse().unwrap()))
+                    .await
+                    .unwrap()
+                    .is_some();
+                serde_json::to_value(self.with_context(commitment, result).await)?
             }
             RpcRequest::GetSignatureStatuses => {
                 // let (signatures, _params): (Vec<String>, Option<Value>) =
