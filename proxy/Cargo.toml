@@ -41,6 +41,7 @@ futures-util = "0.3.30"
 solana-client = "1.17.34"
 solana-rpc-client = "1.17.34"
 solana-rpc-client-api = "1.17.34"
+alloy-signer-wallet= { git = "https://github.com/alloy-rs/alloy", rev = "dd7a999" }
 alloy-consensus = { git = "https://github.com/alloy-rs/alloy", rev = "dd7a999", version = "0.1.0", default-features = false, features = ["k256"] }
 alloy-eips = { git = "https://github.com/alloy-rs/alloy", rev = "dd7a999"  }
 alloy-rlp = "0.3.4"
@@ -48,7 +49,6 @@ bincode = "1.3.3"
 
 [dev-dependencies]
 alloy-signer = { git = "https://github.com/alloy-rs/alloy", rev = "dd7a999" }
-alloy-signer-wallet= { git = "https://github.com/alloy-rs/alloy", rev = "dd7a999" }
 alloy-network = { git = "https://github.com/alloy-rs/alloy", rev = "dd7a999" }
 alloy-sol-types = { version = "0.7.7", features = ["json"] }
 base64 = "0.21"

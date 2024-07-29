@@ -14,7 +14,7 @@ mod mempool;
 mod neon_api;
 mod rpc;
 
-use common::neon_lib::types::{Address, ChDbConfig};
+use common::neon_lib::types::ChDbConfig;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Keypair;
 use common::solana_sdk::signer::EncodableKey;
@@ -207,18 +207,14 @@ async fn main() {
     )
     .expect("failed to create gas prices");
 
-    let executor = if let Some((path, address)) = opts
-        .executor
-        .operator_keypair
-        .zip(opts.executor.operator_address)
-    {
+    let executor = if let Some(path) = opts.executor.operator_keypair {
         let operator = Keypair::read_from_file(path).expect("cannot read operator keypair");
         let (executor, executor_task) = Executor::initialize_and_start(
             solana.clone(),
             SolanaApi::new(opts.solana_url, false),
             opts.neon_pubkey,
             operator,
-            address,
+            opts.executor.operator_address,
             opts.chain_id,
             opts.executor.init_operator_balance,
         )

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alloy_consensus::TxEnvelope;
+use alloy_signer_wallet::LocalWallet;
 use anyhow::Context;
 use clap::Args;
 use dashmap::DashMap;
@@ -17,8 +18,8 @@ use tokio::time::sleep;
 
 use common::neon_lib::types::Address;
 use common::solana_sdk::pubkey::Pubkey;
-use common::solana_sdk::signature::Keypair;
-use common::solana_sdk::signature::Signature;
+use common::solana_sdk::signature::{Keypair, Signature};
+use common::solana_sdk::signer::Signer;
 use common::solana_sdk::transaction::TransactionError;
 use common::solana_transaction_status::TransactionStatus;
 
@@ -28,7 +29,7 @@ use self::transactions::{OngoingTransaction, TransactionBuilder};
 
 #[derive(Args, Clone)]
 pub struct Config {
-    #[arg(long, requires = "operator_address")]
+    #[arg(long)]
     /// Path to operator keypair
     pub operator_keypair: Option<PathBuf>,
 
@@ -59,10 +60,19 @@ impl Executor {
         solana_api: SolanaApi,
         neon_pubkey: Pubkey,
         operator: Keypair,
-        operator_addr: Address, // TODO: derive from keypair
+        operator_addr: Option<Address>,
         default_chain_id: u64,
         init_balances: bool,
     ) -> anyhow::Result<(Arc<Self>, impl Future<Output = anyhow::Result<()>>)> {
+        let operator_addr = match operator_addr {
+            Some(addr) => addr,
+            None => {
+                let operator_signer = LocalWallet::from_slice(operator.secret().as_ref())?;
+                operator_signer.address().0 .0.into()
+            }
+        };
+        tracing::info!(sol_key = %operator.pubkey(), eth_key = %operator_addr, "executor operator keys");
+
         let this = Self::initialize(
             neon_api,
             solana_api,
