@@ -44,6 +44,7 @@ impl Executor {
         operator: Keypair,
         operator_addr: Address, // TODO: derive from keypair
         default_chain_id: u64,
+        init_balances: bool,
     ) -> anyhow::Result<(Arc<Self>, impl Future<Output = anyhow::Result<()>>)> {
         let this = Self::initialize(
             neon_api,
@@ -52,6 +53,7 @@ impl Executor {
             operator,
             operator_addr,
             default_chain_id,
+            init_balances,
         )
         .await?;
         let this = Arc::new(this);
@@ -66,6 +68,7 @@ impl Executor {
         operator: Keypair,
         operator_addr: Address,
         default_chain_id: u64,
+        init_balances: bool,
     ) -> anyhow::Result<Self> {
         let notify = Notify::new();
 
@@ -79,7 +82,7 @@ impl Executor {
         )
         .await?;
 
-        Ok(Self {
+        let this = Self {
             program_id: neon_pubkey,
             solana_api,
             builder,
@@ -88,7 +91,16 @@ impl Executor {
 
             #[cfg(test)]
             test_ext: test_ext::TestExtension::new(),
-        })
+        };
+
+        if init_balances {
+            for chain in this.builder.chains() {
+                tracing::info!(name = chain.name, id = chain.id, "initializing balance");
+                this.init_operator_balance(chain.id).await?;
+            }
+        }
+
+        Ok(this)
     }
 
     pub async fn handle_transaction(&self, tx: TxEnvelope) -> anyhow::Result<Signature> {

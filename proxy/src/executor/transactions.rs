@@ -10,6 +10,7 @@ use alloy_consensus::TxEnvelope;
 use alloy_eips::eip2718::Encodable2718;
 use alloy_rlp::Encodable;
 use anyhow::{bail, Context};
+use common::neon_lib::commands::get_config::ChainInfo;
 use reth_primitives::B256;
 
 use common::ethnum::U256;
@@ -58,6 +59,7 @@ pub struct TransactionBuilder {
     holder_counter: AtomicU8,
 
     default_chain_id: u64,
+    chains: Vec<ChainInfo>,
 }
 
 /// ## Utility methods.
@@ -101,6 +103,7 @@ impl TransactionBuilder {
             emulator,
             holder_counter: AtomicU8::new(0),
             default_chain_id,
+            chains: config.chains,
         })
     }
 
@@ -114,6 +117,10 @@ impl TransactionBuilder {
 
     pub fn default_chain_id(&self) -> u64 {
         self.default_chain_id
+    }
+
+    pub fn chains(&self) -> &[ChainInfo] {
+        &self.chains
     }
 
     pub fn operator_balance(&self, chain_id: u64) -> Pubkey {

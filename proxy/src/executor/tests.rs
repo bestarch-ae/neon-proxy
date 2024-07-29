@@ -342,6 +342,7 @@ impl ExecutorTestEnvironment {
             operator,
             address.0 .0.into(),
             CHAIN_ID,
+            false,
         )
         .await
         .context("failed initializing executor")?;

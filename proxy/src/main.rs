@@ -116,6 +116,10 @@ struct Args {
     /// Operator ETH address
     operator_address: Option<Address>,
 
+    #[arg(long, default_value_t = false)]
+    /// Initialize operator balance accounts at service startup
+    init_operator_balance: bool,
+
     #[arg(long, env, default_value = "SOL")]
     /// Chain token name
     chain_token_name: String,
@@ -221,6 +225,7 @@ async fn main() {
             operator,
             address,
             opts.chain_id,
+            opts.init_operator_balance,
         )
         .await
         .expect("could not initialize executor");
