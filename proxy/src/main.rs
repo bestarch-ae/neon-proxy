@@ -108,17 +108,8 @@ struct Args {
     // Neon chain id
     chain_id: u64,
 
-    #[arg(long, requires = "operator_address")]
-    /// Path to operator keypair
-    operator_keypair: Option<PathBuf>,
-
-    #[arg(long, requires = "operator_keypair")]
-    /// Operator ETH address
-    operator_address: Option<Address>,
-
-    #[arg(long, default_value_t = false)]
-    /// Initialize operator balance accounts at service startup
-    init_operator_balance: bool,
+    #[group(flatten)]
+    executor: executor::Config,
 
     #[arg(long, env, default_value = "SOL")]
     /// Chain token name
@@ -216,7 +207,11 @@ async fn main() {
     )
     .expect("failed to create gas prices");
 
-    let executor = if let Some((path, address)) = opts.operator_keypair.zip(opts.operator_address) {
+    let executor = if let Some((path, address)) = opts
+        .executor
+        .operator_keypair
+        .zip(opts.executor.operator_address)
+    {
         let operator = Keypair::read_from_file(path).expect("cannot read operator keypair");
         let (executor, executor_task) = Executor::initialize_and_start(
             solana.clone(),
@@ -225,7 +220,7 @@ async fn main() {
             operator,
             address,
             opts.chain_id,
-            opts.init_operator_balance,
+            opts.executor.init_operator_balance,
         )
         .await
         .expect("could not initialize executor");

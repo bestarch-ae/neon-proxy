@@ -3,11 +3,13 @@ mod tests;
 mod transactions;
 
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use alloy_consensus::TxEnvelope;
 use anyhow::Context;
+use clap::Args;
 use dashmap::DashMap;
 use solana_api::solana_api::SolanaApi;
 use tokio::sync::Notify;
@@ -23,6 +25,21 @@ use common::solana_transaction_status::TransactionStatus;
 use crate::neon_api::NeonApi;
 
 use self::transactions::{OngoingTransaction, TransactionBuilder};
+
+#[derive(Args, Clone)]
+pub struct Config {
+    #[arg(long, requires = "operator_address")]
+    /// Path to operator keypair
+    pub operator_keypair: Option<PathBuf>,
+
+    #[arg(long, requires = "operator_keypair")]
+    /// Operator ETH address
+    pub operator_address: Option<Address>,
+
+    #[arg(long, default_value_t = false)]
+    /// Initialize operator balance accounts at service startup
+    pub init_operator_balance: bool,
+}
 
 pub struct Executor {
     program_id: Pubkey,
