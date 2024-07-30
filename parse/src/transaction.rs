@@ -35,7 +35,7 @@ pub enum BalanceOperation {
 #[derive(Debug)]
 pub enum ParseResult {
     TransactionExecuted(Transaction),
-    TransactionStep(Transaction),
+    TransactionStep(Option<Transaction>),
     TransactionCancel(TxHash),
     HolderOperation(HolderOperation),
     Deposit,
@@ -107,13 +107,34 @@ pub fn parse(
                 tx = hex::encode(tx.hash),
                 "iterative execution from instruction data"
             );
-            ParseResult::TransactionStep(tx)
+            ParseResult::TransactionStep(Some(tx))
         }
-        tag::TX_STEP_FROM_ACCOUNT => {
-            tracing::debug!("found tx step from account");
-            let tx = decode_step_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
+        tag::TX_STEP_FROM_ACCOUNT
+        | tag::TX_STEP_FROM_ACCOUNT_NO_CHAINID
+        | tag::TX_STEP_FROM_ACCOUNT_DEPRECATED
+        | tag::TX_STEP_FROM_ACCOUNT_NO_CHAINID_DEPRECATED => {
+            match *tag {
+                tag::TX_STEP_FROM_ACCOUNT => {
+                    tracing::debug!("found tx step from account");
+                }
+                tag::TX_STEP_FROM_ACCOUNT_NO_CHAINID => {
+                    tracing::debug!("found tx step from account no chain_id");
+                }
+                tag::TX_STEP_FROM_ACCOUNT_DEPRECATED => {
+                    tracing::info!("found deprecated tx step from account");
+                }
+                tag::TX_STEP_FROM_ACCOUNT_NO_CHAINID_DEPRECATED => {
+                    tracing::info!("found deprecated tx step from account no chain_id");
+                }
+                _ => unreachable!("all cases covered above"),
+            }
+            let tx = match decode_step_from_account(&bytes[1..], accounts, adb, neon_pubkey) {
+                Ok(tx) => Some(tx),
+                Err(Error::AccountNotFound(_pubkey)) => None,
+                Err(err) => return Err(err),
+            };
             tracing::info!(
-                tx = hex::encode(tx.hash),
+                tx = tx.as_ref().map(|tx| hex::encode(tx.hash)),
                 "iterative execution from holder account"
             );
             ParseResult::TransactionStep(tx)
@@ -127,6 +148,11 @@ pub fn parse(
             );
             ParseResult::TransactionExecuted(tx)
         }
+        tag::TX_EXEC_FROM_ACCOUNT_DEPRECATED => {
+            tracing::info!("found deprecated tx exec from account");
+            let tx = decode_exec_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
+            ParseResult::TransactionExecuted(tx)
+        }
         tag::TX_EXEC_FROM_ACCOUNT_SOLANA_CALL => {
             tracing::debug!("found tx exec from account with solana call");
             let tx = decode_exec_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
@@ -135,15 +161,6 @@ pub fn parse(
                 "non-iterative execution from holder account (solana call)"
             );
             ParseResult::TransactionExecuted(tx)
-        }
-        tag::TX_STEP_FROM_ACCOUNT_NO_CHAINID => {
-            tracing::debug!("found tx step from account no chain_id");
-            let tx = decode_step_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
-            tracing::info!(
-                tx = hex::encode(tx.hash),
-                "iterative execution from holder account (before EIP155)"
-            );
-            ParseResult::TransactionStep(tx)
         }
         tag::HOLDER_CREATE => {
             tracing::info!("found holder create instruction");
@@ -173,23 +190,9 @@ pub fn parse(
         tag::TX_STEP_FROM_DATA_DEPRECATED => {
             tracing::info!("found deprecated tx step from data");
             let tx = decode_step_from_ix(&bytes[1..])?;
-            ParseResult::TransactionStep(tx)
+            ParseResult::TransactionStep(Some(tx))
         }
-        tag::TX_STEP_FROM_ACCOUNT_DEPRECATED => {
-            tracing::info!("found deprecated tx step from account");
-            let tx = decode_step_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
-            ParseResult::TransactionStep(tx)
-        }
-        tag::TX_EXEC_FROM_ACCOUNT_DEPRECATED => {
-            tracing::info!("found deprecated tx exec from account");
-            let tx = decode_exec_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
-            ParseResult::TransactionExecuted(tx)
-        }
-        tag::TX_STEP_FROM_ACCOUNT_NO_CHAINID_DEPRECATED => {
-            tracing::info!("found deprecated tx step from account no chain_id");
-            let tx = decode_step_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
-            ParseResult::TransactionStep(tx)
-        }
+
         tag::CANCEL => {
             tracing::info!("found cancel instruction");
             let hash = decode_cancel(&bytes[1..], accounts, adb)?;

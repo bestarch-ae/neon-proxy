@@ -3,13 +3,15 @@ use std::num::NonZeroUsize;
 use std::rc::Rc;
 
 use common::evm_loader::account::Holder;
+use common::evm_loader::types::Transaction;
 use common::solana_sdk::account_info::AccountInfo;
 use common::solana_sdk::pubkey::Pubkey;
-use common::types::HolderOperation;
-use db::HolderRepo;
+use common::types::{utils, HolderOperation, TxHash};
+use db::{HolderRepo, TransactionRepo};
 use lru::LruCache;
-use neon_parse::AccountsDb;
+use neon_parse::{AccountsDb, TransactionsDb};
 use tokio::runtime::Handle;
+use tokio_stream::StreamExt;
 
 use crate::metrics::metrics;
 
@@ -163,5 +165,63 @@ impl AccountsDb for DummyAdb {
         super::metrics()
             .holders_in_memory
             .set(self.map.len() as i64);
+    }
+}
+
+#[derive(Debug)]
+pub struct DummyTdb {
+    map: RefCell<LruCache<TxHash, Transaction>>,
+    db: TransactionRepo,
+}
+
+impl DummyTdb {
+    pub fn new(db: TransactionRepo) -> Self {
+        DummyTdb {
+            map: RefCell::new(LruCache::new(NonZeroUsize::new(128).unwrap())),
+            db,
+        }
+    }
+}
+
+impl TransactionsDb for DummyTdb {
+    fn get_by_hash(&self, tx_hash: TxHash) -> Option<Transaction> {
+        tracing::debug!(%tx_hash, "getting transaction");
+        let db = self.db.clone();
+
+        if let Some(tx) = self
+            .map
+            .borrow_mut()
+            .get(&tx_hash)
+            .map(utils::clone_evm_transaction)
+        {
+            return Some(tx);
+        }
+
+        // This is only used in case we don't find transaction
+        // in cache, and shouldn't happen in 99% cases, when
+        // transaction is processed. Basically happens only when
+        // we were interrupted (process killed) in between steps
+        // of the transaction.
+        if let Some(tx) = tokio::task::block_in_place(move || {
+            let res = Handle::current().block_on(async move {
+                let mut stream = db.fetch_without_events(db::TransactionBy::Hash(tx_hash));
+                stream.next().await
+            });
+            match res {
+                Some(Ok(tx)) => Some(tx.inner.transaction),
+                Some(Err(_)) => None,
+                None => None,
+            }
+        }) {
+            self.map
+                .borrow_mut()
+                .put(tx_hash, utils::clone_evm_transaction(&tx));
+            return Some(tx);
+        }
+        None
+    }
+
+    fn insert(&mut self, tx: Transaction) {
+        self.map.borrow_mut().put(TxHash::from(tx.hash), tx);
     }
 }
