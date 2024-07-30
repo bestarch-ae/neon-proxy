@@ -297,6 +297,8 @@ struct ExecutorTestEnvironment {
 impl ExecutorTestEnvironment {
     async fn start() -> Result<Self> {
         let mut ctx = ProgramTest::default();
+        // let _ = tracing_log::LogTracer::init();
+
         ctx.prefer_bpf(true);
         ctx.add_program("evm_loader", NEON_KEY, None);
 
@@ -328,8 +330,6 @@ impl ExecutorTestEnvironment {
 
         let operator = Keypair::read_from_file("tests/keys/operator.json")
             .map_err(|err| anyhow::anyhow!("{err}"))?;
-        let operator_signer = LocalWallet::from_slice(operator.secret().as_ref())?;
-        let address = operator_signer.address();
         let ix =
             system_instruction::transfer(&payer.pubkey(), &operator.pubkey(), 100 * 10u64.pow(9));
         ctx.send_instructions(&[ix], &[&payer]).await?;
@@ -338,8 +338,9 @@ impl ExecutorTestEnvironment {
             solana_api,
             NEON_KEY,
             operator,
-            address.0 .0.into(),
+            None,
             CHAIN_ID,
+            false,
         )
         .await
         .context("failed initializing executor")?;

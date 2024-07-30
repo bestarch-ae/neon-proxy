@@ -3,11 +3,14 @@ mod tests;
 mod transactions;
 
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use alloy_consensus::TxEnvelope;
+use alloy_signer_wallet::LocalWallet;
 use anyhow::Context;
+use clap::Args;
 use dashmap::DashMap;
 use solana_api::solana_api::SolanaApi;
 use tokio::sync::Notify;
@@ -15,14 +18,29 @@ use tokio::time::sleep;
 
 use common::neon_lib::types::Address;
 use common::solana_sdk::pubkey::Pubkey;
-use common::solana_sdk::signature::Keypair;
-use common::solana_sdk::signature::Signature;
+use common::solana_sdk::signature::{Keypair, Signature};
+use common::solana_sdk::signer::Signer;
 use common::solana_sdk::transaction::TransactionError;
 use common::solana_transaction_status::TransactionStatus;
 
 use crate::neon_api::NeonApi;
 
 use self::transactions::{OngoingTransaction, TransactionBuilder};
+
+#[derive(Args, Clone)]
+pub struct Config {
+    #[arg(long)]
+    /// Path to operator keypair
+    pub operator_keypair: Option<PathBuf>,
+
+    #[arg(long, requires = "operator_keypair")]
+    /// Operator ETH address
+    pub operator_address: Option<Address>,
+
+    #[arg(long, default_value_t = false)]
+    /// Initialize operator balance accounts at service startup
+    pub init_operator_balance: bool,
+}
 
 pub struct Executor {
     program_id: Pubkey,
@@ -42,9 +60,19 @@ impl Executor {
         solana_api: SolanaApi,
         neon_pubkey: Pubkey,
         operator: Keypair,
-        operator_addr: Address, // TODO: derive from keypair
+        operator_addr: Option<Address>,
         default_chain_id: u64,
+        init_balances: bool,
     ) -> anyhow::Result<(Arc<Self>, impl Future<Output = anyhow::Result<()>>)> {
+        let operator_addr = match operator_addr {
+            Some(addr) => addr,
+            None => {
+                let operator_signer = LocalWallet::from_slice(operator.secret().as_ref())?;
+                operator_signer.address().0 .0.into()
+            }
+        };
+        tracing::info!(sol_key = %operator.pubkey(), eth_key = %operator_addr, "executor operator keys");
+
         let this = Self::initialize(
             neon_api,
             solana_api,
@@ -52,6 +80,7 @@ impl Executor {
             operator,
             operator_addr,
             default_chain_id,
+            init_balances,
         )
         .await?;
         let this = Arc::new(this);
@@ -66,6 +95,7 @@ impl Executor {
         operator: Keypair,
         operator_addr: Address,
         default_chain_id: u64,
+        init_balances: bool,
     ) -> anyhow::Result<Self> {
         let notify = Notify::new();
 
@@ -79,7 +109,7 @@ impl Executor {
         )
         .await?;
 
-        Ok(Self {
+        let this = Self {
             program_id: neon_pubkey,
             solana_api,
             builder,
@@ -88,7 +118,16 @@ impl Executor {
 
             #[cfg(test)]
             test_ext: test_ext::TestExtension::new(),
-        })
+        };
+
+        if init_balances {
+            for chain in this.builder.chains() {
+                tracing::info!(name = chain.name, id = chain.id, "initializing balance");
+                this.init_operator_balance(chain.id).await?;
+            }
+        }
+
+        Ok(this)
     }
 
     pub async fn handle_transaction(&self, tx: TxEnvelope) -> anyhow::Result<Signature> {
@@ -122,7 +161,7 @@ impl Executor {
             .await
             .context("could not send transaction")?;
 
-        tracing::info!(%signature, tx = ?tx.eth_tx(), "sent new transaction");
+        tracing::info!(%signature, ?tx, "sent new transaction");
         let do_notify = self.pending_transactions.is_empty();
         self.pending_transactions.insert(signature, tx); // TODO: check none?
         if do_notify {
@@ -180,7 +219,7 @@ impl Executor {
                 if let Some(value) = $kv {
                     value
                 } else {
-                    tracing::warn!(%signature, "missing pending transaction data");
+                    tracing::error!(%signature, "missing pending transaction data");
                     return;
                 }
             }
@@ -214,26 +253,27 @@ impl Executor {
     }
 
     async fn handle_expired_transaction(&self, signature: Signature, tx: OngoingTransaction) {
+        let tx_hash = tx.eth_tx().map(|tx| *tx.tx_hash());
         // TODO: retry counter
-        tracing::warn!(%signature, "transaction blockhash expired, retrying");
+        tracing::warn!(?tx_hash, %signature, "transaction blockhash expired, retrying");
         if let Err(error) = self.sign_and_send_transaction(tx).await {
-            tracing::error!(%signature, %error, "failed retrying transaction");
+            tracing::error!(?tx_hash, %signature, %error, "failed retrying transaction");
         }
     }
 
     async fn handle_success(&self, signature: Signature, tx: OngoingTransaction, slot: u64) {
+        let tx_hash = tx.eth_tx().map(|tx| *tx.tx_hash());
         // TODO: maybe add Instant to ongoing transaction.
-        tracing::info!(%signature, slot, "transaction was confirmed");
+        tracing::info!(?tx_hash, %signature, slot, "transaction was confirmed");
 
         // TODO: follow up transactions
-        let hash = tx.eth_tx().map(|tx| tx.signature_hash());
         match self.builder.next_step(tx).await {
             Err(err) => {
-                tracing::error!(?hash, %signature, %err, "failed executing next transaction step")
+                tracing::error!(?tx_hash, %signature, %err, "failed executing next transaction step")
             }
             Ok(Some(tx)) => {
                 if let Err(err) = self.sign_and_send_transaction(tx).await {
-                    tracing::error!(%signature, ?hash, %err, "failed sending transaction next step");
+                    tracing::error!(%signature, ?tx_hash, %err, "failed sending transaction next step");
                 }
             }
             Ok(None) => (),
@@ -243,11 +283,12 @@ impl Executor {
     async fn handle_error(
         &self,
         signature: Signature,
-        _tx: OngoingTransaction,
+        tx: OngoingTransaction,
         slot: u64,
         err: TransactionError,
     ) {
-        tracing::warn!(%signature, slot, %err, "transaction was confirmed, but failed");
+        let tx_hash = tx.eth_tx().map(|tx| *tx.tx_hash());
+        tracing::warn!(?tx_hash, %signature, slot, %err, "transaction was confirmed, but failed");
 
         // TODO: do we retry?
         // TODO: do we request logs?
@@ -267,6 +308,7 @@ impl Executor {
             return Ok(None);
         }
 
+        tracing::info!(chain_id, "initializing operator balance");
         let tx = self.builder.init_operator_balance(chain_id);
         let signature = self.sign_and_send_transaction(tx).await?;
 

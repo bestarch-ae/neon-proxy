@@ -84,7 +84,7 @@ services:
       -l 0.0.0.0:8018
       --pg-url postgres://neon-proxy:neon-proxy-pass@postgres:5432/neon-db
     environment:
-      - RUST_LOG=info,indexer=debug,solana_api=debug,db=debug,parse=debug
+      - RUST_LOG=info,proxy=debug,solana_api=debug,db=debug,neon_lib=debug
     depends_on:
       - neon-indexer
     ports:

@@ -49,6 +49,7 @@ impl TransactionBuilder {
                 .map(|acc| acc.pubkey)
                 .collect(),
         };
+        tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), ?info, ?holder, "creating new ALT");
 
         Ok(TxStage::alt_fill(info, tx_data, holder).ongoing(&[ix], &self.pubkey()))
     }
@@ -59,8 +60,10 @@ impl TransactionBuilder {
         tx_data: TxData,
         holder: Option<HolderInfo>,
     ) -> anyhow::Result<OngoingTransaction> {
+        let idx_before = info.idx;
         let mut info = info;
         let ix = self.write_next_alt_chunk(&mut info)?;
+        tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), ?info, idx_before, ?holder, "write next ALT chunk");
         Ok(TxStage::alt_fill(info, tx_data, holder).ongoing(&[ix], &self.pubkey()))
     }
 
