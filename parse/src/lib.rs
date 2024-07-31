@@ -16,6 +16,11 @@ use common::ethnum::U256;
 mod log;
 mod transaction;
 
+pub trait TransactionsDb {
+    fn get_by_hash(&self, _hash: TxHash) -> Option<Transaction>;
+    fn insert(&mut self, _tx: Transaction);
+}
+
 pub trait AccountsDb {
     fn init_account(&mut self, _pubkey: Pubkey) {}
     fn delete_account(&mut self, _pubkey: Pubkey) {}
@@ -36,6 +41,8 @@ pub enum Error {
     Solana,
     #[error("Failed to decode logs")]
     Log(#[from] log::Error),
+    #[error("Stepping unknown transaction")]
+    InvalidStep,
     #[error("Failed to decode transaction")]
     Transaction(#[from] transaction::Error),
 }
@@ -63,7 +70,9 @@ struct TransactionMeta {
 fn parse_transactions(
     tx: VersionedTransaction,
     accountsdb: &mut impl AccountsDb,
+    txsdb: &impl TransactionsDb,
     loaded: &LoadedAddresses,
+    neon_sig: Option<TxHash>,
     neon_pubkey: Pubkey,
 ) -> Result<Vec<Action<TransactionMeta>>, Error> {
     use transaction::ParseResult;
@@ -104,7 +113,19 @@ fn parse_transactions(
                     is_completed: true,
                 }));
             }
-            ParseResult::TransactionStep(neon_tx) => {
+            ParseResult::TransactionStep(Some(neon_tx)) => {
+                actions.push(Action::AddTransaction(TransactionMeta {
+                    neon_transaction: neon_tx,
+                    sol_ix_idx: idx,
+                    is_cancelled: false,
+                    is_completed: false,
+                }));
+            }
+            ParseResult::TransactionStep(None) => {
+                tracing::info!(?neon_sig, "using cached transaction");
+                let neon_tx = neon_sig
+                    .and_then(|sig| txsdb.get_by_hash(sig))
+                    .ok_or(Error::InvalidStep)?;
                 actions.push(Action::AddTransaction(TransactionMeta {
                     neon_transaction: neon_tx,
                     sol_ix_idx: idx,
@@ -220,6 +241,7 @@ impl<T> Action<T> {
 pub fn parse(
     transaction: SolanaTransaction,
     accountsdb: &mut impl AccountsDb,
+    txsdb: &impl TransactionsDb,
     neon_pubkey: Pubkey,
 ) -> Result<impl Iterator<Item = Action<NeonTxInfo>>, Error> {
     let SolanaTransaction { slot, tx, .. } = transaction;
@@ -231,15 +253,18 @@ pub fn parse(
         ident: sig_slot_info,
     };
     let loaded = &transaction.loaded_addresses;
-    let actions = parse_transactions(tx, accountsdb, loaded, neon_pubkey)?;
-
-    // it's empty if transaction is not a neon transaction
-    if actions.is_empty() {
-        return Ok(Either::Left(std::iter::empty()));
-    }
 
     let log_info = log::parse(transaction.log_messages, neon_pubkey)?;
     tracing::info!(tx_hash = ?log_info.sig, steps = ?log_info.steps, "log");
+
+    let actions = parse_transactions(tx, accountsdb, txsdb, loaded, log_info.sig, neon_pubkey)?;
+
+    // it's empty if transaction is not a neon transaction
+    // shouldn't happen normally
+    if actions.is_empty() {
+        tracing::warn!("neon instructions not found");
+        return Ok(Either::Left(std::iter::empty()));
+    }
 
     let iter = actions.into_iter().map(move |action| {
         action
@@ -265,6 +290,7 @@ mod tests {
 
     use common::solana_sdk::message::v0::LoadedAddresses;
     use common::solana_transaction_status::EncodedTransactionWithStatusMeta;
+    use common::types::utils;
     use serde::Deserialize;
     use test_log::test;
 
@@ -346,6 +372,18 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct DummyTdb(HashMap<TxHash, Transaction>);
+
+    impl TransactionsDb for DummyTdb {
+        fn get_by_hash(&self, hash: TxHash) -> Option<Transaction> {
+            self.0.get(&hash).map(utils::clone_evm_transaction)
+        }
+        fn insert(&mut self, tx: Transaction) {
+            self.0.insert(TxHash::from(tx.hash()), tx);
+        }
+    }
+
     #[derive(Clone, Debug)]
     struct Data {
         data: Vec<u8>,
@@ -420,24 +458,27 @@ mod tests {
     #[test]
     fn parse_5py() {
         let mut adb = main_adb();
+        let tdb = DummyTdb::default();
 
         let transaction_path = "tests/data/transactions/5puyNh1S37eZBnnr711GXY7khpw1BizCo3Yvri9yG8JACdsZGRjE1Xr1U6DFH9ukYQFMKan8X3QeggG6FoK3zobU/transaction.json";
-        parse_tx(transaction_path, None::<PathBuf>, &mut adb);
+        parse_tx(transaction_path, None::<PathBuf>, &mut adb, &tdb);
     }
 
     #[test]
     fn parse_2f() {
         let mut adb = dev_adb();
+        let tdb = DummyTdb::default();
 
         let transaction_path = "tests/data/2FSmsnCJYenPWsbrK1vFpkhgeFGKXC13gB3wDwqqyUfEnZmWpEJ6iUSjtLrtNn5QZh54bz5brWMonccG7WHA4Wp5.json";
         let reference_path = "tests/data/reference/2FSmsnCJYenPWsbrK1vFpkhgeFGKXC13gB3wDwqqyUfEnZmWpEJ6iUSjtLrtNn5QZh54bz5brWMonccG7WHA4Wp5.json";
 
-        parse_tx(transaction_path, Some(reference_path), &mut adb);
+        parse_tx(transaction_path, Some(reference_path), &mut adb, &tdb);
     }
 
     #[test]
     fn parse_4sqy() {
         let mut adb = main_adb();
+        let tdb = DummyTdb::default();
 
         let holder_txs = [
             "4CTqsT8zT7VUF3f8DUqCiDo5ow773FvpTZ6skxGsG86qFfc97QAGzU6JKkV25XbXa9NnnxdCnDJKVjRwWgygUnHr",
@@ -445,28 +486,29 @@ mod tests {
         ];
         for sig in holder_txs {
             let holder_tx = format!("tests/data/transactions/{}/transaction.json", sig);
-            parse_tx(holder_tx, None::<PathBuf>, &mut adb);
+            parse_tx(holder_tx, None::<PathBuf>, &mut adb, &tdb);
         }
 
         let transaction_path = "tests/data/transactions/4sqyU24FKWAqHPtMMFpGmNf2tPFVoTwDpJckWPEEP6RNSaEyAvqyP4DgQ25ppHAfsi7D3SEWULQhm4pA9EwYa8c1/transaction.json";
-        parse_tx(transaction_path, None::<PathBuf>, &mut adb);
+        parse_tx(transaction_path, None::<PathBuf>, &mut adb, &tdb);
     }
 
     #[test]
     fn parse_3uh3() {
         let mut adb = dev_adb();
+        let tdb = DummyTdb::default();
         let holder_txs = [
             "2DkSPyUTf2aDz8AURb4XFKKue7JSxSyeGmPhcAwAX9xrFVYoNND8ULaDfK7pqRSjxPUrQRgjLjzjAiDfic6CNzaw",
             "4MfBsYNYsSBCo1BP2BLRuPYUzApc7ynqdGYNNbZyi4AKkkE2pBjn2MWqw1y7dmZFWN1sJL8uUsbG36b7gB3ekAa7"
         ];
         for sig in holder_txs {
             let holder_tx = format!("tests/data/transactions/{}/transaction.json", sig);
-            parse_tx(holder_tx, None::<PathBuf>, &mut adb);
+            parse_tx(holder_tx, None::<PathBuf>, &mut adb, &tdb);
         }
         let transaction_path = "tests/data/transactions/3uH3dMtSpp7x75poHQM7rHefviVC6WRp4Qzjvodhs2RWALTmQ6fTw52VPrSGwvhmStwpLyaRgcL3X9r8SytXE3eR/transaction.json";
         let reference_path = "tests/data/reference/3uH3dMtSpp7x75poHQM7rHefviVC6WRp4Qzjvodhs2RWALTmQ6fTw52VPrSGwvhmStwpLyaRgcL3X9r8SytXE3eR.json";
 
-        parse_tx(transaction_path, Some(reference_path), &mut adb);
+        parse_tx(transaction_path, Some(reference_path), &mut adb, &tdb);
     }
 
     #[test]
@@ -479,13 +521,14 @@ mod tests {
             let entry = entry.unwrap();
             if entry.metadata().unwrap().is_file() {
                 let mut adb = dev_adb();
+                let tdb = DummyTdb::default();
                 let fname = entry.file_name();
                 let mut ref_file_name = PathBuf::new();
                 ref_file_name.push(ref_path);
                 ref_file_name.push(fname);
                 println!("Parsing: {:?}", entry.path());
                 let ref_file_name = ref_file_name.exists().then_some(ref_file_name);
-                parse_tx(entry.path(), ref_file_name, &mut adb);
+                parse_tx(entry.path(), ref_file_name, &mut adb, &tdb);
             }
         }
     }
@@ -494,6 +537,7 @@ mod tests {
         transaction_path: impl AsRef<Path>,
         reference_path: Option<impl AsRef<Path>>,
         adb: &mut DummyAdb,
+        txsdb: &impl TransactionsDb,
     ) {
         let neon_pubkey = adb.neon_pubkey;
         let encoded: EncodedTransactionWithStatusMeta =
@@ -512,7 +556,6 @@ mod tests {
 
         let pubkeys = tx.message.static_account_keys();
         tracing::info!(?pubkeys);
-        let actions = parse_transactions(tx, adb, &loaded, neon_pubkey).unwrap();
         let logs = match meta.log_messages {
             common::solana_transaction_status::option_serializer::OptionSerializer::Some(logs) => {
                 logs
@@ -520,6 +563,7 @@ mod tests {
             _ => panic!("no logs"),
         };
         let logs = log::parse(logs, neon_pubkey).unwrap();
+        let actions = parse_transactions(tx, adb, txsdb, &loaded, logs.sig, neon_pubkey).unwrap();
 
         let neon_tx_infos = actions
             .into_iter()

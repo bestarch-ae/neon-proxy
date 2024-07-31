@@ -8,6 +8,7 @@ use std::rc::Rc;
 use anyhow::{Context, Error};
 use clap::Parser;
 use common::evm_loader::account::{Holder, TAG_HOLDER};
+use common::evm_loader::types::Transaction;
 use serde::Serialize;
 
 use common::solana_sdk::account_info::AccountInfo;
@@ -16,9 +17,9 @@ use common::solana_sdk::pubkey::Pubkey;
 use common::solana_transaction_status::{
     option_serializer::OptionSerializer, EncodedTransactionWithStatusMeta,
 };
-use common::types::{EventLog, HolderOperation, NeonTxInfo, SolanaTransaction};
-use neon_parse::AccountsDb;
+use common::types::{EventLog, HolderOperation, NeonTxInfo, SolanaTransaction, TxHash};
 use neon_parse::{parse, Action};
+use neon_parse::{AccountsDb, TransactionsDb};
 use solana_api::solana_api::SolanaApi;
 
 #[derive(Parser, Debug)]
@@ -41,6 +42,20 @@ struct Args {
         default_value = "NeonVMyRX5GbCrsAHnUwx1nYYoJAtskU1bWUo6JGNyG"
     )]
     neon_pubkey: Pubkey,
+}
+
+#[derive(Default)]
+struct DummyTdb(HashMap<TxHash, Transaction>);
+
+impl TransactionsDb for DummyTdb {
+    fn get_by_hash(&self, hash: TxHash) -> Option<Transaction> {
+        self.0
+            .get(&hash)
+            .map(common::types::utils::clone_evm_transaction)
+    }
+    fn insert(&mut self, tx: Transaction) {
+        self.0.insert(TxHash::from(tx.hash()), tx);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -250,6 +265,7 @@ async fn main() -> Result<(), Error> {
 
     let args = Args::parse();
     let mut accounts_db = DummyAdb::new(args.neon_pubkey);
+    let txs_db = DummyTdb::default();
 
     let txs = if let Some(chain_path) = args.tx_chain {
         println!("transaction chain");
@@ -290,7 +306,7 @@ async fn main() -> Result<(), Error> {
         println!();
         println!("===== parsing {signature} =====");
         println!("tx status: {:?}", transaction.status);
-        for action in parse(transaction, &mut accounts_db, args.neon_pubkey)
+        for action in parse(transaction, &mut accounts_db, &txs_db, args.neon_pubkey)
             .with_context(|| format!("parsing signature: {signature}"))?
         {
             match action {

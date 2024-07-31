@@ -282,3 +282,45 @@ impl HolderOperation {
         }
     }
 }
+
+pub mod utils {
+    use evm_loader::types::Transaction;
+    use evm_loader::types::{AccessListTx, LegacyTx, TransactionPayload};
+
+    pub fn clone_evm_transaction(tx: &Transaction) -> Transaction {
+        let payload = match &tx.transaction {
+            TransactionPayload::Legacy(legacy) => TransactionPayload::Legacy(LegacyTx {
+                nonce: legacy.nonce,
+                gas_price: legacy.gas_price,
+                gas_limit: legacy.gas_limit,
+                target: legacy.target,
+                value: legacy.value,
+                call_data: legacy.call_data.clone(),
+                v: legacy.v,
+                r: legacy.r,
+                s: legacy.s,
+                chain_id: legacy.chain_id,
+                recovery_id: legacy.recovery_id,
+            }),
+            TransactionPayload::AccessList(acctx) => TransactionPayload::AccessList(AccessListTx {
+                nonce: acctx.nonce,
+                gas_price: acctx.gas_price,
+                gas_limit: acctx.gas_limit,
+                target: acctx.target,
+                value: acctx.value,
+                call_data: acctx.call_data.clone(),
+                r: acctx.r,
+                s: acctx.s,
+                chain_id: acctx.chain_id,
+                recovery_id: acctx.recovery_id,
+                access_list: acctx.access_list.clone(),
+            }),
+        };
+        Transaction {
+            transaction: payload,
+            byte_len: tx.byte_len,
+            hash: tx.hash,
+            signed_hash: tx.signed_hash,
+        }
+    }
+}

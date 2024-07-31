@@ -7,11 +7,11 @@ use common::solana_sdk::commitment_config::CommitmentLevel;
 use common::solana_sdk::hash::Hash;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
-use common::types::{HolderOperation, NeonTxInfo, SolanaBlock, SolanaTransaction, TxHash};
-use neon_parse::{AccountsDb, Action};
+use common::types::{utils, HolderOperation, NeonTxInfo, SolanaBlock, SolanaTransaction, TxHash};
+use neon_parse::{AccountsDb, Action, TransactionsDb};
 use solana::traverse::v2::LedgerItem;
 
-use crate::accountsdb::DummyAdb;
+use crate::accountsdb::{DummyAdb, DummyTdb};
 use crate::metrics::metrics;
 
 const ONE_BLOCK_SEC: f64 = 0.4;
@@ -40,6 +40,7 @@ pub struct Indexer {
     block_gas_used: U256,
     block_log_idx: u64,
     adb: DummyAdb,
+    tdb: DummyTdb,
     target: Pubkey,
     last_block: Option<LastBlock>,
 }
@@ -51,6 +52,7 @@ impl Indexer {
         let holder_repo = db::HolderRepo::new(pool.clone());
         let block_repo = db::BlockRepo::new(pool.clone());
         let adb = DummyAdb::new(target, holder_repo.clone());
+        let tdb = DummyTdb::new(tx_repo.clone());
         let tx_log_idx = TxLogIdx::new(tx_repo.clone());
 
         Self {
@@ -63,6 +65,7 @@ impl Indexer {
             block_gas_used: U256::new(0),
             block_log_idx: 0,
             adb,
+            tdb,
             target,
             last_block: None,
         }
@@ -152,6 +155,10 @@ impl Indexer {
             max_elapsed_time: None,
             ..Default::default()
         };
+        for tx in &block.txs {
+            self.tdb
+                .insert(utils::clone_evm_transaction(&tx.transaction));
+        }
         while let Some(backoff) = backoff.next_backoff() {
             match self.save_block(&block).await {
                 Ok(_) => break,
@@ -205,7 +212,7 @@ impl Indexer {
             self.adb.set_slot_idx(slot, tx_idx);
 
             let parse_timer = metrics().neon_parse_time.start_timer();
-            let actions = match neon_parse::parse(tx, &mut self.adb, self.target) {
+            let actions = match neon_parse::parse(tx, &mut self.adb, &self.tdb, self.target) {
                 Ok(actions) => actions,
                 Err(err) => {
                     tracing::warn!(?err, "failed to parse solana transaction");
@@ -245,7 +252,6 @@ impl Indexer {
                                                     tx_log_idx = %log.tx_log_idx, "log");
                             }
                         }
-
                         neon_block.txs.push(tx);
                     }
                     Action::CancelTransaction { hash, total_gas } => {
