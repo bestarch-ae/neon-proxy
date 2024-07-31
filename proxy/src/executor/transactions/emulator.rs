@@ -122,7 +122,10 @@ impl Emulator {
                 {
                     Ok(false)
                 }
-                error => Err(anyhow!("transaction ({tx_hash}) preflight error: {error}")),
+                error => Err(anyhow!(
+                    "transaction ({tx_hash}) preflight error: {error}, logs: {:#?}",
+                    res.logs
+                )),
             }
         } else {
             Ok(true)
