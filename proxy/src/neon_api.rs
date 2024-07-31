@@ -1,6 +1,7 @@
 mod gas_limit_calculator;
 
 use std::borrow::Borrow;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use jsonrpsee::types::ErrorCode;
@@ -33,6 +34,38 @@ use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
 use self::gas_limit_calculator::{GasLimitCalculator, GasLimitError};
 
+#[derive(Copy, Clone, Debug)]
+enum ExitStatus {
+    Success,
+    Revert,
+    StepLimitExceeded,
+}
+
+#[derive(Debug)]
+pub enum CallResult {
+    Success {
+        data: Vec<u8>,
+    },
+    StepLimit,
+    Revert {
+        error: Option<String>,
+        data: Vec<u8>,
+    },
+}
+
+impl FromStr for ExitStatus {
+    type Err = NeonApiError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "succeed" => Ok(Self::Success),
+            "revert" => Ok(Self::Revert),
+            "step limit exceeded" => Ok(Self::StepLimitExceeded),
+            _ => Err(NeonApiError::InvalidExitStatus(s.to_string())),
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum NeonApiError {
     #[error("neon error: {0}")]
@@ -41,6 +74,8 @@ pub enum NeonApiError {
     GasLimit(#[from] GasLimitError),
     #[error("transaction serialization error: {0}")]
     Bincode(#[from] bincode::Error),
+    #[error("invalid exit status: {0}")]
+    InvalidExitStatus(String),
 }
 
 impl NeonApiError {
@@ -102,7 +137,7 @@ enum TaskCommand {
     },
     EmulateCall {
         tx: TxParams,
-        response: oneshot::Sender<Result<Vec<u8>, NeonError>>,
+        response: oneshot::Sender<Result<CallResult, NeonApiError>>,
     },
     EstimateGas {
         tx: TxParams,
@@ -303,7 +338,7 @@ impl NeonApi {
         &self,
         params: TxParams,
         tag: Option<BlockNumberOrTag>,
-    ) -> Result<Vec<u8>, NeonApiError> {
+    ) -> Result<CallResult, NeonApiError> {
         let (tx, rx) = oneshot::channel();
         self.channel
             .send(Task::new(
@@ -316,7 +351,7 @@ impl NeonApi {
             ))
             .await
             .unwrap();
-        Ok(rx.await.unwrap()?)
+        rx.await.unwrap()
     }
 
     pub async fn estimate_gas(
@@ -497,8 +532,8 @@ impl NeonApi {
                 .await;
                 tracing::info!(?resp, "emulate_call");
                 let resp = match resp {
-                    Ok((resp, _something)) => Ok(resp.result),
-                    Err(err) => Err(err),
+                    Ok((resp, _something)) => decode_neon_response(resp),
+                    Err(err) => Err(err.into()),
                 };
                 let _ = response.send(resp);
             }
@@ -548,6 +583,23 @@ impl NeonApi {
                 let resp = commands::simulate_solana::execute(&ctx.rpc_client, request).await;
                 let _ = response.send(resp);
             }
+        }
+    }
+}
+
+fn decode_neon_response(resp: EmulateResponse) -> Result<CallResult, NeonApiError> {
+    use common::evm_loader::error;
+    let status = ExitStatus::from_str(&resp.exit_status)?;
+
+    match status {
+        ExitStatus::Success => Ok(CallResult::Success { data: resp.result }),
+        ExitStatus::StepLimitExceeded => Ok(CallResult::StepLimit),
+        ExitStatus::Revert => {
+            let msg = error::format_revert_error(&resp.result);
+            Ok(CallResult::Revert {
+                error: msg.map(|s| s.to_owned()),
+                data: resp.result,
+            })
         }
     }
 }
