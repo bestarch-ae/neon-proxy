@@ -45,7 +45,7 @@ impl From<Hash> for PgSolanaBlockHash {
 
 impl From<PgSolanaBlockHash> for Hash {
     fn from(value: PgSolanaBlockHash) -> Self {
-        Hash::new_from_array(value.0)
+        Self::new_from_array(value.0)
     }
 }
 
@@ -54,7 +54,7 @@ pub struct SolanaSignaturesRepo {
 }
 
 impl SolanaSignaturesRepo {
-    pub fn new(pool: sqlx::PgPool) -> Self {
+    pub const fn new(pool: sqlx::PgPool) -> Self {
         Self { pool }
     }
 
@@ -121,7 +121,7 @@ struct HolderRow {
 }
 
 impl HolderRepo {
-    pub fn new(pool: sqlx::PgPool) -> Self {
+    pub const fn new(pool: sqlx::PgPool) -> Self {
         Self { pool }
     }
 

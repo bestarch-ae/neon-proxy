@@ -30,7 +30,7 @@ pub enum RichLogBy {
 }
 
 impl RichLogBy {
-    fn bounds(self) -> (Option<u64>, Option<u64>, Option<[u8; 32]>) {
+    const fn bounds(self) -> (Option<u64>, Option<u64>, Option<[u8; 32]>) {
         match self {
             Self::SlotRange { from, to } => (from, to, None),
             Self::Hash(hash) => (None, None, Some(hash)),
@@ -50,7 +50,7 @@ impl From<Address> for PgAddress {
 
 impl From<PgAddress> for Address {
     fn from(value: PgAddress) -> Self {
-        Address(value.0)
+        Self(value.0)
     }
 }
 
@@ -59,7 +59,7 @@ impl From<Vec<u8>> for PgAddress {
         assert_eq!(val.len(), 20);
         let mut buf = [0; 20];
         buf.copy_from_slice(&val);
-        PgAddress(buf)
+        Self(buf)
     }
 }
 
@@ -86,14 +86,14 @@ impl From<U256> for PgU256 {
         let buf = u256_to_bytes(&val);
         let bigint = num_bigint::BigInt::from_bytes_le(num_bigint::Sign::Plus, &buf);
 
-        PgU256(sqlx::types::BigDecimal::new(bigint, 0))
+        Self(sqlx::types::BigDecimal::new(bigint, 0))
     }
 }
 
 impl From<PgU256> for U256 {
     fn from(value: PgU256) -> Self {
         use std::str::FromStr;
-        U256::from_str(&value.0.to_string()).unwrap()
+        Self::from_str(&value.0.to_string()).unwrap()
     }
 }
 
@@ -115,10 +115,10 @@ pub enum TransactionBy {
 }
 
 impl TransactionBy {
-    pub fn slot_hash(self) -> (Option<u64>, Option<TxHash>) {
+    pub const fn slot_hash(self) -> (Option<u64>, Option<TxHash>) {
         match self {
-            TransactionBy::Hash(hash) => (None, Some(hash)),
-            TransactionBy::Slot(slot) => (Some(slot), None),
+            Self::Hash(hash) => (None, Some(hash)),
+            Self::Slot(slot) => (Some(slot), None),
         }
     }
 }
@@ -135,7 +135,7 @@ pub struct TransactionRepo {
 }
 
 impl TransactionRepo {
-    pub fn new(pool: sqlx::PgPool) -> Self {
+    pub const fn new(pool: sqlx::PgPool) -> Self {
         Self { pool }
     }
 
@@ -372,7 +372,7 @@ impl TransactionRepo {
             slot.unwrap_or(0) as i64,
             slot.is_none(),
         )
-        .map(|row| row.neon_tx_info_with_empty_logs())
+        .map(NeonTransactionRow::neon_tx_info_with_empty_logs)
         .fetch(&self.pool)
         .map(|res| Ok(res??))
     }
@@ -574,7 +574,7 @@ impl FromRow<'_, PgRow> for NeonTransactionRowWithLogs {
         } else {
             Some(NeonTransactionLogRow::from_row(row)?)
         };
-        Ok(NeonTransactionRowWithLogs { transaction, log })
+        Ok(Self { transaction, log })
     }
 }
 
@@ -750,7 +750,7 @@ impl TryFrom<NeonTransactionLogRow> for EventLog {
                 );
                 topics.push(topic);
             }
-            Result::<_, Self::Error>::Ok(EventLog {
+            Result::<_, Self::Error>::Ok(Self {
                 event_type: EventKind::Log, // TODO: insert to DB
                 is_hidden: false,
                 is_reverted: false,
@@ -810,7 +810,7 @@ impl TryFrom<NeonRichLogRow> for RichLog {
             log_data: value.log_data,
         };
 
-        Ok(RichLog {
+        Ok(Self {
             blockhash: value.block_hash.into(),
             slot: value.block_slot.try_into().context("block_slot")?,
             timestamp: value.block_time,

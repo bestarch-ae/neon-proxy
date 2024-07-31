@@ -6,7 +6,7 @@ pub struct ReliableEmptySlotRepo {
 }
 
 impl ReliableEmptySlotRepo {
-    pub fn new(pool: sqlx::PgPool) -> Self {
+    pub const fn new(pool: sqlx::PgPool) -> Self {
         Self { pool }
     }
 
