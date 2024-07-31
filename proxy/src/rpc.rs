@@ -641,17 +641,27 @@ impl EthApiServer for EthApiImpl {
     /// Sends signed transaction, returning its hash.
     async fn send_raw_transaction(&self, bytes: Bytes) -> RpcResult<B256> {
         if let Some(executor) = self.executor.as_ref() {
-            let bytes: &mut &[u8] = &mut bytes.as_ref();
-            let envelope = TxEnvelope::decode(bytes)
+            let bytes_ref: &mut &[u8] = &mut bytes.as_ref();
+            let envelope = TxEnvelope::decode(bytes_ref)
+                .inspect_err(|error| tracing::warn!(%bytes, %error, "could not decode transaction"))
                 .map_err(|_| ErrorObjectOwned::from(ErrorCode::InvalidParams))?;
             let hash = *envelope.tx_hash();
+            tracing::info!(tx_hash = %hash, %bytes, ?envelope, "sendRawTransaction");
             executor
                 .handle_transaction(envelope)
                 .await
-                .map_err(|_| ErrorObjectOwned::from(ErrorCode::InternalError))?; // TODO
+                .inspect_err(|error| tracing::warn!(%hash, %error, "could not handle transaction"))
+                .map_err(|err| {
+                    ErrorObjectOwned::owned(
+                        ErrorCode::InternalError.code(),
+                        err.to_string(),
+                        None::<()>,
+                    )
+                })?;
 
             Ok(hash)
         } else {
+            tracing::debug!(%bytes, "skip sendRawTransaction, executor disabled");
             unimplemented()
         }
     }
