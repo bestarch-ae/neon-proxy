@@ -300,9 +300,14 @@ impl TransactionBuilder {
             tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), "fallback to iterative, resize iter count");
             return fallback_iterative(tx_data, alt).await;
         }
+        let tag = if tx_data.emulate.external_solana_call {
+            tag::TX_EXEC_FROM_DATA_SOLANA_CALL
+        } else {
+            tag::TX_EXEC_FROM_DATA
+        };
 
         let (accounts, mut data) = self.execute_base(
-            tag::TX_EXEC_FROM_DATA,
+            tag,
             tx_data.envelope.tx_hash(),
             chain_id,
             &tx_data.emulate.solana_accounts,
@@ -428,9 +433,14 @@ impl TransactionBuilder {
             }
             (Some(chain_id), false) => chain_id,
         };
+        let tag = if tx_data.emulate.external_solana_call {
+            tag::TX_EXEC_FROM_ACCOUNT_SOLANA_CALL
+        } else {
+            tag::TX_EXEC_FROM_ACCOUNT
+        };
 
         let (accounts, data) = self.execute_base(
-            tag::TX_EXEC_FROM_ACCOUNT,
+            tag,
             holder.hash(),
             chain_id,
             &tx_data.emulate.solana_accounts,

@@ -63,7 +63,10 @@ struct Wallet {
 
 impl Wallet {
     fn new() -> Self {
-        let sol = Keypair::new();
+        Self::from_keypair(Keypair::new())
+    }
+
+    fn from_keypair(sol: Keypair) -> Self {
         let eth = LocalWallet::from_slice(sol.secret().as_ref()).unwrap();
         Wallet { sol, eth }
     }
@@ -590,6 +593,37 @@ async fn alt() -> anyhow::Result<()> {
     executor.handle_transaction(tx.into()).await?;
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn sol_call() -> anyhow::Result<()> {
+    let ExecutorTestEnvironment {
+        test_ctx: mut env,
+        test_kp: kp,
+        executor,
+        ..
+    } = ExecutorTestEnvironment::start().await?;
+
+    let code = Contract::read("tests/fixtures/Test")?;
+    let mut tx = code.deploy_tx();
+    let signature = kp.eth.sign_transaction_sync(&mut tx)?;
+    let tx = tx.into_signed(signature);
+    executor.handle_transaction(tx.into()).await?;
+
+    let txs = executor.join_current_transactions().await;
+    assert!(txs.len() > 1);
+
+    let contract_address = Address::from_create(&kp.address().0.into(), 0);
+    let (contract_pubkey, _) = contract_address.find_solana_address(&NEON_KEY);
+    let account = env
+        .banks_client
+        .get_account(contract_pubkey)
+        .await?
+        .context("missing contract account")?;
+    code.verify(contract_pubkey, account);
 
     Ok(())
 }
