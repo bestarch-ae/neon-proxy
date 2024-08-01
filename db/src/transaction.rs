@@ -460,7 +460,7 @@ impl TransactionRepo {
             NeonRichLogRow,
             r#"SELECT
                 address as "address?: PgAddress", tx_hash as "tx_hash!",
-                row_number() over (partition by T.block_slot ORDER BY T.block_slot, T.tx_idx, tx_log_idx) as "log_idx!",
+                (row_number() over (partition by T.block_slot ORDER BY T.block_slot, T.tx_idx, tx_log_idx))-1 as "log_idx!",
                 tx_log_idx as "tx_log_idx!", L.block_slot as "block_slot!",
                 event_level as "event_level!", event_order as "event_order!",
                 log_topic1 as "log_topic1?", log_topic2 as "log_topic2?",
