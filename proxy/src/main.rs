@@ -1,23 +1,18 @@
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
-use std::future::Future;
+use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::str::FromStr;
-use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use clap::{ArgGroup, Parser};
-use futures_util::TryFutureExt;
-use hyper::body::HttpBody;
-use hyper::{Body, Request, Response};
+use hyper::server::conn::AddrStream;
+use hyper::service::{make_service_fn, service_fn};
 use jsonrpsee::server::Server;
 use jsonrpsee::types::ErrorCode;
 use jsonrpsee::RpcModule;
 use rpc_api::{EthApiServer, EthFilterApiServer};
-use serde_json::Value;
 use thiserror::Error;
-use tower::{Layer, Service};
+use tower::Service;
 
 mod convert;
 mod executor;
@@ -265,30 +260,58 @@ async fn main() {
         mp_gas_prices.clone(),
     );
     let mut other_tokens = HashSet::new();
-    let mut module = build_module(eth.clone(), None);
+    let mut tokens_methods = HashMap::new();
+    let default_methods = build_module(eth.clone());
     for (token_name, &chain_id) in additional_chains.iter() {
         tracing::info!(%token_name, %chain_id, "adding chain");
         let new_eth = eth.clone().with_chain_id(chain_id);
-        let new_module = build_module(new_eth, Some(token_name));
-        module.merge(new_module).expect("no conflicts");
+        let new_methods = build_module(new_eth);
+        tokens_methods.insert(token_name.clone(), new_methods);
         other_tokens.insert(token_name.clone());
     }
 
-    let service_builder =
-        tower::ServiceBuilder::new().layer(ProxyTokenRequestLayer::new(other_tokens));
+    let addr: SocketAddr = opts.listen.parse().expect("invalid listen address");
+    let (stop_handle, server_handle) = jsonrpsee::server::stop_channel();
+    let svc_builder = Server::builder().to_service_builder();
+    let stop_handle2 = stop_handle.clone();
 
-    let server = Server::builder()
-        .set_http_middleware(service_builder)
-        .build(&opts.listen)
-        .await
-        .unwrap();
+    let make_service = make_service_fn(move |_conn: &AddrStream| {
+        let stop_handle = stop_handle2.clone();
+        let svc_builder = svc_builder.clone();
+        let tokens_methods = tokens_methods.clone();
+        let default_methods = default_methods.clone();
+
+        async move {
+            Ok::<_, Box<dyn StdError + Send + Sync>>(service_fn(move |req| {
+                let stop_handle = stop_handle.clone();
+                let svc_builder = svc_builder.clone();
+                let token_name = req.uri().path().trim_matches('/').to_lowercase();
+                tracing::info!(?token_name, "request");
+                let methods = tokens_methods
+                    .get(&token_name)
+                    .unwrap_or_else(|| {
+                        tracing::info!(?token_name, "token not found, using default methods");
+                        &default_methods
+                    })
+                    .clone();
+                let mut svc = svc_builder.build(methods, stop_handle);
+                svc.call(req)
+            }))
+        }
+    });
+
+    let server = hyper::Server::bind(&addr).serve(make_service);
+
+    tokio::spawn(async move {
+        let graceful = server.with_graceful_shutdown(async move { stop_handle.shutdown().await });
+        graceful.await.expect("server error");
+    });
 
     tracing::info!("Listening on {}", opts.listen);
-    let handle = server.start(module);
-    handle.stopped().await;
+    server_handle.stopped().await;
 }
 
-fn build_module(eth: EthApiImpl, prefix: Option<&str>) -> RpcModule<()> {
+fn build_module(eth: EthApiImpl) -> RpcModule<()> {
     let mut module = RpcModule::new(());
 
     module
@@ -309,127 +332,5 @@ fn build_module(eth: EthApiImpl, prefix: Option<&str>) -> RpcModule<()> {
         .merge(<EthApiImpl as NeonFilterApiServer>::into_rpc(eth.clone()))
         .expect("no conflicts");
 
-    if let Some(prefix) = prefix {
-        rename_methods(&mut module, prefix);
-    }
-
     module
-}
-
-fn rename_methods<T: Send + Sync + 'static>(module: &mut RpcModule<T>, prefix: &str) {
-    let method_names = module.method_names().collect::<Vec<_>>();
-    for name in method_names {
-        let new_name: &'static str = build_method_name_with_prefix(prefix, name);
-        module
-            .register_alias(new_name, name)
-            .expect("failed to register alias");
-        module.remove_method(name);
-    }
-}
-
-fn build_method_name_with_prefix(prefix: &str, method_name: &str) -> &'static str {
-    let new_name = format!("{prefix}_{method_name}");
-    Box::leak(new_name.into_boxed_str())
-}
-
-#[derive(Debug, Clone)]
-pub struct ProxyTokenRequest<S> {
-    inner: S,
-    token_names: Arc<HashSet<String>>,
-}
-
-impl<S> ProxyTokenRequest<S> {
-    pub fn new(inner: S, token_names: Arc<HashSet<String>>) -> Self {
-        Self { inner, token_names }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ProxyTokenRequestLayer {
-    token_names: Arc<HashSet<String>>,
-}
-
-impl ProxyTokenRequestLayer {
-    pub fn new(token_names: HashSet<String>) -> Self {
-        Self {
-            token_names: Arc::new(token_names),
-        }
-    }
-}
-
-impl<S> Layer<S> for ProxyTokenRequestLayer {
-    type Service = ProxyTokenRequest<S>;
-
-    fn layer(&self, inner: S) -> Self::Service {
-        ProxyTokenRequest::new(inner, self.token_names.clone())
-    }
-}
-
-impl<S> Service<Request<Body>> for ProxyTokenRequest<S>
-where
-    S: Service<Request<Body>, Response = Response<Body>> + Clone + Send + 'static,
-    S::Response: 'static,
-    S::Error: Into<Box<dyn StdError + Send + Sync>> + 'static,
-    S::Future: Send + 'static,
-{
-    type Response = S::Response;
-    type Error = Box<dyn StdError + Send + Sync + 'static>;
-    type Future =
-        Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
-
-    #[inline]
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx).map_err(Into::into)
-    }
-
-    fn call(&mut self, req: Request<Body>) -> Self::Future {
-        let (parts, body) = req.into_parts();
-        let path = parts.uri.path().trim_matches('/').to_lowercase();
-        if self.token_names.contains(&path) {
-            tracing::info!(token_name=?path, "token request");
-            let mut inner = self.inner.clone();
-            let fut = async move {
-                let body_bytes = match body.collect().await {
-                    Ok(body) => body.to_bytes(),
-                    Err(err) => {
-                        tracing::warn!(?err, "Failed to read request body");
-                        let response = Response::builder()
-                            .status(400)
-                            .body(Body::from("Failed to read request body"))
-                            .unwrap();
-                        return Ok(response);
-                    }
-                };
-                let mut request_json: Value = match serde_json::from_slice(&body_bytes) {
-                    Ok(json) => json,
-                    Err(_) => {
-                        let response = Response::builder()
-                            .status(400)
-                            .body(Body::from("Invalid JSON in request body"))
-                            .unwrap();
-                        return Ok(response);
-                    }
-                };
-
-                if let Some(method) = request_json["method"].as_str() {
-                    let new_method = format!("{path}_{method}");
-                    request_json["method"] = Value::String(new_method);
-                }
-
-                let new_body = Body::from(request_json.to_string());
-                let new_req = Request::from_parts(parts, new_body);
-
-                inner.call(new_req).await.map_err(Into::into)
-            };
-
-            Box::pin(fut)
-        } else {
-            tracing::info!("default token request");
-            Box::pin(
-                self.inner
-                    .call(Request::from_parts(parts, body))
-                    .map_err(Into::into),
-            )
-        }
-    }
 }
