@@ -61,7 +61,6 @@ impl Executor {
         neon_pubkey: Pubkey,
         operator: Keypair,
         operator_addr: Option<Address>,
-        default_chain_id: u64,
         init_balances: bool,
     ) -> anyhow::Result<(Arc<Self>, impl Future<Output = anyhow::Result<()>>)> {
         let operator_addr = match operator_addr {
@@ -79,7 +78,6 @@ impl Executor {
             neon_pubkey,
             operator,
             operator_addr,
-            default_chain_id,
             init_balances,
         )
         .await?;
@@ -94,7 +92,6 @@ impl Executor {
         neon_pubkey: Pubkey,
         operator: Keypair,
         operator_addr: Address,
-        default_chain_id: u64,
         init_balances: bool,
     ) -> anyhow::Result<Self> {
         let notify = Notify::new();
@@ -105,7 +102,6 @@ impl Executor {
             neon_api.clone(),
             operator,
             operator_addr,
-            default_chain_id,
         )
         .await?;
 
@@ -130,10 +126,14 @@ impl Executor {
         Ok(this)
     }
 
-    pub async fn handle_transaction(&self, tx: TxEnvelope) -> anyhow::Result<Signature> {
-        let tx = self.builder.start_execution(tx).await?;
+    pub async fn handle_transaction(
+        &self,
+        tx: TxEnvelope,
+        default_chain_id: u64,
+    ) -> anyhow::Result<Signature> {
+        let tx = self.builder.start_execution(tx, default_chain_id).await?;
 
-        self.init_operator_balance(tx.chain_id().unwrap_or(self.builder.default_chain_id()))
+        self.init_operator_balance(tx.chain_id().unwrap_or(default_chain_id))
             .await
             .context("cannot init operator balance")?;
 

@@ -240,40 +240,35 @@ async fn main() {
     )
     .expect("failed to create gas prices");
 
-    let default_executor = create_and_run_executor(
-        &neon_api,
-        &opts.solana_url,
-        opts.neon_pubkey,
-        default_chain_id,
-        &opts.executor,
-    )
-    .await;
+    let executor = if let Some(path) = &opts.executor.operator_keypair {
+        let operator = Keypair::read_from_file(path).expect("cannot read operator keypair");
+        let (executor, executor_task) = Executor::initialize_and_start(
+            neon_api.clone(),
+            SolanaApi::new(opts.solana_url, false),
+            opts.neon_pubkey,
+            operator,
+            opts.executor.operator_address,
+            opts.executor.init_operator_balance,
+        )
+        .await
+        .expect("could not initialize executor");
+        tokio::spawn(executor_task);
+        Some(executor)
+    } else {
+        None
+    };
     let eth = EthApiImpl::new(
         pool.clone(),
         neon_api.clone(),
         default_chain_id,
-        default_executor,
+        executor.clone(),
         mp_gas_prices.clone(),
     );
     let mut other_tokens = HashSet::new();
     let mut module = build_module(eth.clone(), None);
     for (token_name, &chain_id) in additional_chains.iter() {
         tracing::info!(%token_name, %chain_id, "adding chain");
-        let executor = create_and_run_executor(
-            &neon_api,
-            &opts.solana_url,
-            opts.neon_pubkey,
-            chain_id,
-            &opts.executor,
-        )
-        .await;
-        let new_eth = EthApiImpl::new(
-            pool.clone(),
-            neon_api.clone(),
-            chain_id,
-            executor,
-            mp_gas_prices.clone(),
-        );
+        let new_eth = eth.clone().with_chain_id(chain_id);
         let new_module = build_module(new_eth, Some(token_name));
         module.merge(new_module).expect("no conflicts");
         other_tokens.insert(token_name.clone());
@@ -291,33 +286,6 @@ async fn main() {
     tracing::info!("Listening on {}", opts.listen);
     let handle = server.start(module);
     handle.stopped().await;
-}
-
-async fn create_and_run_executor(
-    neon_api: &NeonApi,
-    solana_url: &str,
-    neon_pubkey: Pubkey,
-    chain_id: u64,
-    executor_config: &executor::Config,
-) -> Option<Arc<Executor>> {
-    if let Some(path) = &executor_config.operator_keypair {
-        let operator = Keypair::read_from_file(path).expect("cannot read operator keypair");
-        let (executor, executor_task) = Executor::initialize_and_start(
-            neon_api.clone(),
-            SolanaApi::new(solana_url, false),
-            neon_pubkey,
-            operator,
-            executor_config.operator_address,
-            chain_id,
-            executor_config.init_operator_balance,
-        )
-        .await
-        .expect("could not initialize executor");
-        tokio::spawn(executor_task);
-        Some(executor)
-    } else {
-        None
-    }
 }
 
 fn build_module(eth: EthApiImpl, prefix: Option<&str>) -> RpcModule<()> {

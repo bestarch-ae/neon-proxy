@@ -53,10 +53,16 @@ pub(super) enum TxStage {
 }
 
 impl TxStage {
-    pub fn ongoing(self, ixs: &[Instruction], payer: &Pubkey) -> OngoingTransaction {
+    pub fn ongoing(
+        self,
+        ixs: &[Instruction],
+        payer: &Pubkey,
+        default_chain_id: u64,
+    ) -> OngoingTransaction {
         OngoingTransaction {
             stage: self,
             message: VersionedMessage::Legacy(message::legacy::Message::new(ixs, Some(payer))),
+            default_chain_id,
         }
     }
 
@@ -65,6 +71,7 @@ impl TxStage {
         ixs: &[Instruction],
         payer: &Pubkey,
         alt: AddressLookupTableAccount,
+        default_chain_id: u64,
     ) -> anyhow::Result<OngoingTransaction> {
         Ok(OngoingTransaction {
             stage: self,
@@ -74,6 +81,7 @@ impl TxStage {
                 &[alt],
                 Hash::default(),
             )?),
+            default_chain_id,
         })
     }
 
@@ -142,6 +150,7 @@ impl TxStage {
 pub struct OngoingTransaction {
     stage: TxStage,
     message: VersionedMessage,
+    pub default_chain_id: u64,
 }
 
 impl OngoingTransaction {
