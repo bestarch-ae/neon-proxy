@@ -303,7 +303,7 @@ impl Indexer {
     fn make_fake_block(&self, slot: u64) -> SolanaBlock {
         let block_time = self.last_block.map(|block| block.time);
         let block_diff = slot - self.last_block.map(|block| block.slot).unwrap_or(slot);
-        let additional_time = (block_diff as f64 * ONE_BLOCK_SEC).ceil() as i64;
+        let additional_time = (block_diff as f64 * ONE_BLOCK_SEC).trunc() as i64;
 
         SolanaBlock {
             slot,
