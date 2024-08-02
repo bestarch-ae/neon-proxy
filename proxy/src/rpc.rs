@@ -73,6 +73,10 @@ impl EthApiImpl {
         }
     }
 
+    pub fn with_chain_id(self, chain_id: u64) -> Self {
+        Self { chain_id, ..self }
+    }
+
     async fn find_slot(&self, tag: BlockNumberOrTag) -> Result<u64, Error> {
         let is_finalized = match tag {
             BlockNumberOrTag::Number(slot) => return Ok(slot),
@@ -663,7 +667,7 @@ impl EthApiServer for EthApiImpl {
             let hash = *envelope.tx_hash();
             tracing::info!(tx_hash = %hash, %bytes, ?envelope, "sendRawTransaction");
             executor
-                .handle_transaction(envelope)
+                .handle_transaction(envelope, self.chain_id)
                 .await
                 .inspect_err(|error| tracing::warn!(%hash, %error, "could not handle transaction"))
                 .map_err(|err| {

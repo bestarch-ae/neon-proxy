@@ -342,7 +342,6 @@ impl ExecutorTestEnvironment {
             NEON_KEY,
             operator,
             None,
-            CHAIN_ID,
             false,
         )
         .await
@@ -394,7 +393,7 @@ async fn transfer() -> Result<()> {
     };
     let signature = kp1.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
-    executor.handle_transaction(tx.into()).await?;
+    executor.handle_transaction(tx.into(), CHAIN_ID).await?;
 
     let txs = executor.join_current_transactions().await;
     assert_eq!(txs.len(), 1);
@@ -442,7 +441,7 @@ async fn transfer_no_chain_id() -> Result<()> {
     // HACK: Fixes random AccountInUse error
     let _ = test_ctx.banks_client.get_account(FST_HOLDER_KEY).await?;
     let tx = tx.into_signed(signature);
-    executor.handle_transaction(tx.into()).await?;
+    executor.handle_transaction(tx.into(), CHAIN_ID).await?;
 
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
@@ -468,7 +467,7 @@ async fn deploy_contract() -> anyhow::Result<()> {
     let mut tx = code.deploy_tx();
     let signature = kp.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
-    executor.handle_transaction(tx.into()).await?;
+    executor.handle_transaction(tx.into(), CHAIN_ID).await?;
 
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
@@ -506,7 +505,7 @@ async fn iterations() -> anyhow::Result<()> {
     let mut tx = code.deploy_tx();
     let signature = kp.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
-    executor.handle_transaction(tx.into()).await?;
+    executor.handle_transaction(tx.into(), CHAIN_ID).await?;
 
     // HACK: Fixes random AccountInUse error
     let _ = env.banks_client.get_account(FST_HOLDER_KEY).await?;
@@ -534,7 +533,7 @@ async fn iterations() -> anyhow::Result<()> {
     let signature = kp.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
 
-    executor.handle_transaction(tx.into()).await?;
+    executor.handle_transaction(tx.into(), CHAIN_ID).await?;
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
 
@@ -563,7 +562,7 @@ async fn alt() -> anyhow::Result<()> {
     let mut tx = code.deploy_tx();
     let signature = kp.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
-    executor.handle_transaction(tx.into()).await?;
+    executor.handle_transaction(tx.into(), CHAIN_ID).await?;
 
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
@@ -590,7 +589,7 @@ async fn alt() -> anyhow::Result<()> {
     let signature = kp.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
 
-    executor.handle_transaction(tx.into()).await?;
+    executor.handle_transaction(tx.into(), CHAIN_ID).await?;
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
 

@@ -1,12 +1,18 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::error::Error as StdError;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::{ArgGroup, Parser};
-
+use hyper::server::conn::AddrStream;
+use hyper::service::{make_service_fn, service_fn};
+use jsonrpsee::server::Server;
 use jsonrpsee::types::ErrorCode;
+use jsonrpsee::RpcModule;
 use rpc_api::{EthApiServer, EthFilterApiServer};
 use thiserror::Error;
+use tower::Service;
 
 mod convert;
 mod executor;
@@ -18,6 +24,7 @@ use common::neon_lib::types::ChDbConfig;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Keypair;
 use common::solana_sdk::signer::EncodableKey;
+
 use executor::Executor;
 use neon_api::NeonApi;
 use rpc::{EthApiImpl, NeonEthApiServer, NeonFilterApiServer};
@@ -149,7 +156,7 @@ async fn main() {
     tracing::info!(
         neon_pubkey = %opts.neon_pubkey,
         neon_config = %opts.neon_config_pubkey,
-        chain_id = opts.chain_id,
+        default_token = opts.default_token_name,
         "starting"
     );
 
@@ -161,13 +168,34 @@ async fn main() {
     };
 
     tracing::info!(%opts.neon_pubkey, %opts.neon_config_pubkey, "starting");
-    let solana = NeonApi::new(
+    let neon_api = NeonApi::new(
         opts.solana_url.clone(),
         opts.neon_pubkey,
         opts.neon_config_pubkey,
         tracer_db_config,
         opts.max_tx_account_count,
     );
+
+    let config = neon_api
+        .get_config()
+        .await
+        .expect("failed to get EVM config");
+    let default_token_name = opts.default_token_name.to_lowercase();
+    let default_chain_id = config
+        .chains
+        .iter()
+        .find(|c| c.name == default_token_name)
+        .expect("default chain not found")
+        .id;
+    tracing::info!(%default_chain_id, %default_token_name, "default chain");
+    let additional_chains = config
+        .chains
+        .iter()
+        .filter(|&c| (c.id != default_chain_id))
+        .map(|c| (c.name.to_lowercase(), c.id))
+        .collect::<HashMap<_, _>>();
+    tracing::info!(?additional_chains, "additional chains");
+
     let pyth_symbology = if let Some(path) = opts.symbology_path.as_ref() {
         tracing::info!(?path, "loading symbology");
         let raw = std::fs::read_to_string(path).expect("failed to read symbology");
@@ -201,21 +229,20 @@ async fn main() {
     };
     let mp_gas_prices = mempool::GasPrices::try_new(
         gas_prices_config,
-        solana.clone(),
+        neon_api.clone(),
         pyth_symbology,
         mp_gas_calculator_config,
     )
     .expect("failed to create gas prices");
 
-    let executor = if let Some(path) = opts.executor.operator_keypair {
+    let executor = if let Some(path) = &opts.executor.operator_keypair {
         let operator = Keypair::read_from_file(path).expect("cannot read operator keypair");
         let (executor, executor_task) = Executor::initialize_and_start(
-            solana.clone(),
+            neon_api.clone(),
             SolanaApi::new(opts.solana_url, false),
             opts.neon_pubkey,
             operator,
             opts.executor.operator_address,
-            opts.chain_id,
             opts.executor.init_operator_balance,
         )
         .await
@@ -225,13 +252,71 @@ async fn main() {
     } else {
         None
     };
+    let eth = EthApiImpl::new(
+        pool.clone(),
+        neon_api.clone(),
+        default_chain_id,
+        executor.clone(),
+        mp_gas_prices.clone(),
+    );
+    let mut other_tokens = HashSet::new();
+    let mut tokens_methods = HashMap::new();
+    let default_methods = build_module(eth.clone());
+    for (token_name, &chain_id) in additional_chains.iter() {
+        tracing::info!(%token_name, %chain_id, "adding chain");
+        let new_eth = eth.clone().with_chain_id(chain_id);
+        let new_methods = build_module(new_eth);
+        tokens_methods.insert(token_name.clone(), new_methods);
+        other_tokens.insert(token_name.clone());
+    }
 
-    let eth = EthApiImpl::new(pool, solana, opts.chain_id, executor, mp_gas_prices);
-    let mut module = jsonrpsee::server::RpcModule::new(());
+    let addr: SocketAddr = opts.listen.parse().expect("invalid listen address");
+    let (stop_handle, server_handle) = jsonrpsee::server::stop_channel();
+    let svc_builder = Server::builder().to_service_builder();
+    let stop_handle2 = stop_handle.clone();
+
+    let make_service = make_service_fn(move |_conn: &AddrStream| {
+        let stop_handle = stop_handle2.clone();
+        let svc_builder = svc_builder.clone();
+        let tokens_methods = tokens_methods.clone();
+        let default_methods = default_methods.clone();
+
+        async move {
+            Ok::<_, Box<dyn StdError + Send + Sync>>(service_fn(move |req| {
+                let stop_handle = stop_handle.clone();
+                let svc_builder = svc_builder.clone();
+                let token_name = req.uri().path().trim_matches('/').to_lowercase();
+                tracing::info!(?token_name, "request");
+                let methods = tokens_methods
+                    .get(&token_name)
+                    .unwrap_or_else(|| {
+                        tracing::info!(?token_name, "token not found, using default methods");
+                        &default_methods
+                    })
+                    .clone();
+                let mut svc = svc_builder.build(methods, stop_handle);
+                svc.call(req)
+            }))
+        }
+    });
+
+    let server = hyper::Server::bind(&addr).serve(make_service);
+
+    tokio::spawn(async move {
+        let graceful = server.with_graceful_shutdown(async move { stop_handle.shutdown().await });
+        graceful.await.expect("server error");
+    });
+
+    tracing::info!("Listening on {}", opts.listen);
+    server_handle.stopped().await;
+}
+
+fn build_module(eth: EthApiImpl) -> RpcModule<()> {
+    let mut module = RpcModule::new(());
+
     module
         .merge(<EthApiImpl as EthApiServer>::into_rpc(eth.clone()))
         .expect("no conflicts");
-
     module.remove_method("eth_getTransactionReceipt");
 
     module
@@ -241,17 +326,11 @@ async fn main() {
     module
         .merge(<EthApiImpl as EthFilterApiServer>::into_rpc(eth.clone()))
         .expect("no conflicts");
-
     module.remove_method("eth_getLogs");
+
     module
         .merge(<EthApiImpl as NeonFilterApiServer>::into_rpc(eth.clone()))
         .expect("no conflicts");
 
-    let server = jsonrpsee::server::Server::builder()
-        .build(&opts.listen)
-        .await
-        .unwrap();
-    tracing::info!("Listening on {}", opts.listen);
-    let handle = server.start(module);
-    handle.stopped().await;
+    module
 }

@@ -76,7 +76,6 @@ impl GasPrices {
             )
         };
 
-        println!("symbology: {:?}", symbology);
         if !symbology.is_empty() {
             tokio::spawn(async move {
                 let mut collector =
