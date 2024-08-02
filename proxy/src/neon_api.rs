@@ -468,6 +468,9 @@ impl NeonApi {
                     tx,
                     solana_overrides: None,
                 };
+                if let RpcEnum::CloneRpcClient(rpc) = &ctx.default_rpc {
+                    tracing::debug!(commitment = ?rpc.commitment(), "estimate gas task command, emulate commitment");
+                }
                 let resp = commands::emulate::execute(
                     &ctx.default_rpc,
                     ctx.neon_pubkey,

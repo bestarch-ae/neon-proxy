@@ -37,15 +37,16 @@ impl GasLimitCalculator {
         emul_resp: &EmulateResponse,
         holder_msg_size: u64,
     ) -> Result<u64, GasLimitError> {
-        let execution_const = emul_resp.used_gas;
-        let tx_size_cost = Self::tx_size_cost(tx, emul_resp.used_gas, holder_msg_size);
+        debug!(?holder_msg_size, ?emul_resp, "estimate gas for emulated tx");
+        let execution_cost = emul_resp.used_gas;
+        let tx_size_cost = Self::tx_size_cost(tx, execution_cost, holder_msg_size);
         let alt_cost = self.alt_cost(emul_resp)?;
 
-        let total_cost = std::cmp::max(execution_const + tx_size_cost + alt_cost, MIN_GAS_LIMIT);
+        let total_cost = std::cmp::max(execution_cost + tx_size_cost + alt_cost, MIN_GAS_LIMIT);
 
         debug!(
             ?total_cost,
-            ?execution_const,
+            ?execution_cost,
             ?tx_size_cost,
             ?alt_cost,
             "estimated gas"
