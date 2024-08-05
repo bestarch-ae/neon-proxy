@@ -39,7 +39,7 @@ use crate::convert::{
 };
 use crate::executor::Executor;
 use crate::mempool;
-use crate::neon_api::{CallResult, NeonApi};
+use crate::neon_api::NeonApi;
 use crate::Error;
 
 #[derive(Clone)]
@@ -489,23 +489,8 @@ impl EthApiServer for EthApiImpl {
             actual_gas_used: None,
             chain_id: Some(self.chain_id),
         };
-        let result = self.neon_api.call(tx, tag).await?;
-        match result {
-            CallResult::Success { data } => Ok(Bytes::from(data)),
-            CallResult::Revert { error, data } => {
-                let msg = if let Some(error) = error {
-                    format!("execution reverted: {}", error)
-                } else {
-                    "execution reverted".to_string()
-                };
-                Err(ErrorObjectOwned::owned(3, msg, Some(Bytes::from(data))))
-            }
-            CallResult::StepLimit => Err(ErrorObjectOwned::owned(
-                3,
-                "step limit exceeded",
-                None::<()>,
-            )),
-        }
+        let response = self.neon_api.call(tx, tag).await?;
+        Ok(Bytes::from(response.result))
     }
 
     /// Simulate arbitrary number of transactions at an arbitrary blockchain index, with the
