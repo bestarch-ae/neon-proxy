@@ -610,7 +610,7 @@ async fn sol_call() -> anyhow::Result<()> {
     let mut tx = code.deploy_tx();
     let signature = kp.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
-    executor.handle_transaction(tx.into()).await?;
+    executor.handle_transaction(tx.into(), CHAIN_ID).await?;
 
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
