@@ -1,3 +1,4 @@
+use std::io::IsTerminal as _;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -10,6 +11,7 @@ use metrics::metrics;
 use solana::traverse::v2::{TraverseConfig, TraverseLedger};
 use tokio::sync::mpsc;
 use tokio_stream::{Stream, StreamExt};
+use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 
 mod accountsdb;
 mod indexer;
@@ -56,7 +58,15 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt::fmt()
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
+        .with_ansi(std::io::stdout().is_terminal())
+        .init();
+
     let opts = Args::try_parse()?;
 
     let pool = db::connect(&opts.pg_url).await?;
