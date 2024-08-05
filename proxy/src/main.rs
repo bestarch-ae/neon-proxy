@@ -1,9 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
+use std::io::IsTerminal;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use anyhow::Context;
 use clap::{ArgGroup, Parser};
 use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
@@ -13,6 +15,7 @@ use jsonrpsee::RpcModule;
 use rpc_api::{EthApiServer, EthFilterApiServer};
 use thiserror::Error;
 use tower::Service;
+use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 
 mod convert;
 mod executor;
@@ -148,7 +151,14 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt::fmt()
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
+        .with_ansi(std::io::stdout().is_terminal())
+        .init();
     let _ = tracing_log::LogTracer::init();
 
     let opts = Args::parse();
@@ -160,7 +170,10 @@ async fn main() {
         "starting"
     );
 
-    let pool = db::connect(&opts.pg_url).await.unwrap();
+    let pool = db::connect(&opts.pg_url)
+        .await
+        .context("connecting to db")
+        .unwrap();
     let tracer_db_config = ChDbConfig {
         clickhouse_url: opts.neon_db_clickhouse_urls,
         clickhouse_user: opts.neon_db_clickhouse_user,
