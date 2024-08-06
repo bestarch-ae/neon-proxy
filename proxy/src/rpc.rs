@@ -471,6 +471,9 @@ impl EthApiServer for EthApiImpl {
             None
         };
 
+        let gas = U256::from(request.gas.unwrap_or(1 << 64)).to_neon();
+        let gas_price = U256::from(request.gas.unwrap_or(1 << 64)).to_neon();
+
         let tx = TxParams {
             nonce: request.nonce,
             from: request.from.map(ToNeon::to_neon).unwrap_or_default(),
@@ -481,8 +484,8 @@ impl EthApiServer for EthApiImpl {
             },
             data: request.input.data.map(|data| data.to_vec()),
             value: request.value.map(ToNeon::to_neon),
-            gas_limit: request.gas.map(U256::from).map(ToNeon::to_neon),
-            gas_price: request.gas_price.map(U256::from).map(ToNeon::to_neon),
+            gas_limit: Some(gas),
+            gas_price: Some(gas_price),
             access_list: request
                 .access_list
                 .map(|list| list.0.into_iter().map(ToNeon::to_neon).collect()),
