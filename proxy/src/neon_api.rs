@@ -5,7 +5,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use jsonrpsee::types::ErrorCode;
-use reth_primitives::BlockNumberOrTag;
+use reth_primitives::{BlockNumberOrTag, Bytes};
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::runtime::Builder;
@@ -41,18 +41,6 @@ enum ExitStatus {
     StepLimitExceeded,
 }
 
-#[derive(Debug)]
-pub enum CallResult {
-    Success {
-        data: Vec<u8>,
-    },
-    StepLimit,
-    Revert {
-        error: Option<String>,
-        data: Vec<u8>,
-    },
-}
-
 impl FromStr for ExitStatus {
     type Err = NeonApiError;
 
@@ -76,13 +64,15 @@ pub enum NeonApiError {
     Bincode(#[from] bincode::Error),
     #[error("invalid exit status: {0}")]
     InvalidExitStatus(String),
+    #[error("emulation failed: {0}")]
+    EmulationFailed(String, Option<Bytes>),
 }
 
 impl NeonApiError {
     pub const fn error_code(&self) -> i32 {
         match self {
             Self::Neon(err) => err.error_code() as i32,
-            Self::GasLimit(_) => 3,
+            Self::GasLimit(_) | Self::EmulationFailed(_, _) => 3,
             _ => ErrorCode::InternalError.code(),
         }
     }
@@ -98,6 +88,7 @@ impl From<NeonApiError> for jsonrpsee::types::ErrorObjectOwned {
                 None::<String>,
             ),
             NeonApiError::GasLimit(err) => Self::owned(error_code, err.to_string(), None::<String>),
+            NeonApiError::EmulationFailed(msg, data) => Self::owned(error_code, msg, data),
             _ => ErrorCode::InternalError.into(),
         }
     }
@@ -137,11 +128,11 @@ enum TaskCommand {
     },
     EmulateCall {
         tx: TxParams,
-        response: oneshot::Sender<Result<CallResult, NeonApiError>>,
+        response: oneshot::Sender<Result<EmulateResponse, NeonApiError>>,
     },
     EstimateGas {
         tx: TxParams,
-        response: oneshot::Sender<(GetConfigResponse, Result<EmulateResponse, NeonError>)>,
+        response: oneshot::Sender<(GetConfigResponse, Result<EmulateResponse, NeonApiError>)>,
     },
     Emulate {
         tx: TxParams,
@@ -338,7 +329,7 @@ impl NeonApi {
         &self,
         params: TxParams,
         tag: Option<BlockNumberOrTag>,
-    ) -> Result<CallResult, NeonApiError> {
+    ) -> Result<EmulateResponse, NeonApiError> {
         let (tx, rx) = oneshot::channel();
         self.channel
             .send(Task::new(
@@ -377,10 +368,13 @@ impl NeonApi {
             .get("NEON_HOLDER_MSG_SIZE")
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(0);
-        let emul_resp = resp?;
+        if let Err(err) = &resp {
+            error!(?err, "estimate gas emulation failed");
+        }
+        let resp = resp?;
         let total_gas = self
             .gas_limit_calculator
-            .estimate(&params, &emul_resp, holder_msg_size)?;
+            .estimate(&params, &resp, holder_msg_size)?;
         Ok(U256::from(total_gas))
     }
 
@@ -479,8 +473,8 @@ impl NeonApi {
                 )
                 .await;
                 let resp = match resp {
-                    Ok((resp, _something)) => Ok(resp),
-                    Err(err) => Err(err),
+                    Ok((resp, _something)) => decode_neon_response(resp),
+                    Err(err) => Err(err.into()),
                 };
                 let _ = response.send((config, resp));
             }
@@ -591,19 +585,26 @@ impl NeonApi {
     }
 }
 
-fn decode_neon_response(resp: EmulateResponse) -> Result<CallResult, NeonApiError> {
+fn decode_neon_response(response: EmulateResponse) -> Result<EmulateResponse, NeonApiError> {
     use common::evm_loader::error;
-    let status = ExitStatus::from_str(&resp.exit_status)?;
+    let status = ExitStatus::from_str(&response.exit_status)?;
 
     match status {
-        ExitStatus::Success => Ok(CallResult::Success { data: resp.result }),
-        ExitStatus::StepLimitExceeded => Ok(CallResult::StepLimit),
+        ExitStatus::Success => Ok(response),
+        ExitStatus::StepLimitExceeded => Err(NeonApiError::EmulationFailed(
+            "step limit exceeded".to_owned(),
+            None,
+        )),
         ExitStatus::Revert => {
-            let msg = error::format_revert_error(&resp.result);
-            Ok(CallResult::Revert {
-                error: msg.map(|s| s.to_owned()),
-                data: resp.result,
-            })
+            let msg = if let Some(error) = error::format_revert_error(&response.result) {
+                format!("execution reverted: {}", error)
+            } else {
+                "execution reverted".to_string()
+            };
+            Err(NeonApiError::EmulationFailed(
+                msg,
+                Some(Bytes::from(response.result)),
+            ))
         }
     }
 }
