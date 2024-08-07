@@ -358,7 +358,7 @@ impl TransactionRepo {
                  tx_idx as "tx_idx!", nonce as "nonce!", gas_price as "gas_price!",
                  gas_limit as "gas_limit!", value as "value!", gas_used as "gas_used!",
                  sum_gas_used as "sum_gas_used!", to_addr as "to_addr?: PgAddress", contract as "contract?: PgAddress",
-                 status "status!", is_canceled as "is_canceled!", is_completed as "is_completed!", 
+                 status "status!", is_canceled as "is_canceled!", is_completed as "is_completed!",
                  v "v!", r as "r!", s as "s!", chain_id,
                  calldata as "calldata!", neon_step_cnt as "neon_step_cnt!",
                  B.block_hash as "block_hash!: PgSolanaBlockHash"
@@ -401,7 +401,7 @@ impl TransactionRepo {
                       nonce, gas_price,
                       gas_limit, value, gas_used,
                       sum_gas_used, to_addr, contract,
-                      status, is_canceled, is_completed, 
+                      status, is_canceled, is_completed,
                       v, r, s, chain_id,
                       calldata, neon_step_cnt,
                       B.block_hash,
@@ -416,7 +416,7 @@ impl TransactionRepo {
                     LEFT JOIN tx_block_slot S on T.block_slot = S.block_slot
                     LEFT JOIN (
                         SELECT * FROM neon_transaction_logs WHERE NOT COALESCE(is_reverted, FALSE)
-                        ) L ON L.tx_hash = T.neon_sig
+                        ) L ON L.tx_hash = T.neon_sig AND T.is_canceled = FALSE
                     LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
                     WHERE NOT COALESCE(L.is_reverted, FALSE)
                     ORDER BY T.block_slot,T.tx_idx,tx_log_idx) TL
@@ -471,7 +471,7 @@ impl TransactionRepo {
                FROM neon_transactions T
                LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
                INNER JOIN neon_transaction_logs L ON tx_hash = neon_sig
-               WHERE T.is_completed
+               WHERE T.is_completed AND T.is_canceled = FALSE
                    AND (T.block_slot >= $1) AND (T.block_slot <= $2)
                    AND (block_hash = $3 OR $4)
                    AND (address = ANY($5) OR $6)
