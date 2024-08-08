@@ -24,6 +24,7 @@ mod neon_api;
 mod rpc;
 
 use common::neon_lib::types::ChDbConfig;
+use common::solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Keypair;
 use common::solana_sdk::signer::EncodableKey;
@@ -147,6 +148,9 @@ struct Args {
     #[arg(long, env, default_value = "64")]
     // Max tx account count
     max_tx_account_count: usize,
+
+    #[arg(long, env, default_value = "finalized")]
+    simulation_commitment: CommitmentLevel,
 }
 
 #[tokio::main]
@@ -167,6 +171,7 @@ async fn main() {
         neon_pubkey = %opts.neon_pubkey,
         neon_config = %opts.neon_config_pubkey,
         default_token = opts.default_token_name,
+        simulation_commitment = ?opts.simulation_commitment,
         "starting"
     );
 
@@ -187,6 +192,9 @@ async fn main() {
         opts.neon_config_pubkey,
         tracer_db_config,
         opts.max_tx_account_count,
+        Some(CommitmentConfig {
+            commitment: opts.simulation_commitment,
+        }),
     );
 
     let config = neon_api

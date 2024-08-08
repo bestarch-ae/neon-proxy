@@ -146,7 +146,8 @@ enum TaskCommand {
 }
 
 struct Context {
-    rpc_client: CloneRpcClient,
+    rpc_client_finalized: CloneRpcClient,
+    rpc_client_simulation: CloneRpcClient,
     default_rpc: RpcEnum,
     neon_pubkey: Pubkey,
 }
@@ -219,6 +220,7 @@ impl NeonApi {
         config_key: Pubkey,
         tracer_db_config: ChDbConfig,
         max_tx_account_cnt: usize,
+        simulation_commitment: Option<CommitmentConfig>,
     ) -> Self {
         let url_cloned = url.clone();
         Self::new_with_custom_rpc_clients(
@@ -227,6 +229,7 @@ impl NeonApi {
             config_key,
             tracer_db_config,
             max_tx_account_cnt,
+            simulation_commitment,
         )
     }
 
@@ -236,6 +239,7 @@ impl NeonApi {
         config_key: Pubkey,
         tracer_db_config: ChDbConfig,
         max_tx_account_cnt: usize,
+        simulation_commitment: Option<CommitmentConfig>,
     ) -> Self {
         let (tx, mut rx) = mpsc::channel::<Task>(128);
 
@@ -252,8 +256,16 @@ impl NeonApi {
                     Some(TracerDb::new(&tracer_db_config))
                 };
 
+                let simulation_commitment =
+                    simulation_commitment.unwrap_or(CommitmentConfig::finalized());
+
                 let finalized_client = CloneRpcClient {
                     rpc: Arc::new(client_builder(CommitmentConfig::finalized())),
+                    max_retries: 10,
+                    key_for_config: config_key,
+                };
+                let simulation_client = CloneRpcClient {
+                    rpc: Arc::new(client_builder(simulation_commitment)),
                     max_retries: 10,
                     key_for_config: config_key,
                 };
@@ -274,7 +286,8 @@ impl NeonApi {
                         }
                     };
                     let ctx = Context {
-                        rpc_client: finalized_client.clone(),
+                        rpc_client_finalized: finalized_client.clone(),
+                        rpc_client_simulation: simulation_client.clone(),
                         default_rpc: rpc,
                         neon_pubkey,
                     };
@@ -450,9 +463,10 @@ impl NeonApi {
     async fn execute(task: TaskCommand, ctx: Context) {
         match task {
             TaskCommand::EstimateGas { tx, response } => {
-                let config = commands::get_config::execute(&ctx.rpc_client, ctx.neon_pubkey)
-                    .await
-                    .expect("config didnt fail"); // TODO
+                let config =
+                    commands::get_config::execute(&ctx.rpc_client_finalized, ctx.neon_pubkey)
+                        .await
+                        .expect("config didnt fail"); // TODO
 
                 let req = EmulateRequest {
                     step_limit: None,
@@ -480,9 +494,10 @@ impl NeonApi {
             }
 
             TaskCommand::Emulate { tx, response } => {
-                let config = commands::get_config::execute(&ctx.rpc_client, ctx.neon_pubkey)
-                    .await
-                    .expect("config didnt fail"); // TODO
+                let config =
+                    commands::get_config::execute(&ctx.rpc_client_finalized, ctx.neon_pubkey)
+                        .await
+                        .expect("config didnt fail"); // TODO
 
                 let req = EmulateRequest {
                     step_limit: None,
@@ -508,9 +523,10 @@ impl NeonApi {
 
             TaskCommand::EmulateCall { tx, response } => {
                 tracing::info!(?tx, "emulate_call");
-                let config = commands::get_config::execute(&ctx.rpc_client, ctx.neon_pubkey)
-                    .await
-                    .expect("config didnt fail"); // TODO
+                let config =
+                    commands::get_config::execute(&ctx.rpc_client_finalized, ctx.neon_pubkey)
+                        .await
+                        .expect("config didnt fail"); // TODO
 
                 let req = EmulateRequest {
                     step_limit: None,
@@ -573,12 +589,14 @@ impl NeonApi {
             }
 
             TaskCommand::GetConfig(response) => {
-                let resp = commands::get_config::execute(&ctx.rpc_client, ctx.neon_pubkey).await;
+                let resp =
+                    commands::get_config::execute(&ctx.rpc_client_finalized, ctx.neon_pubkey).await;
                 let _ = response.send(resp);
             }
 
             TaskCommand::Simulate { request, response } => {
-                let resp = commands::simulate_solana::execute(&ctx.rpc_client, request).await;
+                let resp =
+                    commands::simulate_solana::execute(&ctx.rpc_client_simulation, request).await;
                 let _ = response.send(resp);
             }
         }
