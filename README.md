@@ -103,6 +103,7 @@ export SOLANA_URL=https://api.devnet.solana.com
 export SOLANA_WS_URL=wss://api.devnet.solana.com
 export PYTH_MAPPING_ADDR=BmA9Z6FjioHJPpjT39QazZyhDRUdZy2ezwx4GiDdE2u2
 export MAX_TRAVERSE_TASKS=8
+export SIMULATION_COMMITMENT=confirmed
 docker-compose up -d
 ```
 
@@ -118,5 +119,6 @@ export NEON_EVM_ADDRESS=53DfF883gyixYNXnM7s5xhdeyV8mVk9T4i2hGV9vG9io
 export NEON_EVM_COMMIT=67d1bd0ef32e5ab6f96393419ae25053080d2a9e
 export CONST_GAS_PRICE=1000000000
 export MAX_TRAVERSE_TASKS=2
+export SIMULATION_COMMITMENT=confirmed
 docker-compose -f docker-compose-evm.yml up -d
 ```

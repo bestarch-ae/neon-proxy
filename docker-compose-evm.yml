@@ -83,6 +83,7 @@ services:
       --const-gas-price ${CONST_GAS_PRICE}
       -l 0.0.0.0:8018
       --pg-url postgres://neon-proxy:neon-proxy-pass@postgres:5432/neon-db
+      --simulation-commitment ${SIMULATION_COMMITMENT}
     environment:
       - RUST_LOG=info,proxy=debug,solana_api=debug,db=debug,neon_lib=debug
     depends_on:
