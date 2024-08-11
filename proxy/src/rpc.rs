@@ -189,6 +189,19 @@ trait NeonEthApi: EthApiServer {
     ) -> RpcResult<Option<NeonTransactionReceipt>>;
 }
 
+#[rpc(server, namespace = "neon")]
+trait NeonEthApiRpc: EthApiServer {
+    #[method(name = "proxy_version")]
+    async fn proxy_version(&self) -> RpcResult<String>;
+}
+
+#[async_trait]
+impl NeonEthApiRpcServer for EthApiImpl {
+    async fn proxy_version(&self) -> RpcResult<String> {
+        Ok("Neon-proxy/v1.13.25-455e33ce2f8a8c3b8e3b0c50ff37b19e5238a9bf".to_string())
+    }
+}
+
 #[async_trait]
 impl NeonEthApiServer for EthApiImpl {
     async fn neon_transaction_receipt(
