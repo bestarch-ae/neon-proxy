@@ -29,7 +29,7 @@ use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Keypair;
 use common::solana_sdk::signer::EncodableKey;
 
-use crate::rpc::NeonEthApiRpcServer;
+use crate::rpc::{NeonEthApiRpcServer, NeonEthApiWeb3Server};
 use executor::Executor;
 use neon_api::NeonApi;
 use rpc::{EthApiImpl, NeonEthApiServer, NeonFilterApiServer};
@@ -385,7 +385,11 @@ fn build_module(eth: EthApiImpl) -> RpcModule<()> {
         .expect("no conflicts");
 
     module
-        .merge(<EthApiImpl as NeonEthApiRpcServer>::into_rpc(eth))
+        .merge(<EthApiImpl as NeonEthApiRpcServer>::into_rpc(eth.clone()))
+        .expect("no conflicts");
+
+    module
+        .merge(<EthApiImpl as NeonEthApiWeb3Server>::into_rpc(eth))
         .expect("no conflicts");
 
     module

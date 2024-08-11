@@ -193,12 +193,32 @@ trait NeonEthApi: EthApiServer {
 trait NeonEthApiRpc: EthApiServer {
     #[method(name = "proxy_version")]
     async fn proxy_version(&self) -> RpcResult<String>;
+
+    #[method(name = "cli_version")]
+    async fn cli_version(&self) -> RpcResult<String>;
 }
 
 #[async_trait]
 impl NeonEthApiRpcServer for EthApiImpl {
     async fn proxy_version(&self) -> RpcResult<String> {
         Ok("Neon-proxy/v1.13.25-455e33ce2f8a8c3b8e3b0c50ff37b19e5238a9bf".to_string())
+    }
+
+    async fn cli_version(&self) -> RpcResult<String> {
+        Ok("Neon-cli/v1.13.5-fc2c1cc1877fbbbe2a8de0088f9e806defb8ddab".to_string())
+    }
+}
+
+#[rpc(server, namespace = "web3")]
+trait NeonEthApiWeb3: EthApiServer {
+    #[method(name = "clientVersion")]
+    async fn client_version(&self) -> RpcResult<String>;
+}
+
+#[async_trait]
+impl NeonEthApiWeb3Server for EthApiImpl {
+    async fn client_version(&self) -> RpcResult<String> {
+        Ok("Neon-EVM/v1.13.1-67d1bd0ef32e5ab6f96393419ae25053080d2a9e".to_string())
     }
 }
 
