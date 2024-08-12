@@ -128,7 +128,7 @@ impl TraverseLedger {
     }
 
     async fn find_beginning_slot(api: SolanaApi, target: Pubkey) -> Result<u64, TraverseError> {
-        let mut earliest_slot = u64::MAX;
+        let mut earliest_slot = api.get_slot(CommitmentLevel::Finalized).await?;
         let mut earliest_signature: Option<Signature> = None;
 
         loop {
