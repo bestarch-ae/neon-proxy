@@ -329,24 +329,33 @@ fn decode_step_from_account(
         .get_by_key(&holder_key)
         .ok_or(Error::AccountNotFound(holder_key))?;
     let tag = common::evm_loader::account::tag(&pubkey, &holder_or_storage).unwrap();
-    tracing::debug!(tag, "holder account tag");
+    tracing::debug!(%holder_key, tag, "holder account tag");
     match tag {
         TAG_HOLDER | TAG_HOLDER_DEPRECATED => {
             let holder = Holder::from_account(&pubkey, holder_or_storage.clone()).unwrap();
             let message = holder.transaction();
+            if message.is_empty() {
+                tracing::error!(account = %holder_key, storage = ?holder_or_storage,
+                            "empty transaction in holder account, should not happen");
+                return Err(Error::NotImplemented);
+            }
             let trx = Transaction::from_rlp(&message)?;
 
-            return Ok(trx);
+            Ok(trx)
         }
         TAG_STATE => {
             tracing::warn!("TAG_STATE not implemented");
+            Err(Error::NotImplemented)
         }
         TAG_STATE_FINALIZED | TAG_STATE_FINALIZED_DEPRECATED => {
             tracing::warn!("TAG_STATE_FINALIZED not implemented");
+            Err(Error::NotImplemented)
         }
-        _ => todo!("unknown tag {} (not implemented)", tag),
+        _ => {
+            tracing::error!("unknown tag {} (not implemented)", tag);
+            Err(Error::NotImplemented)
+        }
     }
-    todo!()
 }
 
 fn decode_step_from_ix(bytes: &[u8]) -> Result<Transaction, Error> {
