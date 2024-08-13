@@ -52,6 +52,28 @@ impl From<Error> for jsonrpsee::types::ErrorObjectOwned {
     }
 }
 
+#[derive(Debug, Default, Copy, Clone)]
+enum LogFormat {
+    Json,
+    #[default]
+    Plain,
+}
+
+impl FromStr for LogFormat {
+    type Err = std::io::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "json" => Ok(LogFormat::Json),
+            "plain" => Ok(LogFormat::Plain),
+            any => {
+                eprintln!("invalid log format {}, defaulting to plain", any);
+                Ok(LogFormat::Plain)
+            }
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(group(
     ArgGroup::new("required_group")
@@ -151,21 +173,29 @@ struct Args {
 
     #[arg(long, env, default_value = "finalized")]
     simulation_commitment: CommitmentLevel,
+
+    #[arg(long)]
+    /// Log format, either json or plain
+    log_format: Option<LogFormat>,
 }
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::fmt()
+    let opts = Args::parse();
+
+    let format = opts.log_format.unwrap_or_default();
+    let builder = tracing_subscriber::fmt::fmt()
         .with_env_filter(
             EnvFilter::builder()
                 .with_default_directive(LevelFilter::INFO.into())
                 .from_env_lossy(),
         )
-        .with_ansi(std::io::stdout().is_terminal())
-        .init();
+        .with_ansi(std::io::stdout().is_terminal());
+    match format {
+        LogFormat::Json => builder.json().init(),
+        LogFormat::Plain => builder.init(),
+    }
     let _ = tracing_log::LogTracer::init();
-
-    let opts = Args::parse();
 
     tracing::info!(
         neon_pubkey = %opts.neon_pubkey,

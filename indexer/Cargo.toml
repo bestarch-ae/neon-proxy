@@ -9,7 +9,11 @@ edition = "2021"
 tokio-stream = "0.1"
 clap = { version = "4.5.4", features = ["derive"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+tracing-subscriber = { version = "0.3", features = [
+    "fmt",
+    "env-filter",
+    "json",
+] }
 neon_parse = { path = "../parse", package = "parse" }
 anyhow = "1"
 tokio = { version = "1.37.0", features = ["full"] }
