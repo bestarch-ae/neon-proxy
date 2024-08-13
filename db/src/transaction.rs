@@ -151,6 +151,7 @@ impl TransactionRepo {
             UPDATE neon_transactions
             SET
                is_canceled = true,
+               is_completed = true,
                block_slot = $1,
                gas_used = $2,
                sum_gas_used = $2
@@ -420,7 +421,7 @@ impl TransactionRepo {
                     LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
                     WHERE NOT COALESCE(L.is_reverted, FALSE)
                     ORDER BY T.block_slot,T.tx_idx,tx_log_idx) TL
-                    WHERE TL.neon_sig = $1 OR ($2 AND block_slot = $3)
+                    WHERE (TL.is_completed OR TL.is_canceled) AND TL.neon_sig = $1 OR ($2 AND block_slot = $3)
            "#,
         )
         .bind(hash.map(|hash| *hash.as_array()).unwrap_or_default())
