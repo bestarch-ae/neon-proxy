@@ -1,5 +1,5 @@
-use std::io::IsTerminal as _;
 use std::time::Duration;
+use std::{io::IsTerminal as _, str::FromStr};
 
 use anyhow::Result;
 use clap::Parser;
@@ -16,6 +16,28 @@ use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 mod accountsdb;
 mod indexer;
 mod metrics;
+
+#[derive(Debug, Default, Copy, Clone)]
+enum LogFormat {
+    Json,
+    #[default]
+    Plain,
+}
+
+impl FromStr for LogFormat {
+    type Err = std::io::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "json" => Ok(LogFormat::Json),
+            "plain" => Ok(LogFormat::Plain),
+            any => {
+                eprintln!("invalid log format {}, defaulting to plain", any);
+                Ok(LogFormat::Plain)
+            }
+        }
+    }
+}
 
 #[derive(Parser)]
 struct Args {
@@ -54,20 +76,27 @@ struct Args {
     #[arg(long, default_value = "16")]
     /// Number of tasks to process slots in parallel
     max_traverse_tasks: usize,
+
+    #[arg(long)]
+    log_format: Option<LogFormat>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::fmt()
+    let opts = Args::try_parse()?;
+
+    let format = opts.log_format.unwrap_or_default();
+    let builder = tracing_subscriber::fmt::fmt()
         .with_env_filter(
             EnvFilter::builder()
                 .with_default_directive(LevelFilter::INFO.into())
                 .from_env_lossy(),
         )
-        .with_ansi(std::io::stdout().is_terminal())
-        .init();
-
-    let opts = Args::try_parse()?;
+        .with_ansi(std::io::stdout().is_terminal());
+    match format {
+        LogFormat::Json => builder.json().init(),
+        LogFormat::Plain => builder.init(),
+    }
 
     let pool = db::connect(&opts.pg_url).await?;
 
