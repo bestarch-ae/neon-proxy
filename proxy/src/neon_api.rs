@@ -159,6 +159,14 @@ async fn build_rpc(
     tx_index_in_block: Option<u64>,
     config_key: Pubkey,
 ) -> Result<RpcEnum, NeonError> {
+    let mut with_commitment = |commitment| {
+        tracing::info!(?commitment, "creating client with commitment");
+        Ok(RpcEnum::CloneRpcClient(CloneRpcClient {
+            rpc: Arc::new(client_builder(commitment)),
+            max_retries: 10,
+            key_for_config: config_key,
+        }))
+    };
     match tag {
         Some(BlockNumberOrTag::Number(slot)) => {
             if let Some(tracer_db) = tracer_db {
@@ -167,33 +175,17 @@ async fn build_rpc(
                 ))
             } else {
                 warn!("tracer_db is not configured, falling back to RpcClient");
-                Ok(RpcEnum::CloneRpcClient(CloneRpcClient {
-                    rpc: Arc::new(client_builder(CommitmentConfig::finalized())),
-                    max_retries: 10,
-                    key_for_config: config_key,
-                }))
+                with_commitment(CommitmentConfig::finalized())
             }
         }
         Some(BlockNumberOrTag::Pending | BlockNumberOrTag::Latest) => {
-            Ok(RpcEnum::CloneRpcClient(CloneRpcClient {
-                rpc: Arc::new(client_builder(CommitmentConfig::processed())),
-                max_retries: 10,
-                key_for_config: config_key,
-            }))
+            with_commitment(CommitmentConfig::processed())
         }
-        Some(BlockNumberOrTag::Safe) => Ok(RpcEnum::CloneRpcClient(CloneRpcClient {
-            rpc: Arc::new(client_builder(CommitmentConfig::confirmed())),
-            max_retries: 10,
-            key_for_config: config_key,
-        })),
+        Some(BlockNumberOrTag::Safe) => with_commitment(CommitmentConfig::confirmed()),
         // Earliest should resolved into a slot number using db by that moment,
         // if it wasn't done, just ignoring it
         None | Some(BlockNumberOrTag::Finalized | BlockNumberOrTag::Earliest) => {
-            Ok(RpcEnum::CloneRpcClient(CloneRpcClient {
-                rpc: Arc::new(client_builder(CommitmentConfig::finalized())),
-                max_retries: 10,
-                key_for_config: config_key,
-            }))
+            with_commitment(CommitmentConfig::finalized())
         }
     }
 }
