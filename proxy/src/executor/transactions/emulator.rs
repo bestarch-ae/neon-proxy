@@ -102,6 +102,7 @@ impl Emulator {
         tx_hash: &B256,
         ixs: &[Instruction],
     ) -> anyhow::Result<bool> {
+        tracing::info!(%tx_hash, ?ixs, "check_single_execution");
         let tx = Transaction::new_with_payer(ixs, Some(&self.payer));
         let res = self
             .simulate(&[tx], Some(MAX_COMPUTE_UNITS.into()), Some(MAX_HEAP_SIZE))
@@ -109,7 +110,7 @@ impl Emulator {
             .into_iter()
             .next()
             .context("empty simulation result")?;
-        tracing::debug!(%tx_hash, result = ?res, "simulate");
+        tracing::info!(%tx_hash, result = ?res, "simulate");
 
         if let Some(err) = res.error {
             match err {
