@@ -136,7 +136,7 @@ enum TaskCommand {
     },
     Emulate {
         tx: TxParams,
-        response: oneshot::Sender<Result<EmulateResponse, NeonError>>,
+        response: oneshot::Sender<Result<EmulateResponse, NeonApiError>>,
     },
     GetConfig(oneshot::Sender<Result<GetConfigResponse, NeonError>>),
     Simulate {
@@ -404,7 +404,7 @@ impl NeonApi {
             ))
             .await
             .unwrap();
-        Ok(rx.await.unwrap()?)
+        rx.await.unwrap()
     }
 
     pub async fn get_config(&self) -> Result<GetConfigResponse, NeonError> {
@@ -519,8 +519,8 @@ impl NeonApi {
                 )
                 .await;
                 let resp = match resp {
-                    Ok((resp, _something)) => Ok(resp),
-                    Err(err) => Err(err),
+                    Ok((resp, _something)) => decode_neon_response(resp),
+                    Err(err) => Err(err.into()),
                 };
                 let _ = response.send(resp);
             }
