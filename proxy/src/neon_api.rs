@@ -404,7 +404,7 @@ impl NeonApi {
             ))
             .await
             .unwrap();
-        Ok(rx.await.unwrap()?)
+        rx.await.unwrap()
     }
 
     pub async fn get_config(&self) -> Result<GetConfigResponse, NeonError> {
