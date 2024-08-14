@@ -72,7 +72,9 @@ impl Emulator {
 
     pub async fn emulate(&self, tx: &TxEnvelope) -> anyhow::Result<EmulateResponse> {
         let request = get_neon_emulate_request(tx)?;
-        self.neon_api.emulate(request).await.map_err(Into::into)
+        let res = self.neon_api.emulate(request).await.map_err(Into::into);
+        tracing::info!(?res, tx_hash = %tx.tx_hash(), "neon emulation result");
+        res
     }
 
     pub async fn simulate(
@@ -110,7 +112,7 @@ impl Emulator {
             .into_iter()
             .next()
             .context("empty simulation result")?;
-        tracing::info!(%tx_hash, result = ?res, "simulate");
+        tracing::info!(%tx_hash, result = ?res, "solana simulation result");
 
         if let Some(err) = res.error {
             match err {
