@@ -396,7 +396,7 @@ impl EthApiServer for EthApiImpl {
         };
         let balance = self.neon_api.get_balance(balance_address, tag).await?;
 
-        tracing::info!(%address, ?block_number, %balance, "get balance returns");
+        tracing::info!(%address, ?block_number, %balance, ?tag, "get balance returns");
 
         Ok(balance.to_reth())
     }
