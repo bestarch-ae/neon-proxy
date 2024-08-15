@@ -549,9 +549,12 @@ impl NeonApi {
             }
 
             TaskCommand::GetBalance { addr, response } => {
-                let resp =
-                    commands::get_balance::execute(&ctx.default_rpc, &ctx.neon_pubkey, &[addr])
-                        .await;
+                let resp = commands::get_balance::execute(
+                    &ctx.rpc_client_simulation,
+                    &ctx.neon_pubkey,
+                    &[addr],
+                )
+                .await;
                 tracing::info!(?resp, "get_balance");
                 let resp = match resp {
                     Ok(resp) => {
@@ -567,9 +570,12 @@ impl NeonApi {
             }
 
             TaskCommand::GetTransactionCount { addr, response } => {
-                let resp =
-                    commands::get_balance::execute(&ctx.default_rpc, &ctx.neon_pubkey, &[addr])
-                        .await;
+                let resp = commands::get_balance::execute(
+                    &ctx.rpc_client_simulation,
+                    &ctx.neon_pubkey,
+                    &[addr],
+                )
+                .await;
                 tracing::info!(?resp, "get_transaction_count");
                 let resp = match resp {
                     Ok(resp) => {
