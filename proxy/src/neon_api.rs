@@ -479,8 +479,12 @@ impl NeonApi {
                 if let RpcEnum::CloneRpcClient(rpc) = &ctx.default_rpc {
                     tracing::debug!(commitment = ?rpc.commitment(), "estimate gas task command, emulate commitment");
                 }
+                // HACK: We're using the simulation RPC client here because a few tests fail
+                // when using the finalized RPC client due to insufficient balance.
+                // TODO: This should be fixed in the future by properly determining
+                //  which commitment level to use for emulation.
                 let resp = commands::emulate::execute(
-                    &ctx.default_rpc,
+                    &ctx.rpc_client_simulation,
                     ctx.neon_pubkey,
                     req,
                     None::<TracerTypeEnum>,
