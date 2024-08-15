@@ -504,7 +504,7 @@ impl NeonApi {
                     solana_overrides: None,
                 };
                 let resp = commands::emulate::execute(
-                    &ctx.default_rpc,
+                    &ctx.rpc_client_simulation,
                     ctx.neon_pubkey,
                     req,
                     None::<TracerTypeEnum>,
@@ -534,7 +534,7 @@ impl NeonApi {
                 };
                 tracing::info!(?req, "emulate_call");
                 let resp = commands::emulate::execute(
-                    &ctx.default_rpc,
+                    &ctx.rpc_client_simulation,
                     ctx.neon_pubkey,
                     req,
                     None::<TracerTypeEnum>,
