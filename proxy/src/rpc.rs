@@ -387,7 +387,7 @@ impl EthApiServer for EthApiImpl {
         let tag = if let Some(block_number) = block_number {
             Some(self.get_tag_by_block_id(block_number).await?)
         } else {
-            Some(BlockNumberOrTag::Finalized)
+            None
         };
 
         let balance_address = BalanceAddress {
