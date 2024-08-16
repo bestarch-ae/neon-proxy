@@ -396,9 +396,9 @@ impl TransactionRepo {
                       T.sol_sig, sol_ix_idx,
                       sol_ix_inner_idx, T.block_slot,
                       CAST
-                          (row_number() OVER
-                               (PARTITION BY t.block_slot ORDER BY T.block_slot,T.tx_idx)-1
-                           AS INTEGER) as tx_idx,
+                        (DENSE_RANK() OVER (
+                          PARTITION BY T.block_slot ORDER BY T.block_slot,T.tx_idx
+                        )-1 AS INTEGER) as tx_idx,
                       nonce, gas_price,
                       gas_limit, value, gas_used,
                       sum_gas_used, to_addr, contract,
@@ -419,9 +419,9 @@ impl TransactionRepo {
                         SELECT * FROM neon_transaction_logs WHERE NOT COALESCE(is_reverted, FALSE)
                         ) L ON L.tx_hash = T.neon_sig AND T.is_canceled = FALSE
                     LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
-                    WHERE NOT COALESCE(L.is_reverted, FALSE)
-                    ORDER BY T.block_slot,T.tx_idx,tx_log_idx) TL
+                    WHERE NOT COALESCE(L.is_reverted, FALSE)) TL
                     WHERE (TL.is_completed OR TL.is_canceled) AND TL.neon_sig = $1 OR ($2 AND block_slot = $3)
+                    ORDER BY TL.block_slot,TL.tx_idx,tx_log_idx
            "#,
         )
         .bind(hash.map(|hash| *hash.as_array()).unwrap_or_default())
