@@ -82,8 +82,8 @@ pub fn parse(
             tracing::info!("found operator balance withdraw instruction");
             ParseResult::OperatorOperation(BalanceOperation::Withdraw)
         }
-        tag::TX_EXEC_FROM_DATA => {
-            tracing::debug!("found tx exec from data");
+        tag::TX_EXEC_FROM_DATA | tag::TX_EXEC_FROM_DATA_DEPRECATED_V13 => {
+            tracing::debug!(%tag, "found tx exec from data");
             let tx = decode_execute_from_ix(&bytes[1..])?;
             tracing::info!(
                 tx = hex::encode(tx.hash),
@@ -91,8 +91,8 @@ pub fn parse(
             );
             ParseResult::TransactionExecuted(tx)
         }
-        tag::TX_EXEC_FROM_DATA_SOLANA_CALL => {
-            tracing::debug!("found tx exec from data with solana call");
+        tag::TX_EXEC_FROM_DATA_SOLANA_CALL | tag::TX_EXEC_FROM_DATA_SOLANA_CALL_V13 => {
+            tracing::debug!(%tag, "found tx exec from data with solana call");
             let tx = decode_execute_from_ix(&bytes[1..])?;
             tracing::info!(
                 tx = hex::encode(tx.hash),
