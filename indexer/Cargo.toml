@@ -6,24 +6,22 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio-stream = "0.1"
-clap = { version = "4.5.4", features = ["derive"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = [
-    "fmt",
-    "env-filter",
-    "json",
-] }
 neon_parse = { path = "../parse", package = "parse" }
-anyhow = "1"
-tokio = { version = "1.37.0", features = ["full"] }
-lru = "0.12"
-backoff = { version = "0.4", features = ["tokio"] }
-
 common = { path = "../common", package = "neon-proxy-common" }
 solana = { path = "../solana-api", package = "solana-api" }
 db = { path = "../db" }
-hex = "0.4.3"
+
+anyhow.workspace = true
+hex.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+tokio-stream = "0.1"
+clap = { version = "4.5.4", features = ["derive"] }
+lru = "0.12"
+backoff = { version = "0.4", features = ["tokio"] }
+
 prometheus = { version = "0.13", default-features = false, features = [
     "process",
 ] }

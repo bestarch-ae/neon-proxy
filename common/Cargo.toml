@@ -5,12 +5,14 @@ edition = "2021"
 publish = false
 
 [dependencies]
+hex.workspace = true
+
 ethnum = "1.5.0"
-solana-sdk = "1.17.34"
-solana-account-decoder = "1.17.34"
-solana-transaction-status = "1.17.34"
-hex = "0.4"
 build-info = { version = "0.0.31", features = ["serde"] }
+
+solana-sdk.workspace = true
+solana-account-decoder.workspace = true
+solana-transaction-status.workspace = true
 
 [dependencies.evm-loader]
 git = "https://github.com/neonlabsorg/neon-evm.git"

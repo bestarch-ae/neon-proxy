@@ -6,14 +6,15 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-thiserror = "1"
+common = { path = "../common", package = "neon-proxy-common" }
+
+hex.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
 base64 = "0.21"
-tracing = "0.1"
-hex = "0.4"
 arrayref = "0.3"
 either = "1"
-
-common = { path = "../common", package = "neon-proxy-common" }
 
 [dev-dependencies]
 test-log = { version = "0.2", default-features = false, features = ["trace"] }
