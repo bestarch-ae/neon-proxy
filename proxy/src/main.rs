@@ -20,7 +20,6 @@ use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 mod convert;
 mod executor;
 mod mempool;
-mod neon_api;
 mod rpc;
 
 use common::neon_lib::types::ChDbConfig;
@@ -28,12 +27,12 @@ use common::solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Keypair;
 use common::solana_sdk::signer::EncodableKey;
-
-use executor::Executor;
 use neon_api::NeonApi;
-use rpc::{EthApiImpl, NeonEthApiServer, NeonFilterApiServer};
 use solana_api::solana_api::SolanaApi;
 use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
+
+use self::executor::Executor;
+use self::rpc::{EthApiImpl, NeonEthApiServer, NeonFilterApiServer};
 
 #[derive(Debug, Error)]
 pub enum Error {

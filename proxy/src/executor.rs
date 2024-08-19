@@ -22,8 +22,7 @@ use common::solana_sdk::signature::{Keypair, Signature};
 use common::solana_sdk::signer::Signer;
 use common::solana_sdk::transaction::TransactionError;
 use common::solana_transaction_status::TransactionStatus;
-
-use crate::neon_api::NeonApi;
+use neon_api::NeonApi;
 
 use self::transactions::{OngoingTransaction, TransactionBuilder};
 

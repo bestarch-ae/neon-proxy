@@ -4,7 +4,6 @@ use std::borrow::Borrow;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use jsonrpsee::types::ErrorCode;
 use reth_primitives::{BlockNumberOrTag, Bytes};
 use serde::Deserialize;
 use thiserror::Error;
@@ -68,28 +67,30 @@ pub enum NeonApiError {
     EmulationFailed(String, Option<Bytes>),
 }
 
+#[cfg(feature = "jsonrpsee")]
 impl NeonApiError {
     pub const fn error_code(&self) -> i32 {
         match self {
             Self::Neon(err) => err.error_code() as i32,
             Self::GasLimit(_) | Self::EmulationFailed(_, _) => 3,
-            _ => ErrorCode::InternalError.code(),
+            _ => jsonrpsee::types::ErrorCode::InternalError.code(),
         }
     }
 }
 
+#[cfg(feature = "jsonrpsee")]
 impl From<NeonApiError> for jsonrpsee::types::ErrorObjectOwned {
     fn from(value: NeonApiError) -> Self {
         let error_code = value.error_code();
         match value {
             NeonApiError::Neon(err) => Self::owned(
-                ErrorCode::InternalError.code(),
+                jsonrpsee::types::ErrorCode::InternalError.code(),
                 err.to_string(),
                 None::<String>,
             ),
             NeonApiError::GasLimit(err) => Self::owned(error_code, err.to_string(), None::<String>),
             NeonApiError::EmulationFailed(msg, data) => Self::owned(error_code, msg, data),
-            _ => ErrorCode::InternalError.into(),
+            _ => jsonrpsee::types::ErrorCode::InternalError.into(),
         }
     }
 }

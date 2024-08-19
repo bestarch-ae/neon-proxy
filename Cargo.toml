@@ -7,7 +7,8 @@ members = [
     "parse",
     "sol2neon",
     "solana-api",
-    "proxy"
+    "proxy",
+    "neon-api"
 ]
 
 [workspace.dependencies]
@@ -28,6 +29,22 @@ solana-sdk = "1.17.34"
 solana-transaction-status = "1.17.34"
 spl-token = "4.0.0"
 spl-associated-token-account = "2.3.0"
+
+# Reth/Alloy deps
+rpc-api = { git = "https://github.com/paradigmxyz/reth", package = "reth-rpc-api" }
+rpc-api-types = { git = "https://github.com/paradigmxyz/reth", package = "reth-rpc-types" }
+reth-primitives = { git = "https://github.com/paradigmxyz/reth" }
+
+alloy-consensus = { git = "https://github.com/alloy-rs/alloy", rev = "dd7a999", version = "0.1.0", default-features = false, features = [
+    "k256",
+] }
+alloy-eips = { git = "https://github.com/alloy-rs/alloy", rev = "dd7a999" }
+alloy-network = { git = "https://github.com/alloy-rs/alloy", rev = "dd7a999" }
+alloy-signer = { git = "https://github.com/alloy-rs/alloy", rev = "dd7a999" }
+alloy-signer-wallet = { git = "https://github.com/alloy-rs/alloy", rev = "dd7a999" }
+alloy-sol-types = { version = "0.7.7", features = ["json"] }
+
+alloy-rlp = "0.3.4"
 
 [patch.crates-io]
 # Hack to resolve `zeroize` version conflict between solana-* and reth. 

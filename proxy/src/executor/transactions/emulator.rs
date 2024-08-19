@@ -12,11 +12,10 @@ use common::solana_sdk::instruction::InstructionError;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::transaction::Transaction;
 use common::solana_sdk::transaction::TransactionError;
-
-use crate::convert::ToNeon;
-use crate::neon_api::{NeonApi, SimulateConfig};
+use neon_api::{NeonApi, SimulateConfig};
 
 use super::{MAX_COMPUTE_UNITS, MAX_HEAP_SIZE};
+use crate::convert::ToNeon;
 
 #[derive(Clone, Debug)]
 pub(super) struct IterInfo {

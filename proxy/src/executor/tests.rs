@@ -41,14 +41,13 @@ use common::solana_sdk::signature::Signature;
 use common::solana_sdk::signer::{EncodableKey, Signer};
 use common::solana_sdk::transaction::Transaction;
 use common::solana_sdk::{bpf_loader_upgradeable, system_instruction, system_program};
+use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
 use solana_sdk::account::ReadableAccount;
 
+use self::mock::BanksRpcMock;
 use super::Executor;
 use crate::convert::ToReth;
-use crate::neon_api::NeonApi;
-
-use mock::BanksRpcMock;
 
 const NEON_KEY: Pubkey = pubkey!("53DfF883gyixYNXnM7s5xhdeyV8mVk9T4i2hGV9vG9io");
 const NEON_TOKEN: Pubkey = pubkey!("HPsV9Deocecw3GeZv1FkAPNCBRfuVyfw9MMwjwRe1xaU");

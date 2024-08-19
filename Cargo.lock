@@ -4094,6 +4094,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "neon-api"
+version = "0.1.0"
+dependencies = [
+ "alloy-rlp",
+ "anyhow",
+ "bincode",
+ "hex",
+ "jsonrpsee",
+ "neon-proxy-common",
+ "reth-primitives",
+ "serde",
+ "serde_json",
+ "solana-api",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "neon-lib"
 version = "1.14.0"
 source = "git+https://github.com/neonlabsorg/neon-evm.git?rev=v1.14.0#59b2441325152bcdbfcec20d842dd2dacdced1d2"
@@ -5015,6 +5035,7 @@ dependencies = [
  "hex-literal",
  "hyper",
  "jsonrpsee",
+ "neon-api",
  "neon-proxy-common",
  "pyth-sdk-solana",
  "reth-primitives",
@@ -5022,15 +5043,12 @@ dependencies = [
  "reth-rpc-types",
  "rust_decimal",
  "rust_decimal_macros",
- "serde",
  "serde_json",
  "serial_test",
  "solana-account-decoder",
  "solana-api",
  "solana-client",
  "solana-program-test",
- "solana-rpc-client",
- "solana-rpc-client-api",
  "solana-sdk",
  "spl-associated-token-account",
  "spl-token",
