@@ -307,9 +307,9 @@ impl TransactionBuilder {
             return fallback_iterative(tx_data, alt).await;
         }
         let tag = if tx_data.emulate.external_solana_call {
-            tag::TX_EXEC_FROM_DATA_SOLANA_CALL
+            tag::TX_EXEC_FROM_DATA_SOLANA_CALL_V13
         } else {
-            tag::TX_EXEC_FROM_DATA
+            tag::TX_EXEC_FROM_DATA_DEPRECATED_V13
         };
 
         let (accounts, mut data) = self.execute_base(
