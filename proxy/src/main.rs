@@ -12,7 +12,7 @@ use hyper::service::{make_service_fn, service_fn};
 use jsonrpsee::server::Server;
 use jsonrpsee::types::ErrorCode;
 use jsonrpsee::RpcModule;
-use rpc_api::{EthApiServer, EthFilterApiServer};
+use rpc_api::{EthApiServer, EthFilterApiServer, NetApiServer};
 use thiserror::Error;
 use tower::Service;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
@@ -22,6 +22,7 @@ mod executor;
 mod mempool;
 mod rpc;
 
+use common::neon_lib;
 use common::neon_lib::types::ChDbConfig;
 use common::solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use common::solana_sdk::pubkey::Pubkey;
@@ -32,7 +33,7 @@ use solana_api::solana_api::SolanaApi;
 use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
 use self::executor::Executor;
-use self::rpc::{EthApiImpl, NeonEthApiServer, NeonFilterApiServer};
+use self::rpc::{EthApiImpl, NeonCustomApiServer, NeonEthApiServer, NeonFilterApiServer};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -178,6 +179,20 @@ struct Args {
     log_format: Option<LogFormat>,
 }
 
+fn get_lib_version() -> Option<String> {
+    let build_info = serde_json::to_string(&neon_lib::build_info::get_build_info()).ok()?;
+    let build_info: serde_json::Value = serde_json::from_str(&build_info).ok()?;
+    let version = build_info
+        .get("crate_info")
+        .and_then(|info| info.get("version"))
+        .and_then(|v| v.as_str())?;
+    let commit = build_info
+        .get("version_control")
+        .and_then(|info| info.get("commit_id"))
+        .and_then(|i| i.as_str())?;
+    Some(format!("{}-{}", version, commit))
+}
+
 #[tokio::main]
 async fn main() {
     let opts = Args::parse();
@@ -196,11 +211,14 @@ async fn main() {
     }
     let _ = tracing_log::LogTracer::init();
 
+    let neon_lib_version = get_lib_version();
+
     tracing::info!(
         neon_pubkey = %opts.neon_pubkey,
         neon_config = %opts.neon_config_pubkey,
         default_token = opts.default_token_name,
         simulation_commitment = ?opts.simulation_commitment,
+        neon_lib_version = ?neon_lib_version,
         "starting"
     );
 
@@ -214,7 +232,6 @@ async fn main() {
         clickhouse_password: opts.neon_db_clickhouse_password,
     };
 
-    tracing::info!(%opts.neon_pubkey, %opts.neon_config_pubkey, "starting");
     let neon_api = NeonApi::new(
         opts.solana_url.clone(),
         opts.neon_pubkey,
@@ -308,6 +325,7 @@ async fn main() {
         default_chain_id,
         executor.clone(),
         mp_gas_prices.clone(),
+        neon_lib_version.unwrap_or("UNKNOWN".to_string()),
     );
     let mut other_tokens = HashSet::new();
     let mut tokens_methods = HashMap::new();
@@ -380,6 +398,13 @@ fn build_module(eth: EthApiImpl) -> RpcModule<()> {
 
     module
         .merge(<EthApiImpl as NeonFilterApiServer>::into_rpc(eth.clone()))
+        .expect("no conflicts");
+
+    module
+        .merge(<EthApiImpl as NeonCustomApiServer>::into_rpc(eth.clone()))
+        .expect("no conflicts");
+    module
+        .merge(<EthApiImpl as NetApiServer>::into_rpc(eth.clone()))
         .expect("no conflicts");
 
     module
