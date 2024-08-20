@@ -117,6 +117,11 @@ struct Args {
     /// Solana endpoint
     solana_url: String,
 
+    #[arg(long, value_name = "URL")]
+    /// Pyth solana endpoint (for fetching symbology)
+    /// If not provided, solana_url will be used
+    pyth_solana_url: Option<String>,
+
     #[arg(short('w'), long, default_value = "wss://api.mainnet-beta.solana.com")]
     /// Solana websocket endpoint
     solana_ws_url: String,
@@ -259,7 +264,11 @@ async fn main() {
             .expect("failed to parse symbology")
     } else if let Some(mapping_addr) = &opts.pyth_mapping_addr {
         tracing::info!(%mapping_addr, "loading symbology");
-        let rpc_client = RpcClient::new(opts.solana_url.clone());
+        let rpc_client = RpcClient::new(
+            opts.pyth_solana_url
+                .unwrap_or(opts.solana_url.clone())
+                .clone(),
+        );
         let symbology = mempool::pyth_collect_symbology(mapping_addr, &rpc_client)
             .await
             .expect("failed to collect pyth symbology");
