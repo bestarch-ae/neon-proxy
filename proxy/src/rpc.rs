@@ -239,7 +239,13 @@ impl NetApiServer for EthApiImpl {
     }
 
     fn peer_count(&self) -> RpcResult<PeerCount> {
-        unimplemented()
+        let neon_api = self.neon_api.clone();
+        let peer_count = tokio::task::block_in_place(move || {
+            tokio::runtime::Handle::current()
+                .block_on(async move { neon_api.get_cluster_size().await })
+        })? as u64;
+
+        Ok(PeerCount::Hex(U64::from(peer_count)))
     }
 
     fn is_listening(&self) -> RpcResult<bool> {
