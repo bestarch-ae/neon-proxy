@@ -18,6 +18,7 @@ use serial_test::serial;
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_program_test::{ProgramTest, ProgramTestContext};
 
+use common::convert::ToReth;
 use common::ethnum::U256 as NeonU256;
 use common::evm_loader::account::{ContractAccount, MainTreasury, Treasury};
 use common::neon_instruction::tag;
@@ -47,7 +48,6 @@ use solana_sdk::account::ReadableAccount;
 
 use self::mock::BanksRpcMock;
 use super::Executor;
-use crate::convert::ToReth;
 
 const NEON_KEY: Pubkey = pubkey!("53DfF883gyixYNXnM7s5xhdeyV8mVk9T4i2hGV9vG9io");
 const NEON_TOKEN: Pubkey = pubkey!("HPsV9Deocecw3GeZv1FkAPNCBRfuVyfw9MMwjwRe1xaU");

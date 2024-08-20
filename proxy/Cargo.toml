@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 db = { path = "../db" }
-common = { path = '../common', package = "neon-proxy-common" }
+common = { path = '../common', package = "neon-proxy-common", features = ["reth"] }
 solana-api = { path = '../solana-api' }
 neon-api = { path = '../neon-api', features = ["jsonrpsee"] }
 

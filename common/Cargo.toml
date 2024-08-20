@@ -4,6 +4,9 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
+[features]
+reth = ["rpc-api-types", "reth-primitives"]
+
 [dependencies]
 hex.workspace = true
 
@@ -13,6 +16,9 @@ build-info = { version = "0.0.31", features = ["serde"] }
 solana-sdk.workspace = true
 solana-account-decoder.workspace = true
 solana-transaction-status.workspace = true
+
+rpc-api-types = { workspace = true, optional = true }
+reth-primitives = { workspace = true, optional = true }
 
 [dependencies.evm-loader]
 git = "https://github.com/neonlabsorg/neon-evm.git"

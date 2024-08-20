@@ -4184,6 +4184,8 @@ dependencies = [
  "evm-loader",
  "hex",
  "neon-lib",
+ "reth-primitives",
+ "reth-rpc-types",
  "solana-account-decoder",
  "solana-sdk",
  "solana-transaction-status",
