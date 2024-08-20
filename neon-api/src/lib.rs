@@ -148,6 +148,7 @@ enum TaskCommand {
     },
     GetSolanaVersion(oneshot::Sender<Result<RpcVersionInfo, NeonApiError>>),
     GetClusterSize(oneshot::Sender<Result<usize, NeonApiError>>),
+    GetHealth(oneshot::Sender<Result<(), NeonApiError>>),
 }
 
 struct Context {
@@ -431,6 +432,15 @@ impl NeonApi {
         rx.await.unwrap()
     }
 
+    pub async fn get_health(&self) -> Result<(), NeonApiError> {
+        let (tx, rx) = oneshot::channel();
+        self.channel
+            .send(Task::new(TaskCommand::GetHealth(tx), None, None))
+            .await
+            .unwrap();
+        rx.await.unwrap()
+    }
+
     pub async fn simulate(
         &self,
         config: SimulateConfig,
@@ -630,6 +640,10 @@ impl NeonApi {
                     .map_err(NeonError::from)
                     .map_err(Into::into);
                 let _ = response.send(resp);
+            }
+            TaskCommand::GetHealth(response) => {
+                let resp = ctx.rpc_client_finalized.get_health().await;
+                let _ = response.send(resp.map_err(NeonError::from).map_err(Into::into));
             }
         }
     }
