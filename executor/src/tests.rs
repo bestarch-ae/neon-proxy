@@ -4,7 +4,7 @@ use std::fs::read_to_string;
 use std::path::Path;
 use std::sync::Arc;
 
-use alloy_consensus::{SignableTransaction, TxLegacy};
+use alloy_consensus::{SignableTransaction, TxEnvelope, TxLegacy};
 use alloy_network::TxSignerSync;
 use alloy_signer::Signature as EthSignature;
 use alloy_signer_wallet::LocalWallet;
@@ -45,6 +45,8 @@ use common::solana_sdk::{bpf_loader_upgradeable, system_instruction, system_prog
 use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
 use solana_sdk::account::ReadableAccount;
+
+use crate::ExecuteRequest;
 
 use self::mock::BanksRpcMock;
 use super::Executor;
@@ -393,7 +395,7 @@ async fn transfer() -> Result<()> {
     };
     let signature = kp1.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
-    executor.handle_transaction(tx.into(), CHAIN_ID).await?;
+    executor.handle_transaction(req(tx)).await?;
 
     let txs = executor.join_current_transactions().await;
     assert_eq!(txs.len(), 1);
@@ -438,11 +440,11 @@ async fn transfer_no_chain_id() -> Result<()> {
     let v = signature.v().y_parity_byte() as u64 + 27;
     let signature = EthSignature::from_signature_and_parity(*signature.inner(), v)?;
 
+    let tx = tx.into_signed(signature);
+    executor.handle_transaction(req(tx)).await?;
+
     // HACK: Fixes random AccountInUse error
     let _ = test_ctx.banks_client.get_account(FST_HOLDER_KEY).await?;
-    let tx = tx.into_signed(signature);
-    executor.handle_transaction(tx.into(), CHAIN_ID).await?;
-
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
 
@@ -467,8 +469,9 @@ async fn deploy_contract() -> anyhow::Result<()> {
     let mut tx = code.deploy_tx();
     let signature = kp.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
-    executor.handle_transaction(tx.into(), CHAIN_ID).await?;
+    executor.handle_transaction(req(tx)).await?;
 
+    let _ = env.banks_client.get_account(FST_HOLDER_KEY).await?;
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
 
@@ -505,10 +508,10 @@ async fn iterations() -> anyhow::Result<()> {
     let mut tx = code.deploy_tx();
     let signature = kp.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
-    executor.handle_transaction(tx.into(), CHAIN_ID).await?;
-
     // HACK: Fixes random AccountInUse error
     let _ = env.banks_client.get_account(FST_HOLDER_KEY).await?;
+    executor.handle_transaction(req(tx)).await?;
+
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
 
@@ -533,7 +536,7 @@ async fn iterations() -> anyhow::Result<()> {
     let signature = kp.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
 
-    executor.handle_transaction(tx.into(), CHAIN_ID).await?;
+    executor.handle_transaction(req(tx)).await?;
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
 
@@ -562,7 +565,7 @@ async fn alt() -> anyhow::Result<()> {
     let mut tx = code.deploy_tx();
     let signature = kp.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
-    executor.handle_transaction(tx.into(), CHAIN_ID).await?;
+    executor.handle_transaction(req(tx)).await?;
 
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
@@ -589,7 +592,7 @@ async fn alt() -> anyhow::Result<()> {
     let signature = kp.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
 
-    executor.handle_transaction(tx.into(), CHAIN_ID).await?;
+    executor.handle_transaction(req(tx)).await?;
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
 
@@ -610,7 +613,7 @@ async fn sol_call() -> anyhow::Result<()> {
     let mut tx = code.deploy_tx();
     let signature = kp.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
-    executor.handle_transaction(tx.into(), CHAIN_ID).await?;
+    executor.handle_transaction(req(tx)).await?;
 
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
@@ -680,4 +683,8 @@ impl Contract {
         let contract_account = ContractAccount::from_account(&NEON_KEY, account_info).unwrap();
         assert_eq!(&*contract_account.code(), &self.runtime);
     }
+}
+
+fn req(tx: impl Into<TxEnvelope>) -> ExecuteRequest {
+    ExecuteRequest::new(tx.into(), CHAIN_ID)
 }

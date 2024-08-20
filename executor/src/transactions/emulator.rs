@@ -52,6 +52,7 @@ impl IterInfo {
     }
 }
 
+#[derive(Debug)]
 pub struct Emulator {
     neon_api: NeonApi,
     evm_steps_min: u64,

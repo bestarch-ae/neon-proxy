@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use alloy_consensus::TxEnvelope;
-use alloy_rlp::Decodable;
 use futures_util::{StreamExt, TryStreamExt};
 use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::proc_macros::rpc;
@@ -23,7 +21,7 @@ use common::convert::{ToNeon, ToReth};
 use common::neon_lib::types::{BalanceAddress, TxParams};
 use common::types::NeonTxInfo;
 use db::WithBlockhash;
-use executor::Executor;
+use executor::{ExecuteRequest, Executor};
 use neon_api::NeonApi;
 
 use crate::convert::{build_block, neon_to_eth, neon_to_eth_receipt};
@@ -695,14 +693,13 @@ impl EthApiServer for EthApiImpl {
     /// Sends signed transaction, returning its hash.
     async fn send_raw_transaction(&self, bytes: Bytes) -> RpcResult<B256> {
         if let Some(executor) = self.executor.as_ref() {
-            let bytes_ref: &mut &[u8] = &mut bytes.as_ref();
-            let envelope = TxEnvelope::decode(bytes_ref)
+            let envelope = ExecuteRequest::from_bytes(&bytes, self.chain_id)
                 .inspect_err(|error| tracing::warn!(%bytes, %error, "could not decode transaction"))
                 .map_err(|_| ErrorObjectOwned::from(ErrorCode::InvalidParams))?;
             let hash = *envelope.tx_hash();
             tracing::info!(tx_hash = %hash, %bytes, ?envelope, "sendRawTransaction");
             executor
-                .handle_transaction(envelope, self.chain_id)
+                .handle_transaction(envelope)
                 .await
                 .inspect_err(|error| tracing::warn!(%hash, %error, "could not handle transaction"))
                 .map_err(|err| {
