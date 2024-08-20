@@ -28,9 +28,8 @@ use common::solana_sdk::signature::{Keypair, SIGNATURE_BYTES};
 use common::solana_sdk::signer::Signer;
 use common::solana_sdk::system_program;
 use common::solana_sdk::transaction::Transaction;
+use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
-
-use crate::neon_api::NeonApi;
 
 use self::alt::AltInfo;
 use self::emulator::{get_chain_id, Emulator, IterInfo};
