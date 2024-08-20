@@ -23,12 +23,12 @@ use common::convert::{ToNeon, ToReth};
 use common::neon_lib::types::{BalanceAddress, TxParams};
 use common::types::NeonTxInfo;
 use db::WithBlockhash;
+use executor::Executor;
 use neon_api::NeonApi;
 
 use crate::convert::{build_block, neon_to_eth, neon_to_eth_receipt};
 use crate::convert::{convert_filters, convert_rich_log, LogFilters};
 use crate::convert::{NeonLog, NeonTransactionReceipt};
-use crate::executor::Executor;
 use crate::mempool;
 use crate::Error;
 

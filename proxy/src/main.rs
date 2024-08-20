@@ -18,7 +18,6 @@ use tower::Service;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 
 mod convert;
-mod executor;
 mod mempool;
 mod rpc;
 
@@ -28,11 +27,11 @@ use common::solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Keypair;
 use common::solana_sdk::signer::EncodableKey;
+use executor::Executor;
 use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
 use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
-use self::executor::Executor;
 use self::rpc::{EthApiImpl, NeonCustomApiServer, NeonEthApiServer, NeonFilterApiServer};
 
 #[derive(Debug, Error)]

@@ -9,7 +9,7 @@ members = [
     "solana-api",
     "proxy",
     "neon-api"
-]
+, "executor"]
 
 [workspace.dependencies]
 anyhow = "1.0.86"
