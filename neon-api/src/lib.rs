@@ -29,7 +29,9 @@ use common::solana_sdk::commitment_config::CommitmentConfig;
 use common::solana_sdk::hash::Hash;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::transaction::Transaction;
+
 use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
+use solana_api::solana_rpc_client_api::response::RpcVersionInfo;
 
 use self::gas_limit_calculator::{GasLimitCalculator, GasLimitError};
 
@@ -144,6 +146,7 @@ enum TaskCommand {
         request: SimulateSolanaRequest,
         response: oneshot::Sender<Result<SimulateSolanaResponse, NeonError>>,
     },
+    GetSolanaVersion(oneshot::Sender<Result<RpcVersionInfo, NeonApiError>>),
 }
 
 struct Context {
@@ -297,6 +300,15 @@ impl NeonApi {
         }
     }
 
+    pub async fn get_solana_version(&self) -> Result<RpcVersionInfo, NeonApiError> {
+        let (tx, rx) = oneshot::channel();
+        self.channel
+            .send(Task::new(TaskCommand::GetSolanaVersion(tx), None, None))
+            .await
+            .unwrap();
+        rx.await.unwrap()
+    }
+
     pub async fn get_balance(
         &self,
         addr: BalanceAddress,
@@ -400,13 +412,13 @@ impl NeonApi {
         rx.await.unwrap()
     }
 
-    pub async fn get_config(&self) -> Result<GetConfigResponse, NeonError> {
+    pub async fn get_config(&self) -> Result<GetConfigResponse, NeonApiError> {
         let (tx, rx) = oneshot::channel();
         self.channel
             .send(Task::new(TaskCommand::GetConfig(tx), None, None))
             .await
             .unwrap();
-        rx.await.unwrap()
+        rx.await.unwrap().map_err(Into::into)
     }
 
     pub async fn simulate(
@@ -595,6 +607,11 @@ impl NeonApi {
                 let resp =
                     commands::simulate_solana::execute(&ctx.rpc_client_simulation, request).await;
                 let _ = response.send(resp);
+            }
+
+            TaskCommand::GetSolanaVersion(response) => {
+                let resp = ctx.rpc_client_finalized.get_version().await;
+                let _ = response.send(resp.map_err(NeonError::from).map_err(Into::into));
             }
         }
     }

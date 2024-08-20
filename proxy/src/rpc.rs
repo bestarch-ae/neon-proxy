@@ -13,12 +13,14 @@ use reth_primitives::TxKind;
 use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, B256, B64, U256, U64};
 use rpc_api::servers::EthApiServer;
 use rpc_api::EthFilterApiServer;
+use rpc_api::NetApiServer;
 use rpc_api_types::serde_helpers::JsonStorageKey;
 use rpc_api_types::Filter;
 use rpc_api_types::FilterBlockOption;
 use rpc_api_types::FilterChanges;
 use rpc_api_types::FilterId;
 use rpc_api_types::Log;
+use rpc_api_types::PeerCount;
 use rpc_api_types::PendingTransactionFilterKind;
 use rpc_api_types::{
     state::StateOverride, AccessListWithGasUsed, AnyTransactionReceipt, BlockOverrides, Bundle,
@@ -47,6 +49,7 @@ pub struct EthApiImpl {
     chain_id: u64,
     executor: Option<Arc<Executor>>,
     mp_gas_prices: mempool::GasPrices,
+    lib_version: String,
 }
 
 impl EthApiImpl {
@@ -56,6 +59,7 @@ impl EthApiImpl {
         chain_id: u64,
         executor: Option<Arc<Executor>>,
         mp_gas_prices: mempool::GasPrices,
+        lib_version: String,
     ) -> Self {
         let transactions = ::db::TransactionRepo::new(pool.clone());
         let blocks = ::db::BlockRepo::new(pool.clone());
@@ -67,6 +71,7 @@ impl EthApiImpl {
             executor,
             chain_id,
             mp_gas_prices,
+            lib_version,
         }
     }
 
@@ -177,6 +182,21 @@ fn unimplemented<T>() -> RpcResult<T> {
     ))
 }
 
+#[rpc(server, namespace = "neon")]
+trait NeonCustomApi {
+    #[method(name = "proxyVersion")]
+    fn proxy_version(&self) -> RpcResult<String>;
+
+    #[method(name = "solanaVersion")]
+    async fn solana_version(&self) -> RpcResult<String>;
+
+    #[method(name = "cliVersion")]
+    fn cli_version(&self) -> RpcResult<String>;
+
+    #[method(name = "evmVersion")]
+    async fn evm_version(&self) -> RpcResult<String>;
+}
+
 #[rpc(server, namespace = "eth")]
 trait NeonEthApi: EthApiServer {
     #[method(name = "getTransactionReceipt")]
@@ -195,6 +215,46 @@ impl NeonEthApiServer for EthApiImpl {
         let receipt = <Self as EthApiServer>::transaction_receipt(self, hash).await?;
         let receipt = receipt.map(crate::convert::to_neon_receipt);
         Ok(receipt)
+    }
+}
+
+#[async_trait]
+impl NeonCustomApiServer for EthApiImpl {
+    fn proxy_version(&self) -> RpcResult<String> {
+        let version = format!("NeonProxy/v{}", env!("CARGO_PKG_VERSION"));
+        Ok(version)
+    }
+
+    async fn solana_version(&self) -> RpcResult<String> {
+        let version = self.neon_api.get_solana_version().await?;
+        let version = format!("Solana/v{}", version.solana_core);
+        Ok(version)
+    }
+
+    async fn evm_version(&self) -> RpcResult<String> {
+        let config = self.neon_api.get_config().await?;
+        let version = format!("Neon-EVM/v{}-{}", config.version, config.revision);
+        Ok(version)
+    }
+
+    fn cli_version(&self) -> RpcResult<String> {
+        let version = format!("Neon-cli/v{}", self.lib_version);
+        Ok(version)
+    }
+}
+
+#[async_trait]
+impl NetApiServer for EthApiImpl {
+    fn version(&self) -> RpcResult<String> {
+        Ok(self.chain_id.to_string())
+    }
+
+    fn peer_count(&self) -> RpcResult<PeerCount> {
+        unimplemented()
+    }
+
+    fn is_listening(&self) -> RpcResult<bool> {
+        Ok(false)
     }
 }
 
@@ -605,7 +665,7 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns whether the client is actively mining new blocks.
     async fn is_mining(&self) -> RpcResult<bool> {
-        unimplemented()
+        Ok(false)
     }
 
     /// Returns the number of hashes per second that the node is mining with.
