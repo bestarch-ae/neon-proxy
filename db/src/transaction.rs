@@ -1,11 +1,12 @@
 use anyhow::{bail, Context};
-use common::solana_sdk::hash::Hash;
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use sqlx::postgres::{PgRow, Postgres};
 use sqlx::FromRow;
 
 use common::ethnum::U256;
+use common::evm_loader::types::vector::{VectorVecExt, VectorVecSlowExt};
 use common::evm_loader::types::{AccessListTx, Address, LegacyTx, Transaction, TransactionPayload};
+use common::solana_sdk::hash::Hash;
 use common::types::{EventKind, EventLog, NeonTxInfo, TxHash};
 
 use crate::PgSolanaBlockHash;
@@ -633,7 +634,7 @@ impl NeonTransactionRow {
                 gas_limit,
                 target,
                 value,
-                call_data,
+                call_data: call_data.into_vector(),
                 v,
                 r,
                 s,
@@ -646,12 +647,12 @@ impl NeonTransactionRow {
                 gas_limit,
                 target,
                 value,
-                call_data,
+                call_data: call_data.into_vector(),
                 r,
                 s,
                 chain_id: chain_id.unwrap_or(U256::new(0)), // TODO
                 recovery_id,
-                access_list: Vec::new(), // TODO
+                access_list: Vec::new().elementwise_copy_into_vector(), // TODO
             }),
             kind => bail!("unsupported tx kind: {kind:?}"),
         };

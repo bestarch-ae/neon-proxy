@@ -11,6 +11,7 @@ use solana_client::rpc_response::{Response, RpcResponseContext, RpcSimulateTrans
 use solana_client::rpc_sender::{RpcSender, RpcTransportStats};
 use solana_program_test::BanksClient;
 use solana_sdk::commitment_config::CommitmentLevel;
+use solana_sdk::feature_set::disable_deploy_of_alloc_free_syscall;
 use solana_sdk::message::Message;
 use solana_sdk::packet::PACKET_DATA_SIZE;
 use solana_sdk::system_instruction;
@@ -263,6 +264,7 @@ impl RpcSender for BanksRpcMock {
                     accounts: None,
                     units_consumed,
                     return_data: return_data.flatten().map(Into::into),
+                    inner_instructions: None,
                 };
                 serde_json::to_value(self.with_context(commitment, result).await)?
             }

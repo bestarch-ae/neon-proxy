@@ -432,6 +432,7 @@ impl NeonApi {
             .collect::<Result<_, _>>()?;
         let (tx, rx) = oneshot::channel();
         let request = SimulateSolanaRequest {
+            id: None,
             compute_units: config.compute_units,
             heap_size: config.heap_size,
             account_limit: config.account_limit,
