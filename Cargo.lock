@@ -4199,6 +4199,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mempool"
+version = "0.1.0"
+dependencies = [
+ "dashmap 6.0.1",
+ "futures-util",
+ "neon-api",
+ "neon-proxy-common",
+ "pyth-sdk-solana",
+ "solana-api",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "merlin"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5286,16 +5301,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap 4.5.4",
- "dashmap 6.0.1",
  "db",
  "executor",
  "futures-util",
  "hex-literal",
  "hyper 0.14.30",
  "jsonrpsee",
+ "mempool",
  "neon-api",
  "neon-proxy-common",
- "pyth-sdk-solana",
  "reth-primitives",
  "reth-rpc-api",
  "reth-rpc-types",
@@ -7014,7 +7028,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap 4.5.4",
- "dashmap 5.5.3",
+ "dashmap 6.0.1",
  "either",
  "futures-util",
  "neon-proxy-common",
