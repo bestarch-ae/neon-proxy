@@ -171,6 +171,7 @@ impl EventKind {
                 | EventKind::ExitReturn
                 | EventKind::ExitSelfDestruct
                 | EventKind::ExitRevert
+                | EventKind::ExitSendAll
         )
     }
 

@@ -587,4 +587,47 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn parse_sendall() {
+        let neon_pubkey = "53DfF883gyixYNXnM7s5xhdeyV8mVk9T4i2hGV9vG9io"
+            .parse()
+            .unwrap();
+        let data = vec![
+            "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+            "Program ComputeBudget111111111111111111111111111111 success",
+            "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+            "Program ComputeBudget111111111111111111111111111111 success",
+            "Program 53DfF883gyixYNXnM7s5xhdeyV8mVk9T4i2hGV9vG9io invoke [1]",
+            "Program log: Instruction: Execute Transaction from Instruction",
+            "Program data: SEFTSA== uUbuvQht98z9Pr61Na6qxGhiTvFrdKX1QaQ3fH1pxKs=",
+            "Program data: TUlORVI= 0bJ8NcR703OYrWq2QrG/Y67AykM=",
+            "Program data: RU5URVI= Q0FMTA== KqUiBbBGgZHiZ9Ko453IsleUvxs=",
+            "Program data: RU5URVI= Q0FMTA== 3S5cgOuo6jlJJrpWIG4DhbM9SIo=",
+            "Program data: TE9HMQ== 3S5cgOuo6jlJJrpWIG4DhbM9SIo= AQ== i/gpW7UI0W5DP50DuTzIZgh2wuVjjVwZRrgRjMiA+1E= /E3f5nloDmLsFKadGNdUkh9IcoFzXeJ2TH2B6Zhcnu4=",
+            "Program data: RU5URVI= Q0FMTA== u0gkH9KPzsANLnRFCWhWGkHnn2Q=",
+            "Program data: RVhJVA== U0VOREFMTA==",
+            "Program data: TE9HMQ== 3S5cgOuo6jlJJrpWIG4DhbM9SIo= AQ== i/gpW7UI0W5DP50DuTzIZgh2wuVjjVwZRrgRjMiA+1E= /E3f5nloDmLsFKadGNdUkh9IcoFzXeJ2TH2B6Zhcnu4=",
+            "Program data: RVhJVA== UkVWRVJU CMN5oAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABJNeSBleHBlY3RlZCByZXZlcnQAAAAAAAAAAAAAAAAAAA==",
+            "Program data: TE9HMQ== KqUiBbBGgZHiZ9Ko453IsleUvxs= AQ== i/gpW7UI0W5DP50DuTzIZgh2wuVjjVwZRrgRjMiA+1E= /E3f5nloDmLsFKadGNdUkh9IcoFzXeJ2TH2B6Zhcnu4=",
+            "Program data: RVhJVA== U1RPUA==",
+            "Program data: U1RFUFM= 2AIAAAAAAAA= 2AIAAAAAAAA=",
+            "Program 11111111111111111111111111111111 invoke [2]",
+            "Program 11111111111111111111111111111111 success",
+            "Program data: R0FT ECcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= ECcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "Program log: exit_status=0x11",
+            "Program data: UkVUVVJO EQ==",
+            "Program 53DfF883gyixYNXnM7s5xhdeyV8mVk9T4i2hGV9vG9io consumed 186134 of 1399700 compute units",
+            "Program 53DfF883gyixYNXnM7s5xhdeyV8mVk9T4i2hGV9vG9io success"
+          ];
+
+        let log_info = super::parse(data, neon_pubkey).unwrap();
+        println!("Parsed: got {:#?}", log_info);
+        let event_list = log_info.event_list;
+        let logs = event_list
+            .iter()
+            .filter(|ev| matches!(ev.event_type, common::types::EventKind::Log));
+        let visible = logs.filter(|log| !log.is_hidden && !log.is_reverted);
+        assert_eq!(visible.count(), 1);
+    }
 }
