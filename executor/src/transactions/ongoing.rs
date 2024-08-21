@@ -30,7 +30,6 @@ impl TxData {
 
 #[derive(Debug)]
 pub(super) enum TxStage {
-    Operational,
     HolderFill {
         info: HolderInfo,
         tx: ExecuteRequest,
@@ -47,8 +46,15 @@ pub(super) enum TxStage {
         alt: Option<AltInfo>,
         from_data: bool,
     },
-    SingleExecution {
+    DataExecution {
         tx_data: TxData,
+        chain_id: u64,
+        holder: Pubkey,
+        alt: Option<AltInfo>,
+    },
+    // Fields are for log purpose only
+    Final {
+        tx_data: Option<TxData>,
         #[allow(dead_code)]
         holder: Option<Pubkey>,
     },
@@ -91,16 +97,25 @@ impl TxStage {
         }
     }
 
-    pub fn execute_data(tx_data: TxData) -> Self {
-        Self::SingleExecution {
+    pub fn data(tx_data: TxData, chain_id: u64, holder: Pubkey, alt: Option<AltInfo>) -> Self {
+        Self::DataExecution {
             tx_data,
+            chain_id,
+            holder,
+            alt,
+        }
+    }
+
+    pub fn final_data(tx_data: TxData) -> Self {
+        Self::Final {
+            tx_data: Some(tx_data),
             holder: None,
         }
     }
 
-    pub fn execute_holder(holder: Pubkey, tx_data: TxData) -> Self {
-        Self::SingleExecution {
-            tx_data,
+    pub fn final_holder(holder: Pubkey, tx_data: TxData) -> Self {
+        Self::Final {
+            tx_data: Some(tx_data),
             holder: Some(holder),
         }
     }
@@ -136,7 +151,10 @@ impl TxStage {
     }
 
     pub fn operational() -> Self {
-        Self::Operational
+        Self::Final {
+            tx_data: None,
+            holder: None,
+        }
     }
 }
 
@@ -158,11 +176,15 @@ impl OngoingTransaction {
                 tx_data: TxData { envelope, .. },
                 ..
             }
-            | TxStage::SingleExecution {
+            | TxStage::DataExecution {
                 tx_data: TxData { envelope, .. },
                 ..
+            }
+            | TxStage::Final {
+                tx_data: Some(TxData { envelope, .. }),
+                ..
             } => Some(&envelope.tx),
-            TxStage::Operational => None,
+            TxStage::Final { tx_data: None, .. } => None,
         }
     }
 
@@ -178,13 +200,19 @@ impl OngoingTransaction {
                 },
                 ..
             }
-            | TxStage::HolderFill { ref tx, .. }
-            | TxStage::SingleExecution {
+            | TxStage::DataExecution {
                 tx_data: TxData {
                     envelope: ref tx, ..
                 },
                 ..
-            } => get_chain_id(&tx.tx),
+            }
+            | TxStage::Final {
+                tx_data: Some(TxData {
+                    envelope: ref tx, ..
+                }),
+                ..
+            }
+            | TxStage::HolderFill { ref tx, .. } => get_chain_id(&tx.tx),
             _ => None,
         }
     }

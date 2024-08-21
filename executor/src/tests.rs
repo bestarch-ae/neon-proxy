@@ -12,7 +12,7 @@ use alloy_signer_wallet::LocalWallet;
 use alloy_sol_types::SolConstructor;
 use alloy_sol_types::{sol, SolCall};
 use anyhow::{Context, Result};
-use jsonrpsee::core::async_trait;
+use async_trait::async_trait;
 use reth_primitives::{TxKind, U256};
 use serial_test::serial;
 use solana_client::nonblocking::rpc_client::RpcClient;
@@ -398,7 +398,7 @@ async fn transfer() -> Result<()> {
     executor.handle_transaction(req(tx)).await?;
 
     let txs = executor.join_current_transactions().await;
-    assert_eq!(txs.len(), 1);
+    assert_eq!(txs.len(), 2); // Create holder + Execute
 
     let balance = get_balances(&rpc, &[address1, address2]).await?;
     assert!(balance[0].balance < eth_to_wei(100));

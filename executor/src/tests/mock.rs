@@ -1,5 +1,5 @@
+use async_trait::async_trait;
 use base64::prelude::{Engine, BASE64_STANDARD as BASE64};
-use jsonrpsee::core::async_trait;
 use serde_json::Value;
 use solana_account_decoder::{UiAccount, UiAccountEncoding};
 use solana_client::client_error::Result as ClientResult;
@@ -11,7 +11,6 @@ use solana_client::rpc_response::{Response, RpcResponseContext, RpcSimulateTrans
 use solana_client::rpc_sender::{RpcSender, RpcTransportStats};
 use solana_program_test::BanksClient;
 use solana_sdk::commitment_config::CommitmentLevel;
-use solana_sdk::feature_set::disable_deploy_of_alloc_free_syscall;
 use solana_sdk::message::Message;
 use solana_sdk::packet::PACKET_DATA_SIZE;
 use solana_sdk::system_instruction;
