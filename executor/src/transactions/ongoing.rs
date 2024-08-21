@@ -10,18 +10,20 @@ use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Keypair;
 use common::solana_sdk::transaction::VersionedTransaction;
 
+use crate::ExecuteRequest;
+
 use super::alt::AltInfo;
 use super::emulator::{get_chain_id, IterInfo};
 use super::holder::HolderInfo;
 
 #[derive(Debug)]
 pub(super) struct TxData {
-    pub envelope: TxEnvelope,
+    pub envelope: ExecuteRequest,
     pub emulate: EmulateResponse,
 }
 
 impl TxData {
-    pub fn new(envelope: TxEnvelope, emulate: EmulateResponse) -> Self {
+    pub fn new(envelope: ExecuteRequest, emulate: EmulateResponse) -> Self {
         Self { envelope, emulate }
     }
 }
@@ -31,7 +33,7 @@ pub(super) enum TxStage {
     Operational,
     HolderFill {
         info: HolderInfo,
-        tx: TxEnvelope,
+        tx: ExecuteRequest,
     },
     AltFill {
         info: AltInfo,
@@ -53,16 +55,10 @@ pub(super) enum TxStage {
 }
 
 impl TxStage {
-    pub fn ongoing(
-        self,
-        ixs: &[Instruction],
-        payer: &Pubkey,
-        default_chain_id: u64,
-    ) -> OngoingTransaction {
+    pub fn ongoing(self, ixs: &[Instruction], payer: &Pubkey) -> OngoingTransaction {
         OngoingTransaction {
             stage: self,
             message: VersionedMessage::Legacy(message::legacy::Message::new(ixs, Some(payer))),
-            default_chain_id,
         }
     }
 
@@ -71,7 +67,6 @@ impl TxStage {
         ixs: &[Instruction],
         payer: &Pubkey,
         alt: AddressLookupTableAccount,
-        default_chain_id: u64,
     ) -> anyhow::Result<OngoingTransaction> {
         Ok(OngoingTransaction {
             stage: self,
@@ -81,11 +76,10 @@ impl TxStage {
                 &[alt],
                 Hash::default(),
             )?),
-            default_chain_id,
         })
     }
 
-    pub fn holder_fill(info: HolderInfo, tx: TxEnvelope) -> Self {
+    pub fn holder_fill(info: HolderInfo, tx: ExecuteRequest) -> Self {
         Self::HolderFill { info, tx }
     }
 
@@ -150,7 +144,6 @@ impl TxStage {
 pub struct OngoingTransaction {
     stage: TxStage,
     message: VersionedMessage,
-    pub default_chain_id: u64,
 }
 
 impl OngoingTransaction {
@@ -168,7 +161,7 @@ impl OngoingTransaction {
             | TxStage::SingleExecution {
                 tx_data: TxData { envelope, .. },
                 ..
-            } => Some(envelope),
+            } => Some(&envelope.tx),
             TxStage::Operational => None,
         }
     }
@@ -191,7 +184,7 @@ impl OngoingTransaction {
                     envelope: ref tx, ..
                 },
                 ..
-            } => get_chain_id(tx),
+            } => get_chain_id(&tx.tx),
             _ => None,
         }
     }

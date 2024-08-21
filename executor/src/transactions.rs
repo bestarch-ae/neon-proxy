@@ -6,7 +6,6 @@ mod ongoing;
 use std::mem;
 use std::sync::atomic::AtomicU8;
 
-use alloy_consensus::TxEnvelope;
 use alloy_eips::eip2718::Encodable2718;
 use alloy_rlp::Encodable;
 use anyhow::{bail, Context};
@@ -31,6 +30,8 @@ use common::solana_sdk::transaction::Transaction;
 use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
 
+use crate::ExecuteRequest;
+
 use self::alt::AltInfo;
 use self::emulator::{get_chain_id, Emulator, IterInfo};
 use self::holder::HolderInfo;
@@ -43,6 +44,7 @@ const CU_IX_SIZE: usize = compiled_ix_size(0, 5 /* serialized data length */);
 const MAX_HEAP_SIZE: u32 = 256 * 1024;
 const MAX_COMPUTE_UNITS: u32 = 1_400_000;
 
+#[derive(Debug)]
 pub struct TransactionBuilder {
     program_id: Pubkey,
 
@@ -164,17 +166,13 @@ impl TransactionBuilder {
             data,
         };
 
-        TxStage::operational().ongoing(&[ix], &self.operator.pubkey(), chain_id)
+        TxStage::operational().ongoing(&[ix], &self.operator.pubkey())
     }
 }
 
 /// ## Transaction flow.
 impl TransactionBuilder {
-    pub async fn start_execution(
-        &self,
-        tx: TxEnvelope,
-        default_chain_id: u64,
-    ) -> anyhow::Result<OngoingTransaction> {
+    pub async fn start_execution(&self, tx: ExecuteRequest) -> anyhow::Result<OngoingTransaction> {
         // 1. holder
         // 2. payer
         // 3. treasury-pool-address,
@@ -198,7 +196,7 @@ impl TransactionBuilder {
         if let Some(chain_id) = fits_in_solana_tx.then_some(chain_id).flatten() {
             self.start_data_execution(tx, chain_id).await
         } else {
-            self.start_holder_execution(tx, default_chain_id).await
+            self.start_holder_execution(tx).await
         }
     }
 
@@ -206,22 +204,20 @@ impl TransactionBuilder {
         &self,
         tx: OngoingTransaction,
     ) -> anyhow::Result<Option<OngoingTransaction>> {
-        let default_chain_id = tx.default_chain_id;
         let stage = tx.disassemble();
         match stage {
-            TxStage::HolderFill { info, tx: envelope } if info.is_empty() => self
-                .execute_from_holder(info, envelope, default_chain_id)
-                .await
-                .map(Some),
+            TxStage::HolderFill { info, tx: envelope } if info.is_empty() => {
+                self.execute_from_holder(info, envelope).await.map(Some)
+            }
             TxStage::HolderFill { info, tx: envelope } => {
-                Ok(Some(self.fill_holder(info, envelope, default_chain_id)))
+                Ok(Some(self.fill_holder(info, envelope)))
             }
             TxStage::AltFill {
                 info,
                 tx_data,
                 holder: Some(holder),
             } if info.is_empty() => self
-                .execute_from_holder_emulated(holder, tx_data, Some(info), default_chain_id)
+                .execute_from_holder_emulated(holder, tx_data, Some(info))
                 .await
                 .map(Some),
             TxStage::AltFill {
@@ -239,19 +235,14 @@ impl TransactionBuilder {
                 info,
                 tx_data,
                 holder,
-            } => self
-                .fill_alt(info, tx_data, holder, default_chain_id)
-                .map(Some),
+            } => self.fill_alt(info, tx_data, holder).map(Some),
             TxStage::IterativeExecution {
                 tx_data,
                 holder,
                 iter_info,
                 alt,
                 from_data,
-            } => {
-                self.step(iter_info, tx_data, holder, from_data, alt, default_chain_id)
-                    .await
-            }
+            } => self.step(iter_info, tx_data, holder, from_data, alt).await,
             // Single iteration stuff
             TxStage::SingleExecution { .. } | TxStage::Operational => Ok(None),
         }
@@ -268,7 +259,7 @@ impl TransactionBuilder {
     /// - or a `HolderCreate` that will resolve into `TransactionStepFromInstruction` on the next step.
     async fn start_data_execution(
         &self,
-        tx: TxEnvelope,
+        tx: ExecuteRequest,
         chain_id: u64,
     ) -> anyhow::Result<OngoingTransaction> {
         let emulate = self.emulator.emulate(&tx).await?;
@@ -284,7 +275,7 @@ impl TransactionBuilder {
             "start data execution"
         );
         if length_estimate > PACKET_DATA_SIZE {
-            self.start_from_alt(tx_data, None, chain_id).await
+            self.start_from_alt(tx_data, None).await
         } else {
             self.execute_from_data_emulated(tx_data, chain_id, None)
                 .await
@@ -297,10 +288,8 @@ impl TransactionBuilder {
         chain_id: u64,
         alt: Option<AltInfo>,
     ) -> anyhow::Result<OngoingTransaction> {
-        let fallback_iterative = |tx_data, alt| async move {
-            self.empty_holder_for_iterative_data(tx_data, alt, chain_id)
-                .await
-        };
+        let fallback_iterative =
+            |tx_data, alt| async move { self.empty_holder_for_iterative_data(tx_data, alt).await };
         if self.emulator.needs_iterative_execution(&tx_data.emulate) {
             tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), "fallback to iterative, resize iter count");
             return fallback_iterative(tx_data, alt).await;
@@ -338,7 +327,7 @@ impl TransactionBuilder {
             return fallback_iterative(tx_data, alt).await;
         }
 
-        self.build_ongoing(TxStage::execute_data(tx_data), &ixs, alt, chain_id)
+        self.build_ongoing(TxStage::execute_data(tx_data), &ixs, alt)
     }
 
     /// Creates empty holder account to be used during iterative execution.
@@ -347,16 +336,12 @@ impl TransactionBuilder {
         &self,
         tx_data: TxData,
         alt: Option<AltInfo>,
-        default_chain_id: u64,
     ) -> anyhow::Result<OngoingTransaction> {
         let holder = self.new_holder_info(None)?;
         let ixs = self.create_holder(&holder).await?;
         tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), ?holder, "creating new holder");
-        let tx = TxStage::step_data(*holder.pubkey(), tx_data, None, alt).ongoing(
-            &ixs,
-            &self.pubkey(),
-            default_chain_id,
-        );
+        let tx =
+            TxStage::step_data(*holder.pubkey(), tx_data, None, alt).ongoing(&ixs, &self.pubkey());
         Ok(tx)
     }
 
@@ -373,28 +358,22 @@ impl TransactionBuilder {
     /// transaction data on subsequent steps and eventually resolving into [`Self::execute_from_holder`].
     async fn start_holder_execution(
         &self,
-        tx: TxEnvelope,
-        default_chain_id: u64,
+        tx: ExecuteRequest,
     ) -> anyhow::Result<OngoingTransaction> {
-        let holder = self.new_holder_info(Some(&tx))?;
+        let holder = self.new_holder_info(Some(&tx.tx))?;
         let ixs = self.create_holder(&holder).await?;
         tracing::debug!(tx_hash = %tx.tx_hash(), ?holder, "start holder execution");
 
-        Ok(TxStage::holder_fill(holder, tx).ongoing(&ixs, &self.pubkey(), default_chain_id))
+        Ok(TxStage::holder_fill(holder, tx).ongoing(&ixs, &self.pubkey()))
     }
 
     /// Write next data chunk into holder account.
-    fn fill_holder(
-        &self,
-        info: HolderInfo,
-        tx: TxEnvelope,
-        default_chain_id: u64,
-    ) -> OngoingTransaction {
+    fn fill_holder(&self, info: HolderInfo, tx: ExecuteRequest) -> OngoingTransaction {
         let offset_before = info.offset();
         let mut info = info;
         let ix = self.write_next_holder_chunk(&mut info);
         tracing::debug!(tx_hash = %tx.tx_hash(), holder = ?info, offset_before, "next holder chunk");
-        TxStage::holder_fill(info, tx).ongoing(&[ix], &self.pubkey(), default_chain_id)
+        TxStage::holder_fill(info, tx).ongoing(&[ix], &self.pubkey())
     }
 
     /// Executes transaction from provided holder account.
@@ -406,8 +385,7 @@ impl TransactionBuilder {
     async fn execute_from_holder(
         &self,
         holder: HolderInfo,
-        tx: TxEnvelope,
-        default_chain_id: u64,
+        tx: ExecuteRequest,
     ) -> anyhow::Result<OngoingTransaction> {
         let emulate = self.emulator.emulate(&tx).await?;
         let tx_data = TxData::new(tx, emulate);
@@ -419,10 +397,9 @@ impl TransactionBuilder {
             "execute from written holder"
         );
         if length_estimate > PACKET_DATA_SIZE {
-            self.start_from_alt(tx_data, Some(holder), default_chain_id)
-                .await
+            self.start_from_alt(tx_data, Some(holder)).await
         } else {
-            self.execute_from_holder_emulated(holder, tx_data, None, default_chain_id)
+            self.execute_from_holder_emulated(holder, tx_data, None)
                 .await
         }
     }
@@ -432,12 +409,11 @@ impl TransactionBuilder {
         holder: HolderInfo,
         tx_data: TxData,
         alt: Option<AltInfo>,
-        default_chain_id: u64,
     ) -> anyhow::Result<OngoingTransaction> {
-        let chain_id = get_chain_id(&tx_data.envelope);
+        let chain_id = get_chain_id(&tx_data.envelope.tx);
 
         let fallback_to_iterative = |tx_data, holder, alt| async move {
-            self.step(None, tx_data, holder, false, alt, default_chain_id)
+            self.step(None, tx_data, holder, false, alt)
                 .await
                 .transpose()
                 .expect("must be some")
@@ -485,7 +461,7 @@ impl TransactionBuilder {
         }
 
         let stage = TxStage::execute_holder(*holder.pubkey(), tx_data);
-        self.build_ongoing(stage, &ixs, alt, default_chain_id)
+        self.build_ongoing(stage, &ixs, alt)
     }
 
     fn from_holder_tx_len(add_accounts_len: usize) -> usize {
@@ -506,9 +482,8 @@ impl TransactionBuilder {
         holder: Pubkey,
         from_data: bool,
         alt: Option<AltInfo>,
-        default_chain_id: u64,
     ) -> anyhow::Result<Option<OngoingTransaction>> {
-        let chain_id = get_chain_id(&tx_data.envelope);
+        let chain_id = get_chain_id(&tx_data.envelope.tx);
         let tx_hash = tx_data.envelope.tx_hash();
         let mut iter_info = match iter_info {
             Some(iter_info) if iter_info.is_finished() => {
@@ -520,14 +495,8 @@ impl TransactionBuilder {
                 let build_tx = |iter_info: &mut IterInfo| {
                     let mut txs = Vec::new();
                     while !iter_info.is_finished() {
-                        let ix = self.build_step(
-                            iter_info,
-                            &tx_data,
-                            holder,
-                            from_data,
-                            chain_id,
-                            default_chain_id,
-                        )?;
+                        let ix =
+                            self.build_step(iter_info, &tx_data, holder, from_data, chain_id)?;
                         txs.push(Transaction::new_with_payer(
                             &with_budget(ix, MAX_COMPUTE_UNITS),
                             Some(&self.pubkey()),
@@ -543,14 +512,7 @@ impl TransactionBuilder {
         };
 
         tracing::debug!(%tx_hash, ?iter_info, "new iteration");
-        let ix = self.build_step(
-            &mut iter_info,
-            &tx_data,
-            holder,
-            from_data,
-            chain_id,
-            default_chain_id,
-        )?;
+        let ix = self.build_step(&mut iter_info, &tx_data, holder, from_data, chain_id)?;
         let cu_limit = iter_info.cu_limit();
         let stage = match (from_data, chain_id) {
             (true, Some(_)) => TxStage::step_data(holder, tx_data, Some(iter_info), alt.clone()),
@@ -560,13 +522,8 @@ impl TransactionBuilder {
             (true, None) => unreachable!("would have failed earlier"),
         };
 
-        self.build_ongoing(
-            stage,
-            &with_budget(ix, cu_limit),
-            alt.clone(),
-            default_chain_id,
-        )
-        .map(Some)
+        self.build_ongoing(stage, &with_budget(ix, cu_limit), alt.clone())
+            .map(Some)
     }
 
     fn build_step(
@@ -576,13 +533,15 @@ impl TransactionBuilder {
         holder: Pubkey,
         from_data: bool,
         chain_id: Option<u64>,
-        default_chain_id: u64,
     ) -> anyhow::Result<Instruction> {
         let mut iter_info = iter_info;
         let (tag, chain_id) = match (from_data, chain_id) {
             (true, Some(chain_id)) => (tag::TX_STEP_FROM_DATA, chain_id),
             (false, Some(chain_id)) => (tag::TX_STEP_FROM_ACCOUNT, chain_id),
-            (false, None) => (tag::TX_STEP_FROM_ACCOUNT_NO_CHAINID, default_chain_id),
+            (false, None) => (
+                tag::TX_STEP_FROM_ACCOUNT_NO_CHAINID,
+                tx_data.envelope.fallback_chain_id,
+            ),
             (true, None) => bail!("missing chain_id in step from data: {tx_data:?}"),
         };
 
@@ -596,8 +555,8 @@ impl TransactionBuilder {
         )?;
 
         if from_data {
-            data.reserve(tx_data.envelope.encode_2718_len());
-            tx_data.envelope.encode_2718(&mut &mut data);
+            data.reserve(tx_data.envelope.tx.encode_2718_len());
+            tx_data.envelope.tx.encode_2718(&mut &mut data);
         }
 
         let ix = Instruction {
@@ -705,13 +664,10 @@ impl TransactionBuilder {
         stage: TxStage,
         ixs: &[Instruction],
         alt: Option<AltInfo>,
-        default_chain_id: u64,
     ) -> anyhow::Result<OngoingTransaction> {
         Ok(match alt {
-            Some(alt) => {
-                stage.ongoing_alt(ixs, &self.pubkey(), alt.into_account(), default_chain_id)?
-            }
-            None => stage.ongoing(ixs, &self.pubkey(), default_chain_id),
+            Some(alt) => stage.ongoing_alt(ixs, &self.pubkey(), alt.into_account())?,
+            None => stage.ongoing(ixs, &self.pubkey()),
         })
     }
 }

@@ -2662,6 +2662,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "executor"
+version = "0.1.0"
+dependencies = [
+ "alloy-consensus",
+ "alloy-eips",
+ "alloy-network",
+ "alloy-rlp",
+ "alloy-signer",
+ "alloy-signer-wallet",
+ "alloy-sol-types",
+ "anyhow",
+ "base64 0.21.7",
+ "bincode",
+ "bs58 0.5.1",
+ "clap 4.5.4",
+ "dashmap 6.0.1",
+ "hex",
+ "hex-literal",
+ "jsonrpsee",
+ "neon-api",
+ "neon-proxy-common",
+ "reth-primitives",
+ "rust_decimal",
+ "rust_decimal_macros",
+ "serde_json",
+ "serial_test",
+ "solana-account-decoder",
+ "solana-api",
+ "solana-client",
+ "solana-program-test",
+ "solana-sdk",
+ "spl-associated-token-account",
+ "spl-token",
+ "tarpc",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4184,6 +4223,8 @@ dependencies = [
  "evm-loader",
  "hex",
  "neon-lib",
+ "reth-primitives",
+ "reth-rpc-types",
  "solana-account-decoder",
  "solana-sdk",
  "solana-transaction-status",
@@ -5016,22 +5057,12 @@ dependencies = [
 name = "proxy"
 version = "0.1.0"
 dependencies = [
- "alloy-consensus",
- "alloy-eips",
- "alloy-network",
- "alloy-rlp",
- "alloy-signer",
- "alloy-signer-wallet",
- "alloy-sol-types",
  "anyhow",
- "base64 0.21.7",
- "bincode",
- "bs58 0.5.1",
  "clap 4.5.4",
  "dashmap 6.0.1",
  "db",
+ "executor",
  "futures-util",
- "hex",
  "hex-literal",
  "hyper",
  "jsonrpsee",
@@ -5044,16 +5075,8 @@ dependencies = [
  "rust_decimal",
  "rust_decimal_macros",
  "serde_json",
- "serial_test",
- "solana-account-decoder",
  "solana-api",
- "solana-client",
- "solana-program-test",
- "solana-sdk",
- "spl-associated-token-account",
- "spl-token",
  "sqlx",
- "tarpc",
  "thiserror",
  "tokio",
  "tower",

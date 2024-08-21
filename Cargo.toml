@@ -8,7 +8,8 @@ members = [
     "sol2neon",
     "solana-api",
     "proxy",
-    "neon-api"
+    "neon-api",
+    "executor"
 ]
 
 [workspace.dependencies]

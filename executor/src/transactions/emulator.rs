@@ -1,21 +1,19 @@
 use alloy_consensus::TxEnvelope;
 use anyhow::{anyhow, Context};
-use common::neon_lib::commands::simulate_solana::SimulateSolanaTransactionResult;
 use reth_primitives::B256;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
+use common::convert::ToNeon;
 use common::neon_lib::commands::emulate::EmulateResponse;
+use common::neon_lib::commands::simulate_solana::SimulateSolanaTransactionResult;
 use common::neon_lib::types::TxParams;
-use common::solana_sdk::instruction::Instruction;
-use common::solana_sdk::instruction::InstructionError;
+use common::solana_sdk::instruction::{Instruction, InstructionError};
 use common::solana_sdk::pubkey::Pubkey;
-use common::solana_sdk::transaction::Transaction;
-use common::solana_sdk::transaction::TransactionError;
+use common::solana_sdk::transaction::{Transaction, TransactionError};
 use neon_api::{NeonApi, SimulateConfig};
 
 use super::{MAX_COMPUTE_UNITS, MAX_HEAP_SIZE};
-use crate::convert::ToNeon;
 
 #[derive(Clone, Debug)]
 pub(super) struct IterInfo {
@@ -54,6 +52,7 @@ impl IterInfo {
     }
 }
 
+#[derive(Debug)]
 pub struct Emulator {
     neon_api: NeonApi,
     evm_steps_min: u64,

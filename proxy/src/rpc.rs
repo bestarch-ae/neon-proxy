@@ -1,43 +1,32 @@
 use std::sync::Arc;
 
-use alloy_consensus::TxEnvelope;
-use alloy_rlp::Decodable;
-use futures_util::StreamExt;
-use futures_util::TryStreamExt;
-use jsonrpsee::core::async_trait;
-use jsonrpsee::core::RpcResult;
+use futures_util::{StreamExt, TryStreamExt};
+use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::proc_macros::rpc;
-use jsonrpsee::types::ErrorCode;
-use jsonrpsee::types::ErrorObjectOwned;
-use reth_primitives::TxKind;
-use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, B256, B64, U256, U64};
+use jsonrpsee::types::{ErrorCode, ErrorObjectOwned};
+use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, TxKind, B256, B64, U256, U64};
 use rpc_api::servers::EthApiServer;
-use rpc_api::EthFilterApiServer;
-use rpc_api::NetApiServer;
+use rpc_api::{EthFilterApiServer, NetApiServer};
 use rpc_api_types::serde_helpers::JsonStorageKey;
-use rpc_api_types::Filter;
-use rpc_api_types::FilterBlockOption;
-use rpc_api_types::FilterChanges;
-use rpc_api_types::FilterId;
-use rpc_api_types::Log;
-use rpc_api_types::PeerCount;
-use rpc_api_types::PendingTransactionFilterKind;
-use rpc_api_types::{
-    state::StateOverride, AccessListWithGasUsed, AnyTransactionReceipt, BlockOverrides, Bundle,
-    EIP1186AccountProofResponse, EthCallResponse, FeeHistory, Header, Index, RichBlock,
-    StateContext, SyncStatus, Transaction, TransactionRequest, Work,
-};
+use rpc_api_types::state::StateOverride;
+use rpc_api_types::{AccessListWithGasUsed, EIP1186AccountProofResponse, EthCallResponse};
+use rpc_api_types::{AnyTransactionReceipt, Transaction, TransactionRequest};
+use rpc_api_types::{BlockOverrides, Header, RichBlock};
+use rpc_api_types::{Bundle, FeeHistory, Index, StateContext, SyncStatus, Work};
+use rpc_api_types::{Filter, FilterBlockOption, FilterChanges, FilterId};
+use rpc_api_types::{Log, PeerCount, PendingTransactionFilterKind};
 use sqlx::PgPool;
 
+use common::convert::{ToNeon, ToReth};
 use common::neon_lib::types::{BalanceAddress, TxParams};
 use common::types::NeonTxInfo;
 use db::WithBlockhash;
+use executor::{ExecuteRequest, Executor};
 use neon_api::NeonApi;
 
 use crate::convert::{build_block, neon_to_eth, neon_to_eth_receipt};
 use crate::convert::{convert_filters, convert_rich_log, LogFilters};
 use crate::convert::{NeonLog, NeonTransactionReceipt};
-use crate::executor::Executor;
 use crate::mempool;
 use crate::Error;
 
@@ -438,7 +427,6 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns the balance of the account of given address.
     async fn balance(&self, address: Address, block_number: Option<BlockId>) -> RpcResult<U256> {
-        use crate::convert::ToReth;
         use common::evm_loader::types::Address;
 
         let tag = if let Some(block_number) = block_number {
@@ -521,7 +509,6 @@ impl EthApiServer for EthApiImpl {
         _state_overrides: Option<StateOverride>,
         _block_overrides: Option<Box<BlockOverrides>>,
     ) -> RpcResult<Bytes> {
-        use crate::convert::ToNeon;
         tracing::info!("call {:?}", request);
 
         let tag = if let Some(block_number) = block_number {
@@ -596,7 +583,6 @@ impl EthApiServer for EthApiImpl {
         block_number: Option<BlockId>,
         _state_override: Option<StateOverride>,
     ) -> RpcResult<U256> {
-        use crate::convert::{ToNeon, ToReth};
         tracing::info!(?block_number, "estimate_gas {request:?}");
         let tx = TxParams {
             nonce: request.nonce,
@@ -707,14 +693,13 @@ impl EthApiServer for EthApiImpl {
     /// Sends signed transaction, returning its hash.
     async fn send_raw_transaction(&self, bytes: Bytes) -> RpcResult<B256> {
         if let Some(executor) = self.executor.as_ref() {
-            let bytes_ref: &mut &[u8] = &mut bytes.as_ref();
-            let envelope = TxEnvelope::decode(bytes_ref)
+            let envelope = ExecuteRequest::from_bytes(&bytes, self.chain_id)
                 .inspect_err(|error| tracing::warn!(%bytes, %error, "could not decode transaction"))
                 .map_err(|_| ErrorObjectOwned::from(ErrorCode::InvalidParams))?;
             let hash = *envelope.tx_hash();
             tracing::info!(tx_hash = %hash, %bytes, ?envelope, "sendRawTransaction");
             executor
-                .handle_transaction(envelope, self.chain_id)
+                .handle_transaction(envelope)
                 .await
                 .inspect_err(|error| tracing::warn!(%hash, %error, "could not handle transaction"))
                 .map_err(|err| {

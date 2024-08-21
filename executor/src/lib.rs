@@ -3,11 +3,13 @@ mod tests;
 mod transactions;
 
 use std::future::Future;
+use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use alloy_consensus::TxEnvelope;
+use alloy_rlp::Decodable;
 use alloy_signer_wallet::LocalWallet;
 use anyhow::Context;
 use clap::Args;
@@ -41,6 +43,36 @@ pub struct Config {
     pub init_operator_balance: bool,
 }
 
+#[derive(Debug)]
+pub struct ExecuteRequest {
+    pub(crate) tx: TxEnvelope,
+    pub(crate) fallback_chain_id: u64,
+}
+
+impl Deref for ExecuteRequest {
+    type Target = TxEnvelope;
+
+    fn deref(&self) -> &Self::Target {
+        &self.tx
+    }
+}
+
+impl ExecuteRequest {
+    pub fn new(tx: TxEnvelope, fallback_chain_id: u64) -> Self {
+        Self {
+            tx,
+            fallback_chain_id,
+        }
+    }
+
+    pub fn from_bytes(bytes: impl AsRef<[u8]>, fallback_chain_id: u64) -> alloy_rlp::Result<Self> {
+        let bytes_ref: &mut &[u8] = &mut bytes.as_ref();
+        let tx = TxEnvelope::decode(bytes_ref)?;
+        Ok(Self::new(tx, fallback_chain_id))
+    }
+}
+
+#[derive(Debug)]
 pub struct Executor {
     program_id: Pubkey,
     solana_api: SolanaApi,
@@ -125,18 +157,15 @@ impl Executor {
         Ok(this)
     }
 
-    pub async fn handle_transaction(
-        &self,
-        tx: TxEnvelope,
-        default_chain_id: u64,
-    ) -> anyhow::Result<Signature> {
-        let tx = self.builder.start_execution(tx, default_chain_id).await?;
+    pub async fn handle_transaction(&self, tx: ExecuteRequest) -> anyhow::Result<Signature> {
+        let fallback_chain_id = tx.fallback_chain_id;
+        let ongoing = self.builder.start_execution(tx).await?;
 
-        self.init_operator_balance(tx.chain_id().unwrap_or(default_chain_id))
+        self.init_operator_balance(ongoing.chain_id().unwrap_or(fallback_chain_id))
             .await
             .context("cannot init operator balance")?;
 
-        let signature = self.sign_and_send_transaction(tx).await?;
+        let signature = self.sign_and_send_transaction(ongoing).await?;
 
         Ok(signature)
     }
@@ -326,6 +355,7 @@ mod test_ext {
 
     use super::*;
 
+    #[derive(Debug)]
     pub struct TestExtension {
         pub notify: Notify,
         pub signatures: Mutex<Vec<Signature>>,

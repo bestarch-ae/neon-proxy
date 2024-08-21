@@ -37,7 +37,6 @@ impl TransactionBuilder {
         &self,
         tx_data: TxData,
         holder: Option<HolderInfo>,
-        chain_id: u64,
     ) -> anyhow::Result<OngoingTransaction> {
         let (ix, pubkey) = self.create_alt_ix().await?;
         let info = AltInfo {
@@ -52,7 +51,7 @@ impl TransactionBuilder {
         };
         tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), ?info, ?holder, "creating new ALT");
 
-        Ok(TxStage::alt_fill(info, tx_data, holder).ongoing(&[ix], &self.pubkey(), chain_id))
+        Ok(TxStage::alt_fill(info, tx_data, holder).ongoing(&[ix], &self.pubkey()))
     }
 
     pub(super) fn fill_alt(
@@ -60,17 +59,12 @@ impl TransactionBuilder {
         info: AltInfo,
         tx_data: TxData,
         holder: Option<HolderInfo>,
-        default_chain_id: u64,
     ) -> anyhow::Result<OngoingTransaction> {
         let idx_before = info.idx;
         let mut info = info;
         let ix = self.write_next_alt_chunk(&mut info)?;
         tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), ?info, idx_before, ?holder, "write next ALT chunk");
-        Ok(TxStage::alt_fill(info, tx_data, holder).ongoing(
-            &[ix],
-            &self.pubkey(),
-            default_chain_id,
-        ))
+        Ok(TxStage::alt_fill(info, tx_data, holder).ongoing(&[ix], &self.pubkey()))
     }
 
     async fn create_alt_ix(&self) -> anyhow::Result<(Instruction, Pubkey)> {
