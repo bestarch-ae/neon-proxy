@@ -478,11 +478,21 @@ impl EthApiServer for EthApiImpl {
     /// Returns the value from a storage position at a given address
     async fn storage_at(
         &self,
-        _address: Address,
-        _index: JsonStorageKey,
-        _block_number: Option<BlockId>,
+        address: Address,
+        index: JsonStorageKey,
+        block_number: Option<BlockId>,
     ) -> RpcResult<B256> {
-        unimplemented()
+        let slot = if let Some(block_number) = block_number {
+            Some(self.get_tag_by_block_id(block_number).await?)
+        } else {
+            None
+        };
+
+        let data = self
+            .neon_api
+            .get_storage_at(address.to_neon(), index.0.to_neon(), slot)
+            .await?;
+        Ok(B256::from(data))
     }
 
     /// Returns the number of transactions sent from an address at given block number.

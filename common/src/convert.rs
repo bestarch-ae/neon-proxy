@@ -9,7 +9,7 @@ pub trait ToNeon {
 
 #[cfg(feature = "reth")]
 mod reth {
-    use reth_primitives::{Address, U256};
+    use reth_primitives::{Address, B256, U256};
     use rpc_api_types::AccessListItem;
 
     use super::*;
@@ -19,6 +19,14 @@ mod reth {
 
         fn to_neon(self) -> Self::NeonType {
             ethnum::U256::from_le_bytes(self.to_le_bytes())
+        }
+    }
+
+    impl ToNeon for B256 {
+        type NeonType = ethnum::U256;
+
+        fn to_neon(self) -> Self::NeonType {
+            ethnum::U256::from_ne_bytes(self.0)
         }
     }
 
