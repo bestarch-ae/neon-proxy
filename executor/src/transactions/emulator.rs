@@ -52,7 +52,7 @@ impl IterInfo {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Emulator {
     neon_api: NeonApi,
     evm_steps_min: u64,
@@ -196,6 +196,10 @@ impl Emulator {
 
         tracing::warn!(%tx_hash, RETRIES, "fallback to default iterations");
         Ok(self.default_iter_info(emulate))
+    }
+
+    pub(super) fn set_evm_steps_min(&mut self, evm_steps_min: u64) {
+        self.evm_steps_min = evm_steps_min;
     }
 
     fn calculate_resize_iter_cnt(&self, emulate: &EmulateResponse) -> u64 {

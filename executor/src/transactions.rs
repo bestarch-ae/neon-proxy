@@ -5,6 +5,7 @@ mod ongoing;
 
 use std::mem;
 use std::sync::atomic::AtomicU8;
+use std::sync::Arc;
 
 use alloy_eips::eip2718::Encodable2718;
 use alloy_rlp::Encodable;
@@ -50,6 +51,7 @@ pub struct TransactionBuilder {
     program_id: Pubkey,
 
     solana_api: SolanaApi,
+    neon_api: NeonApi,
 
     operator: Keypair,
     operator_address: Address,
@@ -58,7 +60,7 @@ pub struct TransactionBuilder {
     treasury_pool_seed: Vec<u8>,
 
     emulator: Emulator,
-    holder_counter: AtomicU8,
+    holder_counter: Arc<AtomicU8>,
 
     chains: Vec<ChainInfo>,
     version: Version,
@@ -75,7 +77,41 @@ impl TransactionBuilder {
         operator: Keypair,
         address: Address,
     ) -> anyhow::Result<Self> {
-        let config = neon_api.get_config().await?;
+        let emulator = Emulator::new(neon_api.clone(), 0, operator.pubkey());
+        let mut this = Self {
+            program_id,
+            solana_api,
+            neon_api,
+            operator,
+            operator_address: address,
+            treasury_pool_count: 0,
+            treasury_pool_seed: Vec::new(),
+            emulator,
+            holder_counter: Arc::new(AtomicU8::new(0)),
+            chains: Vec::new(),
+            version: Self::DEFAULT_NEON_EVM_VERSION,
+        };
+        this.reload_config().await?;
+
+        Ok(this)
+    }
+
+    pub async fn try_reload_clone(&self) -> anyhow::Result<Self> {
+        let mut new = Self::new(
+            self.program_id,
+            self.solana_api.clone(),
+            self.neon_api.clone(),
+            self.operator.insecure_clone(),
+            self.operator_address,
+        )
+        .await?;
+        // FIXME: Will be fixed by a separate Holder manager
+        new.holder_counter = self.holder_counter.clone();
+        Ok(new)
+    }
+
+    pub async fn reload_config(&mut self) -> anyhow::Result<()> {
+        let config = self.neon_api.get_config().await?;
 
         let treasury_pool_count: u32 = config
             .config
@@ -101,21 +137,15 @@ impl TransactionBuilder {
             );
             Self::DEFAULT_NEON_EVM_VERSION
         });
+        println!("setting new version: {version}");
 
-        let emulator = Emulator::new(neon_api, evm_steps_min, operator.pubkey());
+        self.treasury_pool_count = treasury_pool_count;
+        self.treasury_pool_seed = treasury_pool_seed;
+        self.version = version;
+        self.emulator.set_evm_steps_min(evm_steps_min);
+        self.chains = config.chains;
 
-        Ok(Self {
-            program_id,
-            solana_api,
-            operator,
-            operator_address: address,
-            treasury_pool_count,
-            treasury_pool_seed,
-            emulator,
-            holder_counter: AtomicU8::new(0),
-            chains: config.chains,
-            version,
-        })
+        Ok(())
     }
 
     pub fn keypair(&self) -> &Keypair {

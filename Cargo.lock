@@ -596,6 +596,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arc-swap"
+version = "1.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69f7f8c3906b62b754cd5326047894316021dcfe5a194c8ea52bdd94934a3457"
+
+[[package]]
 name = "ark-bn254"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2738,6 +2744,7 @@ dependencies = [
  "alloy-sol-types",
  "anyhow",
  "async-trait",
+ "arc-swap",
  "base64 0.21.7",
  "bincode",
  "bs58 0.5.1",

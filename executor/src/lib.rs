@@ -12,9 +12,9 @@ use alloy_consensus::TxEnvelope;
 use alloy_rlp::Decodable;
 use alloy_signer_wallet::LocalWallet;
 use anyhow::Context;
+use arc_swap::ArcSwap;
 use clap::Args;
 use dashmap::DashMap;
-use solana_api::solana_api::SolanaApi;
 use tokio::sync::Notify;
 use tokio::time::sleep;
 
@@ -25,6 +25,7 @@ use common::solana_sdk::signer::Signer;
 use common::solana_sdk::transaction::TransactionError;
 use common::solana_transaction_status::TransactionStatus;
 use neon_api::NeonApi;
+use solana_api::solana_api::SolanaApi;
 
 use self::transactions::{OngoingTransaction, TransactionBuilder};
 
@@ -77,7 +78,7 @@ pub struct Executor {
     program_id: Pubkey,
     solana_api: SolanaApi,
 
-    builder: TransactionBuilder,
+    builder: ArcSwap<TransactionBuilder>,
     pending_transactions: DashMap<Signature, OngoingTransaction>,
     notify: Notify,
 
@@ -135,6 +136,7 @@ impl Executor {
             operator_addr,
         )
         .await?;
+        let builder = ArcSwap::from_pointee(builder);
 
         let this = Self {
             program_id: neon_pubkey,
@@ -148,7 +150,7 @@ impl Executor {
         };
 
         if init_balances {
-            for chain in this.builder.chains() {
+            for chain in this.builder.load().chains() {
                 tracing::info!(name = chain.name, id = chain.id, "initializing balance");
                 this.init_operator_balance(chain.id).await?;
             }
@@ -157,9 +159,15 @@ impl Executor {
         Ok(this)
     }
 
+    pub async fn reload_config(&self) -> anyhow::Result<()> {
+        let new_builder = self.builder.load().try_reload_clone().await?;
+        self.builder.store(new_builder.into());
+        Ok(())
+    }
+
     pub async fn handle_transaction(&self, tx: ExecuteRequest) -> anyhow::Result<Signature> {
         let fallback_chain_id = tx.fallback_chain_id;
-        let ongoing = self.builder.start_execution(tx).await?;
+        let ongoing = self.builder.load().start_execution(tx).await?;
 
         self.init_operator_balance(ongoing.chain_id().unwrap_or(fallback_chain_id))
             .await
@@ -181,7 +189,7 @@ impl Executor {
             .context("could not request blockhash")?; // TODO: force confirmed
 
         // This will replace bh and clear signatures in case it's a retry
-        let sol_tx = tx.sign(&[self.builder.keypair()], blockhash)?;
+        let sol_tx = tx.sign(&[self.builder.load().keypair()], blockhash)?;
 
         let signature = self
             .solana_api
@@ -295,7 +303,7 @@ impl Executor {
         tracing::info!(?tx_hash, %signature, slot, "transaction was confirmed");
 
         // TODO: follow up transactions
-        match self.builder.next_step(tx).await {
+        match self.builder.load().next_step(tx).await {
             Err(err) => {
                 tracing::error!(?tx_hash, %signature, %err, "failed executing next transaction step")
             }
@@ -323,7 +331,7 @@ impl Executor {
     }
 
     async fn init_operator_balance(&self, chain_id: u64) -> anyhow::Result<Option<Signature>> {
-        let addr = self.builder.operator_balance(chain_id);
+        let addr = self.builder.load().operator_balance(chain_id);
         if let Some(acc) = self
             .solana_api
             .get_account(&addr)
@@ -337,7 +345,7 @@ impl Executor {
         }
 
         tracing::info!(chain_id, "initializing operator balance");
-        let tx = self.builder.init_operator_balance(chain_id);
+        let tx = self.builder.load().init_operator_balance(chain_id);
         let signature = self.sign_and_send_transaction(tx).await?;
 
         Ok(Some(signature))
