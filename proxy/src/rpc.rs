@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use anyhow::Context;
 use futures_util::{StreamExt, TryStreamExt};
 use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::proc_macros::rpc;
@@ -14,7 +15,8 @@ use rpc_api_types::{AnyTransactionReceipt, Transaction, TransactionRequest};
 use rpc_api_types::{BlockOverrides, Header, RichBlock};
 use rpc_api_types::{Bundle, FeeHistory, Index, StateContext, SyncStatus, Work};
 use rpc_api_types::{Filter, FilterBlockOption, FilterChanges, FilterId};
-use rpc_api_types::{Log, PeerCount, PendingTransactionFilterKind};
+use rpc_api_types::{Log, PeerCount, PendingTransactionFilterKind, SyncInfo};
+
 use sqlx::PgPool;
 
 use common::convert::{ToNeon, ToReth};
@@ -239,7 +241,13 @@ impl NetApiServer for EthApiImpl {
     }
 
     fn peer_count(&self) -> RpcResult<PeerCount> {
-        unimplemented()
+        let neon_api = self.neon_api.clone();
+        let peer_count = tokio::task::block_in_place(move || {
+            tokio::runtime::Handle::current()
+                .block_on(async move { neon_api.get_cluster_size().await })
+        })? as u64;
+
+        Ok(PeerCount::Hex(U64::from(peer_count)))
     }
 
     fn is_listening(&self) -> RpcResult<bool> {
@@ -256,7 +264,28 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns an object with data about the sync status or false.
     fn syncing(&self) -> RpcResult<SyncStatus> {
-        unimplemented()
+        let neon_api = self.neon_api.clone();
+        let status: Result<_, Error> = tokio::task::block_in_place(move || {
+            tokio::runtime::Handle::current().block_on(async move {
+                let earliest_slot = self.blocks.earliest_slot().await.context("earliest")?;
+                let latest_slot = self.blocks.latest_number(false).await.context("latest")?;
+                neon_api
+                    .get_health()
+                    .await
+                    .with_context(|| "failed to get health")?;
+                Ok(SyncStatus::Info(SyncInfo {
+                    starting_block: U256::from(earliest_slot),
+                    current_block: U256::from(latest_slot),
+                    highest_block: U256::from(latest_slot),
+                    warp_chunks_amount: None,
+                    warp_chunks_processed: None,
+                }))
+            })
+        });
+        match status {
+            Ok(healthy) => Ok(healthy),
+            Err(_err) => Ok(SyncStatus::None),
+        }
     }
 
     /// Returns the client coinbase address.
