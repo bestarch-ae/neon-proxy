@@ -155,6 +155,10 @@ enum TaskCommand {
         address: Address,
         index: U256,
     },
+    GetCode {
+        response: oneshot::Sender<Result<Option<Bytes>, NeonApiError>>,
+        address: Address,
+    },
 }
 
 struct Context {
@@ -330,6 +334,26 @@ impl NeonApi {
                     response: tx,
                     address: addr,
                     index,
+                },
+                tag,
+                None,
+            ))
+            .await
+            .unwrap();
+        rx.await.unwrap()
+    }
+
+    pub async fn get_code(
+        &self,
+        addr: Address,
+        tag: Option<BlockNumberOrTag>,
+    ) -> Result<Option<Bytes>, NeonApiError> {
+        let (tx, rx) = oneshot::channel();
+        self.channel
+            .send(Task::new(
+                TaskCommand::GetCode {
+                    response: tx,
+                    address: addr,
                 },
                 tag,
                 None,
@@ -682,7 +706,7 @@ impl NeonApi {
                 index,
             } => {
                 let resp = commands::get_storage_at::execute(
-                    &ctx.default_rpc,
+                    &ctx.rpc_client_simulation,
                     &ctx.neon_pubkey,
                     address,
                     index,
@@ -690,6 +714,21 @@ impl NeonApi {
                 .await;
                 let _ = response.send(
                     resp.map(|r| r.0)
+                        .map_err(NeonError::from)
+                        .map_err(Into::into),
+                );
+            }
+
+            TaskCommand::GetCode { response, address } => {
+                let resp = commands::get_contract::execute(
+                    &ctx.rpc_client_simulation,
+                    &ctx.neon_pubkey,
+                    &[address],
+                )
+                .await;
+                let resp = resp.map(|r| r.into_iter().next().map(|r| r.code));
+                let _ = response.send(
+                    resp.map(|code| code.map(Bytes::from))
                         .map_err(NeonError::from)
                         .map_err(Into::into),
                 );

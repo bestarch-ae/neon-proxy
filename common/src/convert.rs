@@ -26,7 +26,7 @@ mod reth {
         type NeonType = ethnum::U256;
 
         fn to_neon(self) -> Self::NeonType {
-            ethnum::U256::from_ne_bytes(self.0)
+            ethnum::U256::from_be_bytes(self.0)
         }
     }
 

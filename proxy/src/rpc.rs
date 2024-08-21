@@ -522,12 +522,15 @@ impl EthApiServer for EthApiImpl {
     }
 
     /// Returns code at a given address at given block number.
-    async fn get_code(
-        &self,
-        _address: Address,
-        _block_number: Option<BlockId>,
-    ) -> RpcResult<Bytes> {
-        unimplemented()
+    async fn get_code(&self, address: Address, block_number: Option<BlockId>) -> RpcResult<Bytes> {
+        let slot = if let Some(block_number) = block_number {
+            Some(self.get_tag_by_block_id(block_number).await?)
+        } else {
+            None
+        };
+
+        let bytes = self.neon_api.get_code(address.to_neon(), slot).await?;
+        Ok(bytes.unwrap_or_default())
     }
 
     /// Returns the block's header at given number.
