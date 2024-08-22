@@ -339,16 +339,26 @@ impl EthApiServer for EthApiImpl {
     }
 
     /// Returns the number of transactions in a block from a block matching the given block hash.
-    async fn block_transaction_count_by_hash(&self, _hash: B256) -> RpcResult<Option<U256>> {
-        unimplemented()
+    async fn block_transaction_count_by_hash(&self, hash: B256) -> RpcResult<Option<U256>> {
+        use common::solana_sdk::hash::Hash;
+
+        let hash = Hash::new_from_array(hash.0);
+        self.get_block(db::BlockBy::Hash(hash), false, false)
+            .await
+            .map(|block| block.map(|block| U256::from(block.transactions.len())))
+            .map_err(Into::into)
     }
 
     /// Returns the number of transactions in a block matching the given block number.
     async fn block_transaction_count_by_number(
         &self,
-        _number: BlockNumberOrTag,
+        number: BlockNumberOrTag,
     ) -> RpcResult<Option<U256>> {
-        unimplemented()
+        let slot = self.find_slot(number).await?;
+        self.get_block(db::BlockBy::Slot(slot), false, number.is_pending())
+            .await
+            .map(|block| block.map(|block| U256::from(block.transactions.len())))
+            .map_err(Into::into)
     }
 
     /// Returns the number of uncles in a block from a block matching the given block hash.
