@@ -372,7 +372,7 @@ impl TransactionRepo {
         Ok(())
     }
 
-    fn fetch_with_events(
+    pub fn fetch_with_events(
         &self,
         by: TransactionBy,
     ) -> impl Stream<Item = Result<WithBlockhash<NeonTxInfo>, Error>> + '_ {
