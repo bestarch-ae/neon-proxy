@@ -22,10 +22,10 @@ reth-primitives = { workspace = true, optional = true }
 
 [dependencies.evm-loader]
 git = "https://github.com/neonlabsorg/neon-evm.git"
-rev = "v1.14.0"
+rev = "v1.15.1"
 default-features = false
 features = ["async-trait", "no-entrypoint", "log"]
 
 [dependencies.neon-lib]
 git = "https://github.com/neonlabsorg/neon-evm.git"
-rev = "v1.14.0"
+rev = "v1.15.1"

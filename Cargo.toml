@@ -21,13 +21,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "json"] }
 
 # Solana deps
-solana-account-decoder = "1.17.34"
-solana-client = "1.17.34"
-solana-program-test = "1.17.34"
-solana-rpc-client = "1.17.34"
-solana-rpc-client-api = "1.17.34"
-solana-sdk = "1.17.34"
-solana-transaction-status = "1.17.34"
+solana-account-decoder = "1.18"
+solana-client = "1.18"
+solana-program-test = "1.18"
+solana-rpc-client = "1.18"
+solana-rpc-client-api = "1.18"
+solana-sdk = "1.18"
+solana-transaction-status = "1.18"
 spl-token = "4.0.0"
 spl-associated-token-account = "2.3.0"
 

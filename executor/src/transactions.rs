@@ -5,17 +5,19 @@ mod ongoing;
 
 use std::mem;
 use std::sync::atomic::AtomicU8;
+use std::sync::Arc;
 
 use alloy_eips::eip2718::Encodable2718;
 use alloy_rlp::Encodable;
 use anyhow::{bail, Context};
-use common::neon_lib::commands::get_config::ChainInfo;
 use reth_primitives::B256;
+use semver::Version;
 
 use common::ethnum::U256;
 use common::evm_loader::config::ACCOUNT_SEED_VERSION;
 use common::neon_instruction::tag;
 use common::neon_lib::commands::emulate::SolanaAccount as NeonSolanaAccount;
+use common::neon_lib::commands::get_config::ChainInfo;
 use common::neon_lib::types::Address;
 use common::solana_sdk::compute_budget::ComputeBudgetInstruction;
 use common::solana_sdk::hash::HASH_BYTES;
@@ -49,6 +51,7 @@ pub struct TransactionBuilder {
     program_id: Pubkey,
 
     solana_api: SolanaApi,
+    neon_api: NeonApi,
 
     operator: Keypair,
     operator_address: Address,
@@ -57,13 +60,16 @@ pub struct TransactionBuilder {
     treasury_pool_seed: Vec<u8>,
 
     emulator: Emulator,
-    holder_counter: AtomicU8,
+    holder_counter: Arc<AtomicU8>,
 
     chains: Vec<ChainInfo>,
+    version: Version,
 }
 
 /// ## Utility methods.
 impl TransactionBuilder {
+    const DEFAULT_NEON_EVM_VERSION: Version = Version::new(1, 14, 0);
+
     pub async fn new(
         program_id: Pubkey,
         solana_api: SolanaApi,
@@ -71,7 +77,41 @@ impl TransactionBuilder {
         operator: Keypair,
         address: Address,
     ) -> anyhow::Result<Self> {
-        let config = neon_api.get_config().await?;
+        let emulator = Emulator::new(neon_api.clone(), 0, operator.pubkey());
+        let mut this = Self {
+            program_id,
+            solana_api,
+            neon_api,
+            operator,
+            operator_address: address,
+            treasury_pool_count: 0,
+            treasury_pool_seed: Vec::new(),
+            emulator,
+            holder_counter: Arc::new(AtomicU8::new(0)),
+            chains: Vec::new(),
+            version: Self::DEFAULT_NEON_EVM_VERSION,
+        };
+        this.reload_config().await?;
+
+        Ok(this)
+    }
+
+    pub async fn try_reload_clone(&self) -> anyhow::Result<Self> {
+        let mut new = Self::new(
+            self.program_id,
+            self.solana_api.clone(),
+            self.neon_api.clone(),
+            self.operator.insecure_clone(),
+            self.operator_address,
+        )
+        .await?;
+        // FIXME: Will be fixed by a separate Holder manager
+        new.holder_counter = self.holder_counter.clone();
+        Ok(new)
+    }
+
+    pub async fn reload_config(&mut self) -> anyhow::Result<()> {
+        let config = self.neon_api.get_config().await?;
 
         let treasury_pool_count: u32 = config
             .config
@@ -90,19 +130,22 @@ impl TransactionBuilder {
             .context("missing NEON_EVM_STEPS_MIN in config")?
             .parse()?;
 
-        let emulator = Emulator::new(neon_api, evm_steps_min, operator.pubkey());
+        let version: Version = config.version.parse().unwrap_or_else(|error| {
+            tracing::error!(
+                %error, version = config.version, default = %Self::DEFAULT_NEON_EVM_VERSION,
+                "error parsing version in config, fallback to default"
+            );
+            Self::DEFAULT_NEON_EVM_VERSION
+        });
+        println!("setting new version: {version}");
 
-        Ok(Self {
-            program_id,
-            solana_api,
-            operator,
-            operator_address: address,
-            treasury_pool_count,
-            treasury_pool_seed,
-            emulator,
-            holder_counter: AtomicU8::new(0),
-            chains: config.chains,
-        })
+        self.treasury_pool_count = treasury_pool_count;
+        self.treasury_pool_seed = treasury_pool_seed;
+        self.version = version;
+        self.emulator.set_evm_steps_min(evm_steps_min);
+        self.chains = config.chains;
+
+        Ok(())
     }
 
     pub fn keypair(&self) -> &Keypair {
@@ -227,7 +270,7 @@ impl TransactionBuilder {
             } if info.is_empty() => {
                 let chain_id = get_chain_id(&tx_data.envelope)
                     .context("empty chain id in emulated from_data alt transaction")?;
-                self.execute_from_data_emulated(tx_data, chain_id, Some(info))
+                self.dispatch_data_execution_by_version(tx_data, chain_id, Some(info))
                     .await
                     .map(Some)
             }
@@ -243,8 +286,16 @@ impl TransactionBuilder {
                 alt,
                 from_data,
             } => self.step(iter_info, tx_data, holder, from_data, alt).await,
-            // Single iteration stuff
-            TxStage::SingleExecution { .. } | TxStage::Operational => Ok(None),
+            TxStage::DataExecution {
+                tx_data,
+                chain_id,
+                holder,
+                alt,
+            } => self
+                .execute_from_data(tx_data, holder, chain_id, alt)
+                .await
+                .map(Some),
+            TxStage::Final { .. } => Ok(None),
         }
     }
 }
@@ -277,19 +328,95 @@ impl TransactionBuilder {
         if length_estimate > PACKET_DATA_SIZE {
             self.start_from_alt(tx_data, None).await
         } else {
-            self.execute_from_data_emulated(tx_data, chain_id, None)
+            self.dispatch_data_execution_by_version(tx_data, chain_id, None)
                 .await
         }
     }
 
-    async fn execute_from_data_emulated(
+    async fn dispatch_data_execution_by_version(
         &self,
         tx_data: TxData,
         chain_id: u64,
         alt: Option<AltInfo>,
     ) -> anyhow::Result<OngoingTransaction> {
-        let fallback_iterative =
-            |tx_data, alt| async move { self.empty_holder_for_iterative_data(tx_data, alt).await };
+        // NOTE: Use the last version with the old behaviour to support pre release version.
+        // (e.g. 1.0.0-dev < 1.0.0)
+        const BREAKPOINT: Version = Version::new(1, 14, u64::MAX);
+
+        if self.version > BREAKPOINT {
+            self.empty_holder_for_data(tx_data, chain_id, alt, false)
+                .await
+        } else {
+            #[allow(deprecated)]
+            self.execute_from_data_deprecated(tx_data, chain_id, alt)
+                .await
+        }
+    }
+
+    async fn execute_from_data(
+        &self,
+        tx_data: TxData,
+        holder: Pubkey,
+        chain_id: u64,
+        alt: Option<AltInfo>,
+    ) -> anyhow::Result<OngoingTransaction> {
+        let fallback_iterative = |tx_data, alt| async move {
+            self.step(None, tx_data, holder, true, alt)
+                .await
+                .transpose()
+                .expect("must be some")
+        };
+        if self.emulator.needs_iterative_execution(&tx_data.emulate) {
+            tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), "fallback to iterative, resize iter count");
+            return fallback_iterative(tx_data, alt).await;
+        }
+        let tag = if tx_data.emulate.external_solana_call {
+            tag::TX_EXEC_FROM_DATA_SOLANA_CALL
+        } else {
+            tag::TX_EXEC_FROM_DATA
+        };
+
+        let (accounts, mut data) = self.execute_base(
+            tag,
+            tx_data.envelope.tx_hash(),
+            chain_id,
+            &tx_data.emulate.solana_accounts,
+            Some(holder),
+            None,
+        )?;
+
+        data.reserve(tx_data.envelope.encode_2718_len());
+        tx_data.envelope.encode_2718(&mut &mut data);
+
+        let ix = Instruction {
+            program_id: self.program_id,
+            accounts,
+            data,
+        };
+        let ixs = with_budget(ix, MAX_COMPUTE_UNITS);
+        if !self
+            .emulator
+            .check_single_execution(tx_data.envelope.tx_hash(), &ixs)
+            .await?
+        {
+            tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), "fallback to iterative, failed single execution simulation");
+            return fallback_iterative(tx_data, alt).await;
+        }
+
+        self.build_ongoing(TxStage::final_data(tx_data), &ixs, alt)
+    }
+
+    #[deprecated = "pre 1.15 behaviour"]
+    async fn execute_from_data_deprecated(
+        &self,
+        tx_data: TxData,
+        chain_id: u64,
+        alt: Option<AltInfo>,
+    ) -> anyhow::Result<OngoingTransaction> {
+        let fallback_iterative = |tx_data, alt| async move {
+            self.empty_holder_for_data(tx_data, chain_id, alt, true)
+                .await
+        };
         if self.emulator.needs_iterative_execution(&tx_data.emulate) {
             tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), "fallback to iterative, resize iter count");
             return fallback_iterative(tx_data, alt).await;
@@ -327,21 +454,26 @@ impl TransactionBuilder {
             return fallback_iterative(tx_data, alt).await;
         }
 
-        self.build_ongoing(TxStage::execute_data(tx_data), &ixs, alt)
+        self.build_ongoing(TxStage::final_data(tx_data), &ixs, alt)
     }
 
-    /// Creates empty holder account to be used during iterative execution.
+    /// Creates empty holder account to be used during execution from data.
     /// Only used in [`Self::start_data_execution`] until proper holder managing implemented.
-    async fn empty_holder_for_iterative_data(
+    async fn empty_holder_for_data(
         &self,
         tx_data: TxData,
+        chain_id: u64,
         alt: Option<AltInfo>,
+        force_iterative: bool, // Used for deprecated behaviour
     ) -> anyhow::Result<OngoingTransaction> {
         let holder = self.new_holder_info(None)?;
         let ixs = self.create_holder(&holder).await?;
         tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), ?holder, "creating new holder");
-        let tx =
-            TxStage::step_data(*holder.pubkey(), tx_data, None, alt).ongoing(&ixs, &self.pubkey());
+        let tx = if force_iterative {
+            TxStage::step_data(*holder.pubkey(), tx_data, None, alt).ongoing(&ixs, &self.pubkey())
+        } else {
+            TxStage::data(tx_data, chain_id, *holder.pubkey(), alt).ongoing(&ixs, &self.pubkey())
+        };
         Ok(tx)
     }
 
@@ -460,7 +592,7 @@ impl TransactionBuilder {
             return fallback_to_iterative(tx_data, *holder.pubkey(), alt).await;
         }
 
-        let stage = TxStage::execute_holder(*holder.pubkey(), tx_data);
+        let stage = TxStage::final_holder(*holder.pubkey(), tx_data);
         self.build_ongoing(stage, &ixs, alt)
     }
 

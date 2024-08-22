@@ -12,11 +12,11 @@ use alloy_signer_wallet::LocalWallet;
 use alloy_sol_types::SolConstructor;
 use alloy_sol_types::{sol, SolCall};
 use anyhow::{Context, Result};
-use jsonrpsee::core::async_trait;
+use async_trait::async_trait;
 use reth_primitives::{TxKind, U256};
 use serial_test::serial;
 use solana_client::nonblocking::rpc_client::RpcClient;
-use solana_program_test::{ProgramTest, ProgramTestContext};
+use solana_program_test::{find_file, read_file, ProgramTest, ProgramTestContext};
 
 use common::convert::ToReth;
 use common::ethnum::U256 as NeonU256;
@@ -29,9 +29,7 @@ use common::neon_lib::rpc::{CloneRpcClient, Rpc};
 use common::neon_lib::types::{Address, BalanceAddress};
 use common::neon_lib::{commands, Config as NeonLibConfig};
 use common::solana_sdk::account::Account;
-use common::solana_sdk::account::AccountSharedData;
 use common::solana_sdk::account_info::AccountInfo;
-use common::solana_sdk::bpf_loader_upgradeable::UpgradeableLoaderState;
 use common::solana_sdk::instruction::{AccountMeta, Instruction};
 use common::solana_sdk::program_pack::Pack;
 use common::solana_sdk::pubkey;
@@ -44,7 +42,6 @@ use common::solana_sdk::transaction::Transaction;
 use common::solana_sdk::{bpf_loader_upgradeable, system_instruction, system_program};
 use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
-use solana_sdk::account::ReadableAccount;
 
 use crate::ExecuteRequest;
 
@@ -91,6 +88,10 @@ trait ContextExt {
 
     #[allow(dead_code)] // could be useful l8r
     async fn confirm_transaction(&mut self, signature: &Signature) -> Result<()>;
+
+    async fn add_program(&mut self, name: &str, pubkey: Pubkey) -> Result<()>;
+
+    async fn sub_payer_balance(&mut self, amount: u64) -> Result<()>;
 }
 
 #[async_trait]
@@ -116,6 +117,50 @@ impl ContextExt for ProgramTestContext {
                 };
             }
         }
+    }
+
+    async fn add_program(&mut self, name: &str, pubkey: Pubkey) -> Result<()> {
+        use bpf_loader_upgradeable::UpgradeableLoaderState;
+        let code_file = find_file(name).context("cannot find old evm_loader")?;
+        let mut data = read_file(code_file);
+
+        let rent = self.banks_client.get_rent().await?;
+        let (data_key, _) =
+            Pubkey::find_program_address(&[pubkey.as_ref()], &bpf_loader_upgradeable::id());
+        let acc_data = UpgradeableLoaderState::Program {
+            programdata_address: data_key,
+        };
+        let balance = rent.minimum_balance(UpgradeableLoaderState::size_of_program());
+        self.sub_payer_balance(balance).await?;
+
+        let mut account = Account::new_data(balance, &acc_data, &bpf_loader_upgradeable::id())?;
+        account.executable = true;
+        self.set_account(&pubkey, &account.into());
+        let acc_data = UpgradeableLoaderState::ProgramData {
+            slot: 0,
+            upgrade_authority_address: Some(self.payer.pubkey()),
+        };
+        if data.len() < 5 * 1024 * 1024 {
+            data.resize(5 * 1024 * 1024, 0);
+        }
+        let balance = rent.minimum_balance(UpgradeableLoaderState::size_of_programdata(data.len()));
+        self.sub_payer_balance(balance).await?;
+        let mut account = Account::new_data(balance, &acc_data, &bpf_loader_upgradeable::id())?;
+        account.data.extend(data);
+        self.set_account(&data_key, &account.into());
+
+        Ok(())
+    }
+
+    async fn sub_payer_balance(&mut self, amount: u64) -> Result<()> {
+        let mut acc = self
+            .banks_client
+            .get_account(self.payer.pubkey())
+            .await?
+            .context("no payer account")?;
+        acc.lamports -= amount;
+        self.set_account(&self.payer.pubkey(), &acc.into());
+        Ok(())
     }
 }
 
@@ -176,24 +221,6 @@ async fn init_neon(ctx: &mut ProgramTestContext) -> anyhow::Result<()> {
     let main_balance_address = MainTreasury::address(&NEON_KEY).0;
     let program_data_address =
         Pubkey::find_program_address(&[NEON_KEY.as_ref()], &bpf_loader_upgradeable::id()).0;
-
-    // HACK: program test does not use upgradeable loader.
-    let state = UpgradeableLoaderState::ProgramData {
-        slot: 0,
-        upgrade_authority_address: Some(ctx.payer.pubkey()),
-    };
-    let data = bincode::serialize(&state)?;
-    let lamports = rent.minimum_balance(data.len());
-    let acc_data = AccountSharedData::new_data(lamports, &state, &bpf_loader_upgradeable::id())?;
-    ctx.set_account(&program_data_address, &acc_data);
-
-    let mut acc = ctx
-        .banks_client
-        .get_account(ctx.payer.pubkey())
-        .await?
-        .expect("must exist");
-    acc.lamports -= lamports;
-    ctx.set_account(&ctx.payer.pubkey(), &acc.to_account_shared_data());
 
     let accounts = vec![
         AccountMeta::new(main_balance_address, false),
@@ -300,14 +327,24 @@ struct ExecutorTestEnvironment {
 
 impl ExecutorTestEnvironment {
     async fn start() -> Result<Self> {
+        Self::start_with_program("evm_loader.so").await
+    }
+
+    async fn start_with_program(path: &str) -> Result<Self> {
         let mut ctx = ProgramTest::default();
-        // let _ = tracing_log::LogTracer::init();
 
         ctx.prefer_bpf(true);
-        ctx.add_program("evm_loader", NEON_KEY, None);
 
         let mut ctx = ctx.start_with_context().await;
+        ctx.add_program(path, NEON_KEY).await?;
         init_neon(&mut ctx).await?;
+
+        // let acc = Account {
+        //     owner: system_program::id(),
+        //     ..Default::default()
+        // };
+        // ctx.set_account(&FST_HOLDER_KEY, &acc.into());
+
         let payer = ctx.payer.insecure_clone();
 
         let banks_client = ctx.banks_client.clone();
@@ -375,13 +412,44 @@ async fn transfer() -> Result<()> {
         ..
     } = ExecutorTestEnvironment::start().await?;
 
-    let address1 = kp1.address();
     let kp2 = Wallet::new();
     let address2 = kp2.address();
 
     // Transfer
-    let balance = get_balances(&rpc, &[address1, address2]).await?;
-    assert_eq!(balance[0].balance, eth_to_wei(1_000));
+    do_transfer(&executor, &rpc, &kp1, address2, 900, 2).await
+}
+
+#[tokio::test]
+#[serial]
+async fn transfer_deprecated() -> Result<()> {
+    let ExecutorTestEnvironment {
+        rpc,
+        test_kp: kp1,
+        executor,
+        ..
+    } = ExecutorTestEnvironment::start_with_program("evm_loader-1.14.5.so").await?;
+
+    let kp2 = Wallet::new();
+    let address2 = kp2.address();
+
+    // Transfer
+    do_transfer(&executor, &rpc, &kp1, address2, 900, 1).await
+}
+
+async fn do_transfer(
+    executor: &Executor,
+    rpc: &CloneRpcClient,
+    from: &Wallet,
+    to: Address,
+    amount: u64,
+    expected_txs: usize,
+) -> Result<()> {
+    let address1 = from.address();
+    let address2 = to;
+
+    // Transfer
+    let balance = get_balances(rpc, &[address1, address2]).await?;
+    let init_balance = balance[0].balance;
     assert_eq!(balance[1].balance, eth_to_wei(0));
 
     let mut tx = TxLegacy {
@@ -389,20 +457,20 @@ async fn transfer() -> Result<()> {
         gas_price: 2,
         gas_limit: 2_000_000,
         to: TxKind::Call(address2.0.into()),
-        value: eth_to_wei(900).to_reth(),
+        value: eth_to_wei(amount).to_reth(),
         input: Default::default(),
         chain_id: Some(CHAIN_ID),
     };
-    let signature = kp1.eth.sign_transaction_sync(&mut tx)?;
+    let signature = from.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
     executor.handle_transaction(req(tx)).await?;
 
     let txs = executor.join_current_transactions().await;
-    assert_eq!(txs.len(), 1);
+    assert_eq!(txs.len(), expected_txs);
 
-    let balance = get_balances(&rpc, &[address1, address2]).await?;
-    assert!(balance[0].balance < eth_to_wei(100));
-    assert_eq!(balance[1].balance, eth_to_wei(900));
+    let balance = get_balances(rpc, &[address1, address2]).await?;
+    assert!(balance[0].balance < init_balance - eth_to_wei(amount));
+    assert_eq!(balance[1].balance, eth_to_wei(amount));
 
     Ok(())
 }
@@ -626,6 +694,73 @@ async fn sol_call() -> anyhow::Result<()> {
         .await?
         .context("missing contract account")?;
     code.verify(contract_pubkey, account);
+
+    Ok(())
+}
+
+// NOTE: Neon program gets cached and setting a new code account does not affect the runtime cache.
+//     : `warp_to_slot` currently leads to inresponsive runtime and panics in BanksClient requests.
+#[tokio::test]
+#[ignore]
+async fn reload_config() -> Result<()> {
+    let ExecutorTestEnvironment {
+        rpc,
+        test_kp: kp1,
+        executor,
+        test_ctx: mut ctx,
+        ..
+    } = ExecutorTestEnvironment::start().await?;
+
+    let payer = ctx.payer.insecure_clone();
+    let kp2 = Wallet::new();
+    let address2 = kp2.address();
+
+    // Transfer
+    do_transfer(&executor, &rpc, &kp1, address2, 900, 2).await?;
+
+    let code_file = find_file("evm_loader-1.14.5.so").context("cannot find old evm_loader")?;
+    let data = read_file(code_file);
+
+    // Update program
+    let buffer = Keypair::new();
+    let ixs = bpf_loader_upgradeable::create_buffer(
+        &payer.pubkey(),
+        &buffer.pubkey(),
+        &payer.pubkey(),
+        ctx.banks_client.get_rent().await?.minimum_balance(
+            bpf_loader_upgradeable::UpgradeableLoaderState::size_of_buffer(data.len()),
+        ),
+        data.len(),
+    )?;
+    ctx.send_instructions(&ixs, &[&payer, &buffer]).await?;
+
+    const CHUNK_SIZE: usize = 1024;
+    for (idx, chunk) in data.chunks(CHUNK_SIZE).enumerate() {
+        let ix = bpf_loader_upgradeable::write(
+            &buffer.pubkey(),
+            &payer.pubkey(),
+            (idx * CHUNK_SIZE) as u32,
+            chunk.to_vec(),
+        );
+        ctx.send_instructions(&[ix], &[&payer]).await?;
+    }
+
+    let ix = bpf_loader_upgradeable::upgrade(
+        &NEON_KEY,
+        &buffer.pubkey(),
+        &payer.pubkey(),
+        &payer.pubkey(),
+    );
+    ctx.send_instructions(&[ix], &[&payer]).await?;
+    ctx.warp_to_slot(2)?;
+
+    executor.reload_config().await?;
+
+    let kp3 = Wallet::new();
+    let address3 = kp3.address();
+
+    // Transfer
+    do_transfer(&executor, &rpc, &kp2, address3, 800, 1).await?;
 
     Ok(())
 }

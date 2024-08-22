@@ -1,5 +1,5 @@
+use async_trait::async_trait;
 use base64::prelude::{Engine, BASE64_STANDARD as BASE64};
-use jsonrpsee::core::async_trait;
 use serde_json::Value;
 use solana_account_decoder::{UiAccount, UiAccountEncoding};
 use solana_client::client_error::Result as ClientResult;
@@ -263,6 +263,7 @@ impl RpcSender for BanksRpcMock {
                     accounts: None,
                     units_consumed,
                     return_data: return_data.flatten().map(Into::into),
+                    inner_instructions: None,
                 };
                 serde_json::to_value(self.with_context(commitment, result).await)?
             }
