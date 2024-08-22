@@ -419,10 +419,18 @@ impl EthApiServer for EthApiImpl {
     /// Returns information about a transaction by block hash and transaction index position.
     async fn transaction_by_block_hash_and_index(
         &self,
-        _hash: B256,
-        _index: Index,
+        hash: B256,
+        index: Index,
     ) -> RpcResult<Option<Transaction>> {
-        unimplemented()
+        let tx = self
+            .get_transaction(db::TransactionBy::BlockHashAndIndex(
+                hash.0.into(),
+                usize::from(index) as u64,
+            ))
+            .await?
+            .map(|tx| neon_to_eth(tx.inner, tx.blockhash).map_err(Error::from))
+            .transpose()?;
+        Ok(tx)
     }
 
     /// Returns information about a raw transaction by block number and transaction index
@@ -438,10 +446,22 @@ impl EthApiServer for EthApiImpl {
     /// Returns information about a transaction by block number and transaction index position.
     async fn transaction_by_block_number_and_index(
         &self,
-        _number: BlockNumberOrTag,
-        _index: Index,
+        number: BlockNumberOrTag,
+        index: Index,
     ) -> RpcResult<Option<Transaction>> {
-        unimplemented()
+        let number = match number {
+            BlockNumberOrTag::Number(num) => num,
+            _ => return Err(ErrorObjectOwned::from(ErrorCode::InvalidParams)),
+        };
+        let tx = self
+            .get_transaction(db::TransactionBy::BlockNumberAndIndex(
+                number,
+                usize::from(index) as u64,
+            ))
+            .await?
+            .map(|tx| neon_to_eth(tx.inner, tx.blockhash).map_err(Error::from))
+            .transpose()?;
+        Ok(tx)
     }
 
     /// Returns the receipt of a transaction by transaction hash.
