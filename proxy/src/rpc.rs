@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Context;
-use common::neon_lib::commands::emulate::{EmulateResponse, SolanaAccount};
 use futures_util::{StreamExt, TryStreamExt};
 use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::proc_macros::rpc;
@@ -24,6 +23,8 @@ use serde_with::{serde_as, DisplayFromStr};
 use sqlx::PgPool;
 
 use common::convert::{ToNeon, ToReth};
+use common::neon_lib::commands::emulate::{EmulateResponse, SolanaAccount};
+use common::neon_lib::commands::get_balance::BalanceStatus;
 use common::neon_lib::types::{BalanceAddress, SerializedAccount, TxParams};
 use common::solana_sdk::pubkey::Pubkey;
 use common::types::NeonTxInfo;
@@ -216,6 +217,17 @@ impl From<EmulateResponse> for NeonEmulateResponse {
     }
 }
 
+#[derive(Serialize, Debug, Clone)]
+pub struct NeonAccountResponse {
+    status: BalanceStatus,
+    address: Address,
+    transaction_count: U256,
+    balance: U256,
+    chain_d: U64,
+    solana_address: Pubkey,
+    contract_solana_address: Pubkey,
+}
+
 #[rpc(server, namespace = "neon")]
 trait NeonCustomApi {
     #[method(name = "proxyVersion", aliases = ["neon_proxy_version"])]
@@ -237,6 +249,12 @@ trait NeonCustomApi {
         neon_call: Option<NeonCall>,
         tag: Option<BlockNumberOrTag>,
     ) -> RpcResult<NeonEmulateResponse>;
+    #[method(name = "getAccount")]
+    async fn get_account(
+        &self,
+        address: Address,
+        block_number: Option<BlockId>,
+    ) -> RpcResult<NeonAccountResponse>;
 }
 
 #[rpc(server, namespace = "eth")]
@@ -300,6 +318,40 @@ impl NeonCustomApiServer for EthApiImpl {
 
         let resp = self.neon_api.emulate_raw(params).await?;
         Ok(resp.into())
+    }
+
+    async fn get_account(
+        &self,
+        address: Address,
+        block_number: Option<BlockId>,
+    ) -> RpcResult<NeonAccountResponse> {
+        let slot = if let Some(block_number) = block_number {
+            Some(self.get_tag_by_block_id(block_number).await?)
+        } else {
+            None
+        };
+        let balance_address = BalanceAddress {
+            address: address.to_neon(),
+            chain_id: self.chain_id,
+        };
+
+        let account = self
+            .neon_api
+            .get_neon_account(balance_address, slot)
+            .await?;
+        let account = account
+            .first()
+            .ok_or::<ErrorObjectOwned>(ErrorCode::InternalError.into())?;
+        let resp = NeonAccountResponse {
+            status: account.status,
+            address,
+            transaction_count: U256::from(account.trx_count),
+            balance: account.balance.to_reth(),
+            chain_d: U64::from(self.chain_id),
+            solana_address: account.solana_address,
+            contract_solana_address: account.contract_solana_address,
+        };
+        Ok(resp)
     }
 }
 
