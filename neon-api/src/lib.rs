@@ -14,6 +14,7 @@ use tokio::task::LocalSet;
 use tracing::{error, warn};
 
 use common::ethnum::U256;
+use common::evm_loader::types::Address;
 use common::neon_lib::commands::emulate::EmulateResponse;
 use common::neon_lib::commands::get_config::GetConfigResponse;
 use common::neon_lib::commands::simulate_solana::{
@@ -149,6 +150,15 @@ enum TaskCommand {
     GetSolanaVersion(oneshot::Sender<Result<RpcVersionInfo, NeonApiError>>),
     GetClusterSize(oneshot::Sender<Result<usize, NeonApiError>>),
     GetHealth(oneshot::Sender<Result<(), NeonApiError>>),
+    GetStorageAt {
+        response: oneshot::Sender<Result<[u8; 32], NeonApiError>>,
+        address: Address,
+        index: U256,
+    },
+    GetCode {
+        response: oneshot::Sender<Result<Option<Bytes>, NeonApiError>>,
+        address: Address,
+    },
 }
 
 struct Context {
@@ -306,6 +316,48 @@ impl NeonApi {
         let (tx, rx) = oneshot::channel();
         self.channel
             .send(Task::new(TaskCommand::GetSolanaVersion(tx), None, None))
+            .await
+            .unwrap();
+        rx.await.unwrap()
+    }
+
+    pub async fn get_storage_at(
+        &self,
+        addr: Address,
+        index: U256,
+        tag: Option<BlockNumberOrTag>,
+    ) -> Result<[u8; 32], NeonApiError> {
+        let (tx, rx) = oneshot::channel();
+        self.channel
+            .send(Task::new(
+                TaskCommand::GetStorageAt {
+                    response: tx,
+                    address: addr,
+                    index,
+                },
+                tag,
+                None,
+            ))
+            .await
+            .unwrap();
+        rx.await.unwrap()
+    }
+
+    pub async fn get_code(
+        &self,
+        addr: Address,
+        tag: Option<BlockNumberOrTag>,
+    ) -> Result<Option<Bytes>, NeonApiError> {
+        let (tx, rx) = oneshot::channel();
+        self.channel
+            .send(Task::new(
+                TaskCommand::GetCode {
+                    response: tx,
+                    address: addr,
+                },
+                tag,
+                None,
+            ))
             .await
             .unwrap();
         rx.await.unwrap()
@@ -633,6 +685,7 @@ impl NeonApi {
                 let resp = ctx.rpc_client_finalized.get_version().await;
                 let _ = response.send(resp.map_err(NeonError::from).map_err(Into::into));
             }
+
             TaskCommand::GetClusterSize(response) => {
                 let resp = ctx.rpc_client_finalized.get_cluster_nodes().await;
                 let resp = resp
@@ -641,9 +694,44 @@ impl NeonApi {
                     .map_err(Into::into);
                 let _ = response.send(resp);
             }
+
             TaskCommand::GetHealth(response) => {
                 let resp = ctx.rpc_client_finalized.get_health().await;
                 let _ = response.send(resp.map_err(NeonError::from).map_err(Into::into));
+            }
+
+            TaskCommand::GetStorageAt {
+                response,
+                address,
+                index,
+            } => {
+                let resp = commands::get_storage_at::execute(
+                    &ctx.rpc_client_simulation,
+                    &ctx.neon_pubkey,
+                    address,
+                    index,
+                )
+                .await;
+                let _ = response.send(
+                    resp.map(|r| r.0)
+                        .map_err(NeonError::from)
+                        .map_err(Into::into),
+                );
+            }
+
+            TaskCommand::GetCode { response, address } => {
+                let resp = commands::get_contract::execute(
+                    &ctx.rpc_client_simulation,
+                    &ctx.neon_pubkey,
+                    &[address],
+                )
+                .await;
+                let resp = resp.map(|r| r.into_iter().next().map(|r| r.code));
+                let _ = response.send(
+                    resp.map(|code| code.map(Bytes::from))
+                        .map_err(NeonError::from)
+                        .map_err(Into::into),
+                );
             }
         }
     }
