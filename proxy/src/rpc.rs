@@ -459,10 +459,7 @@ impl EthApiServer for EthApiImpl {
         number: BlockNumberOrTag,
         index: Index,
     ) -> RpcResult<Option<Transaction>> {
-        let number = match number {
-            BlockNumberOrTag::Number(num) => num,
-            _ => return Err(ErrorObjectOwned::from(ErrorCode::InvalidParams)),
-        };
+        let number = self.find_slot(number).await?;
         let tx = self
             .get_transaction(db::TransactionBy::BlockNumberAndIndex(
                 number,
