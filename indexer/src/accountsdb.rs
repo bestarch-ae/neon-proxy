@@ -204,7 +204,7 @@ impl TransactionsDb for DummyTdb {
         // of the transaction.
         if let Some(tx) = tokio::task::block_in_place(move || {
             let res = Handle::current().block_on(async move {
-                let mut stream = db.fetch_without_events(db::TransactionBy::Hash(tx_hash));
+                let mut stream = db.fetch_with_events(db::TransactionBy::Hash(tx_hash));
                 stream.next().await
             });
             match res {

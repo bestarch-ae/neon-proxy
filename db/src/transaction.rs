@@ -113,13 +113,39 @@ fn from_to_256() {
 pub enum TransactionBy {
     Hash(TxHash),
     Slot(u64),
+    BlockNumberAndIndex(u64, u64),
+    BlockHashAndIndex(Hash, u64),
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct TransactionByParams {
+    slot: Option<u64>,
+    tx_hash: Option<TxHash>,
+    tx_idx: Option<u64>,
+    block_hash: Option<Hash>,
 }
 
 impl TransactionBy {
-    pub fn slot_hash(self) -> (Option<u64>, Option<TxHash>) {
+    fn params(self) -> TransactionByParams {
         match self {
-            TransactionBy::Hash(hash) => (None, Some(hash)),
-            TransactionBy::Slot(slot) => (Some(slot), None),
+            TransactionBy::Hash(hash) => TransactionByParams {
+                tx_hash: Some(hash),
+                ..Default::default()
+            },
+            TransactionBy::Slot(slot) => TransactionByParams {
+                slot: Some(slot),
+                ..Default::default()
+            },
+            TransactionBy::BlockNumberAndIndex(slot, idx) => TransactionByParams {
+                slot: Some(slot),
+                tx_idx: Some(idx),
+                ..Default::default()
+            },
+            TransactionBy::BlockHashAndIndex(hash, idx) => TransactionByParams {
+                block_hash: Some(hash),
+                tx_idx: Some(idx),
+                ..Default::default()
+            },
         }
     }
 }
@@ -346,44 +372,16 @@ impl TransactionRepo {
         Ok(())
     }
 
-    pub fn fetch_without_events(
+    pub fn fetch_with_events(
         &self,
         by: TransactionBy,
     ) -> impl Stream<Item = Result<WithBlockhash<NeonTxInfo>, Error>> + '_ {
-        let (slot, hash) = by.slot_hash();
-        sqlx::query_as!(
-            NeonTransactionRow,
-            r#"SELECT
-                 neon_sig as "neon_sig!", tx_type as "tx_type!", from_addr as "from_addr!: PgAddress",
-                 sol_sig as "sol_sig!", sol_ix_idx as "sol_ix_idx!",
-                 sol_ix_inner_idx as "sol_ix_inner_idx!", T.block_slot as "block_slot!",
-                 tx_idx as "tx_idx!", nonce as "nonce!", gas_price as "gas_price!",
-                 gas_limit as "gas_limit!", value as "value!", gas_used as "gas_used!",
-                 sum_gas_used as "sum_gas_used!", to_addr as "to_addr?: PgAddress", contract as "contract?: PgAddress",
-                 status "status!", is_canceled as "is_canceled!", is_completed as "is_completed!",
-                 v "v!", r as "r!", s as "s!", chain_id,
-                 calldata as "calldata!", neon_step_cnt as "neon_step_cnt!",
-                 B.block_hash as "block_hash!: PgSolanaBlockHash"
-               FROM neon_transactions T
-               LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
-               WHERE (neon_sig = $1 OR $2) AND (T.block_slot = $3 OR $4)
-               ORDER BY (T.block_slot, tx_idx) ASC
-           "#,
-            hash.as_ref().map(|x| x.as_slice()).unwrap_or_default(),
-            hash.is_none(),
-            slot.unwrap_or(0) as i64,
-            slot.is_none(),
-        )
-        .map(|row| row.neon_tx_info_with_empty_logs())
-        .fetch(&self.pool)
-        .map(|res| Ok(res??))
-    }
-
-    fn fetch_with_events(
-        &self,
-        by: TransactionBy,
-    ) -> impl Stream<Item = Result<WithBlockhash<NeonTxInfo>, Error>> + '_ {
-        let (slot, hash) = by.slot_hash();
+        let TransactionByParams {
+            slot,
+            tx_hash,
+            block_hash,
+            tx_idx,
+        } = by.params();
         sqlx::query_as::<_, NeonTransactionRowWithLogs>(
             r#"SELECT * FROM
                    (WITH tx_block_slot AS
@@ -421,14 +419,22 @@ impl TransactionRepo {
                         ) L ON L.tx_hash = T.neon_sig AND T.is_canceled = FALSE
                     LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
                     WHERE NOT COALESCE(L.is_reverted, FALSE)) TL
-                    WHERE (TL.is_completed OR TL.is_canceled) AND TL.neon_sig = $1 OR ($2 AND block_slot = $3)
+                    WHERE
+                        (TL.is_completed OR TL.is_canceled) AND
+                        TL.neon_sig = $1 OR ($2 AND block_slot = $3) AND
+                        (TL.tx_idx = $5 OR $6) AND
+                        (TL.block_hash = $7 OR $8)
                     ORDER BY TL.block_slot,TL.tx_idx,tx_log_idx
            "#,
         )
-        .bind(hash.map(|hash| *hash.as_array()).unwrap_or_default())
-        .bind(hash.is_none())
-        .bind(slot.unwrap_or(0) as i64)
-        .bind(slot.is_none())
+        .bind(tx_hash.map(|hash| *hash.as_array()).unwrap_or_default()) // 1
+        .bind(tx_hash.is_none()) // 2
+        .bind(slot.unwrap_or(0) as i64) // 3
+        .bind(slot.is_none()) // 4
+        .bind(tx_idx.unwrap_or(0) as i64) // 5
+        .bind(tx_idx.is_none()) // 6
+        .bind(block_hash.map(PgSolanaBlockHash::from).unwrap_or_default()) // 7
+        .bind(block_hash.is_none()) // 8
         .fetch(&self.pool)
         .map(move |row| row.map(|row: NeonTransactionRowWithLogs| row.with_logs()))
         .map(move |res| Ok(res??))

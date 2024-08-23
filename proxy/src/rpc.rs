@@ -338,16 +338,26 @@ impl EthApiServer for EthApiImpl {
     }
 
     /// Returns the number of transactions in a block from a block matching the given block hash.
-    async fn block_transaction_count_by_hash(&self, _hash: B256) -> RpcResult<Option<U256>> {
-        unimplemented()
+    async fn block_transaction_count_by_hash(&self, hash: B256) -> RpcResult<Option<U256>> {
+        use common::solana_sdk::hash::Hash;
+
+        let hash = Hash::new_from_array(hash.0);
+        self.get_block(db::BlockBy::Hash(hash), false, false)
+            .await
+            .map(|block| block.map(|block| U256::from(block.transactions.len())))
+            .map_err(Into::into)
     }
 
     /// Returns the number of transactions in a block matching the given block number.
     async fn block_transaction_count_by_number(
         &self,
-        _number: BlockNumberOrTag,
+        number: BlockNumberOrTag,
     ) -> RpcResult<Option<U256>> {
-        unimplemented()
+        let slot = self.find_slot(number).await?;
+        self.get_block(db::BlockBy::Slot(slot), false, number.is_pending())
+            .await
+            .map(|block| block.map(|block| U256::from(block.transactions.len())))
+            .map_err(Into::into)
     }
 
     /// Returns the number of uncles in a block from a block matching the given block hash.
@@ -418,10 +428,18 @@ impl EthApiServer for EthApiImpl {
     /// Returns information about a transaction by block hash and transaction index position.
     async fn transaction_by_block_hash_and_index(
         &self,
-        _hash: B256,
-        _index: Index,
+        hash: B256,
+        index: Index,
     ) -> RpcResult<Option<Transaction>> {
-        unimplemented()
+        let tx = self
+            .get_transaction(db::TransactionBy::BlockHashAndIndex(
+                hash.0.into(),
+                usize::from(index) as u64,
+            ))
+            .await?
+            .map(|tx| neon_to_eth(tx.inner, tx.blockhash).map_err(Error::from))
+            .transpose()?;
+        Ok(tx)
     }
 
     /// Returns information about a raw transaction by block number and transaction index
@@ -437,10 +455,19 @@ impl EthApiServer for EthApiImpl {
     /// Returns information about a transaction by block number and transaction index position.
     async fn transaction_by_block_number_and_index(
         &self,
-        _number: BlockNumberOrTag,
-        _index: Index,
+        number: BlockNumberOrTag,
+        index: Index,
     ) -> RpcResult<Option<Transaction>> {
-        unimplemented()
+        let number = self.find_slot(number).await?;
+        let tx = self
+            .get_transaction(db::TransactionBy::BlockNumberAndIndex(
+                number,
+                usize::from(index) as u64,
+            ))
+            .await?
+            .map(|tx| neon_to_eth(tx.inner, tx.blockhash).map_err(Error::from))
+            .transpose()?;
+        Ok(tx)
     }
 
     /// Returns the receipt of a transaction by transaction hash.
