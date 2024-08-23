@@ -7,7 +7,7 @@ use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::types::{ErrorCode, ErrorObjectOwned};
 use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, TxKind, B256, B64, U256, U64};
 use rpc_api::servers::EthApiServer;
-use rpc_api::{EthFilterApiServer, NetApiServer};
+use rpc_api::{EthFilterApiServer, NetApiServer, Web3ApiServer};
 use rpc_api_types::serde_helpers::JsonStorageKey;
 use rpc_api_types::state::StateOverride;
 use rpc_api_types::{AccessListWithGasUsed, EIP1186AccountProofResponse, EthCallResponse};
@@ -251,6 +251,19 @@ impl NetApiServer for EthApiImpl {
 
     fn is_listening(&self) -> RpcResult<bool> {
         Ok(false)
+    }
+}
+
+#[async_trait]
+impl Web3ApiServer for EthApiImpl {
+    async fn client_version(&self) -> RpcResult<String> {
+        self.evm_version().await
+    }
+
+    fn sha3(&self, data: Bytes) -> RpcResult<B256> {
+        use common::solana_sdk::keccak::Hash;
+        let Hash(hash) = Hash::new(&data);
+        Ok(B256::from(hash))
     }
 }
 

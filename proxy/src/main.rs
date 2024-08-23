@@ -12,7 +12,7 @@ use hyper::service::{make_service_fn, service_fn};
 use jsonrpsee::server::Server;
 use jsonrpsee::types::ErrorCode;
 use jsonrpsee::RpcModule;
-use rpc_api::{EthApiServer, EthFilterApiServer, NetApiServer};
+use rpc_api::{EthApiServer, EthFilterApiServer, NetApiServer, Web3ApiServer};
 use thiserror::Error;
 use tower::Service;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
@@ -412,6 +412,9 @@ fn build_module(eth: EthApiImpl) -> RpcModule<()> {
         .expect("no conflicts");
     module
         .merge(<EthApiImpl as NetApiServer>::into_rpc(eth.clone()))
+        .expect("no conflicts");
+    module
+        .merge(<EthApiImpl as Web3ApiServer>::into_rpc(eth.clone()))
         .expect("no conflicts");
 
     module
