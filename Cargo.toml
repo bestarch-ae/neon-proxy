@@ -9,11 +9,14 @@ members = [
     "solana-api",
     "proxy",
     "neon-api",
-    "executor"
+    "executor",
+    "mempool",
 ]
 
 [workspace.dependencies]
 anyhow = "1.0.86"
+dashmap = "6.0"
+futures-util = "0.3.30"
 hex = "0.4.3"
 thiserror = "1.0.60"
 tokio = "1.38.0"

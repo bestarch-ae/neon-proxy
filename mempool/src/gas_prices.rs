@@ -9,9 +9,9 @@ use tracing::{error, info, warn};
 use common::solana_sdk::pubkey::Pubkey;
 use neon_api::NeonApi;
 
-use crate::mempool::gas_price_calculator::{GasPriceCalculator, GasPriceCalculatorConfig};
-use crate::mempool::pyth_price_collector::PythPricesCollector;
-use crate::mempool::MempoolError;
+use crate::error::MempoolError;
+use crate::gas_price_calculator::{GasPriceCalculator, GasPriceCalculatorConfig};
+use crate::pyth_price_collector::PythPricesCollector;
 
 pub type Symbology = HashMap<String, Pubkey>;
 

@@ -11,6 +11,7 @@ common = { path = '../common', package = "neon-proxy-common", features = ["reth"
 solana-api = { path = '../solana-api' }
 neon-api = { path = '../neon-api', features = ["jsonrpsee"] }
 executor = { path = "../executor" }
+mempool = { path = "../mempool" }
 
 rpc-api.workspace = true
 rpc-api-types.workspace = true
@@ -23,7 +24,6 @@ tracing-subscriber.workspace = true
 
 tokio = { workspace = true, features = ["full"] }
 
-dashmap = "6.0"
 sqlx = { version = "0.7", features = [
     "runtime-tokio",
     "postgres",
@@ -39,5 +39,4 @@ tracing-log = "0.2"
 clap = { version = "4.5.4", features = ["derive", "env"] }
 hex-literal = "0.4.1"
 hyper = "0.14.30"
-futures-util = "0.3.30"
-pyth-sdk-solana = "0.9.0"
+futures-util.workspace = true

@@ -18,7 +18,6 @@ use tower::Service;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 
 mod convert;
-mod mempool;
 mod rpc;
 
 use common::neon_lib;

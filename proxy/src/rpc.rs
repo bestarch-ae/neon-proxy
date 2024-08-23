@@ -29,7 +29,6 @@ use neon_api::NeonApi;
 use crate::convert::{build_block, neon_to_eth, neon_to_eth_receipt};
 use crate::convert::{convert_filters, convert_rich_log, LogFilters};
 use crate::convert::{NeonLog, NeonTransactionReceipt};
-use crate::mempool;
 use crate::Error;
 
 #[derive(Clone)]
