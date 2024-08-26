@@ -382,6 +382,7 @@ impl ExecutorTestEnvironment {
             operator,
             None,
             false,
+            u8::MAX,
         )
         .await
         .context("failed initializing executor")?;

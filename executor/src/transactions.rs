@@ -75,10 +75,15 @@ impl TransactionBuilder {
         neon_api: NeonApi,
         operator: Keypair,
         address: Address,
+        max_holders: u8,
     ) -> anyhow::Result<Self> {
         let emulator = Emulator::new(neon_api.clone(), 0, operator.pubkey());
-        let holder_mgr =
-            HolderManager::new(operator.pubkey(), program_id, solana_api.clone(), u8::MAX);
+        let holder_mgr = HolderManager::new(
+            operator.pubkey(),
+            program_id,
+            solana_api.clone(),
+            max_holders,
+        );
         let mut this = Self {
             program_id,
             solana_api,
@@ -98,14 +103,16 @@ impl TransactionBuilder {
     }
 
     pub async fn try_reload_clone(&self) -> anyhow::Result<Self> {
-        let new = Self::new(
+        let mut new = Self::new(
             self.program_id,
             self.solana_api.clone(),
             self.neon_api.clone(),
             self.operator.insecure_clone(),
             self.operator_address,
+            0,
         )
         .await?;
+        new.holder_mgr = self.holder_mgr.clone();
         Ok(new)
     }
 

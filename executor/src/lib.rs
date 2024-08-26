@@ -42,6 +42,10 @@ pub struct Config {
     #[arg(long, default_value_t = false)]
     /// Initialize operator balance accounts at service startup
     pub init_operator_balance: bool,
+
+    #[arg(long, default_value_t = u8::MAX)]
+    /// Maximum holder accounts
+    pub max_holders: u8,
 }
 
 #[derive(Debug)]
@@ -94,6 +98,7 @@ impl Executor {
         operator: Keypair,
         operator_addr: Option<Address>,
         init_balances: bool,
+        max_holders: u8,
     ) -> anyhow::Result<(Arc<Self>, impl Future<Output = anyhow::Result<()>>)> {
         let operator_addr = match operator_addr {
             Some(addr) => addr,
@@ -111,6 +116,7 @@ impl Executor {
             operator,
             operator_addr,
             init_balances,
+            max_holders,
         )
         .await?;
         let this = Arc::new(this);
@@ -125,6 +131,7 @@ impl Executor {
         operator: Keypair,
         operator_addr: Address,
         init_balances: bool,
+        max_holders: u8,
     ) -> anyhow::Result<Self> {
         let notify = Notify::new();
 
@@ -134,6 +141,7 @@ impl Executor {
             neon_api.clone(),
             operator,
             operator_addr,
+            max_holders,
         )
         .await?;
         let builder = ArcSwap::from_pointee(builder);
