@@ -8,6 +8,7 @@ use tracing::{error, info, warn};
 
 use common::solana_sdk::pubkey::Pubkey;
 use neon_api::NeonApi;
+use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
 use crate::error::MempoolError;
 use crate::gas_price_calculator::{GasPriceCalculator, GasPriceCalculatorConfig};
@@ -46,6 +47,7 @@ impl GasPrices {
     pub fn try_new(
         config: GasPricesConfig,
         neon_api: NeonApi,
+        rpc_client: RpcClient,
         symbology: Symbology,
         calculator_config: GasPriceCalculatorConfig,
     ) -> Result<Self, MempoolError> {
@@ -78,10 +80,13 @@ impl GasPrices {
 
         if !symbology.is_empty() {
             tokio::spawn(async move {
-                let mut collector =
-                    PythPricesCollector::try_new(&ws_url_thread, Arc::downgrade(&prices_thread))
-                        .await
-                        .expect("failed to create PythPricesCollector");
+                let mut collector = PythPricesCollector::try_new(
+                    &ws_url_thread,
+                    Arc::downgrade(&prices_thread),
+                    rpc_client,
+                )
+                .await
+                .expect("failed to create PythPricesCollector");
 
                 let refresh_rate = Duration::from_secs(EVM_CONFIG_REFRESH_RATE_SEC);
                 let mut interval = tokio::time::interval(refresh_rate);
