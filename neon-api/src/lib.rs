@@ -451,6 +451,12 @@ impl NeonApi {
     }
 
     pub async fn emulate(&self, params: TxParams) -> Result<EmulateResponse, NeonApiError> {
+        let resp = self.emulate_raw(params).await?;
+        decode_neon_response(resp)
+    }
+
+    // Returns raw response without checking for errors inside
+    pub async fn emulate_raw(&self, params: TxParams) -> Result<EmulateResponse, NeonApiError> {
         let (tx, rx) = oneshot::channel();
         self.channel
             .send(Task::new(
@@ -597,7 +603,7 @@ impl NeonApi {
                 )
                 .await;
                 let resp = match resp {
-                    Ok((resp, _something)) => decode_neon_response(resp),
+                    Ok((resp, _something)) => Ok(resp),
                     Err(err) => Err(err.into()),
                 };
                 let _ = response.send(resp);
