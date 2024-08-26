@@ -4,8 +4,6 @@ mod holder;
 mod ongoing;
 
 use std::mem;
-use std::sync::atomic::AtomicU8;
-use std::sync::Arc;
 
 use alloy_eips::eip2718::Encodable2718;
 use alloy_rlp::Encodable;
@@ -32,11 +30,12 @@ use common::solana_sdk::transaction::Transaction;
 use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
 
+use crate::transactions::holder::AcquireHolder;
 use crate::ExecuteRequest;
 
 use self::alt::AltInfo;
 use self::emulator::{get_chain_id, Emulator, IterInfo};
-use self::holder::HolderInfo;
+use self::holder::{HolderInfo, HolderManager};
 use self::ongoing::{TxData, TxStage};
 
 pub use self::ongoing::OngoingTransaction;
@@ -60,7 +59,7 @@ pub struct TransactionBuilder {
     treasury_pool_seed: Vec<u8>,
 
     emulator: Emulator,
-    holder_counter: Arc<AtomicU8>,
+    holder_mgr: HolderManager,
 
     chains: Vec<ChainInfo>,
     version: Version,
@@ -78,6 +77,8 @@ impl TransactionBuilder {
         address: Address,
     ) -> anyhow::Result<Self> {
         let emulator = Emulator::new(neon_api.clone(), 0, operator.pubkey());
+        let holder_mgr =
+            HolderManager::new(operator.pubkey(), program_id, solana_api.clone(), u8::MAX);
         let mut this = Self {
             program_id,
             solana_api,
@@ -87,7 +88,7 @@ impl TransactionBuilder {
             treasury_pool_count: 0,
             treasury_pool_seed: Vec::new(),
             emulator,
-            holder_counter: Arc::new(AtomicU8::new(0)),
+            holder_mgr,
             chains: Vec::new(),
             version: Self::DEFAULT_NEON_EVM_VERSION,
         };
@@ -97,7 +98,7 @@ impl TransactionBuilder {
     }
 
     pub async fn try_reload_clone(&self) -> anyhow::Result<Self> {
-        let mut new = Self::new(
+        let new = Self::new(
             self.program_id,
             self.solana_api.clone(),
             self.neon_api.clone(),
@@ -105,8 +106,6 @@ impl TransactionBuilder {
             self.operator_address,
         )
         .await?;
-        // FIXME: Will be fixed by a separate Holder manager
-        new.holder_counter = self.holder_counter.clone();
         Ok(new)
     }
 
@@ -356,10 +355,11 @@ impl TransactionBuilder {
     async fn execute_from_data(
         &self,
         tx_data: TxData,
-        holder: Pubkey,
+        holder: HolderInfo,
         chain_id: u64,
         alt: Option<AltInfo>,
     ) -> anyhow::Result<OngoingTransaction> {
+        let holder_key = *holder.pubkey();
         let fallback_iterative = |tx_data, alt| async move {
             self.step(None, tx_data, holder, true, alt)
                 .await
@@ -381,7 +381,7 @@ impl TransactionBuilder {
             tx_data.envelope.tx_hash(),
             chain_id,
             &tx_data.emulate.solana_accounts,
-            Some(holder),
+            Some(holder_key),
             None,
         )?;
 
@@ -466,15 +466,25 @@ impl TransactionBuilder {
         alt: Option<AltInfo>,
         force_iterative: bool, // Used for deprecated behaviour
     ) -> anyhow::Result<OngoingTransaction> {
-        let holder = self.new_holder_info(None)?;
-        let ixs = self.create_holder(&holder).await?;
+        let AcquireHolder {
+            info: holder,
+            create_ixs,
+        } = self.holder_mgr.acquire_holder(None).await?;
         tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), ?holder, "creating new holder");
-        let tx = if force_iterative {
-            TxStage::step_data(*holder.pubkey(), tx_data, None, alt).ongoing(&ixs, &self.pubkey())
-        } else {
-            TxStage::data(tx_data, chain_id, *holder.pubkey(), alt).ongoing(&ixs, &self.pubkey())
-        };
-        Ok(tx)
+        match (force_iterative, create_ixs) {
+            (true, Some(ixs)) => {
+                Ok(TxStage::step_data(holder, tx_data, None, alt).ongoing(&ixs, &self.pubkey()))
+            }
+            (true, None) => self
+                .step(None, tx_data, holder, true, alt)
+                .await
+                .transpose()
+                .expect("first step always some"),
+            (false, Some(ixs)) => {
+                Ok(TxStage::data(tx_data, chain_id, holder, alt).ongoing(&ixs, &self.pubkey()))
+            }
+            (false, None) => self.execute_from_data(tx_data, holder, chain_id, alt).await,
+        }
     }
 
     fn from_data_tx_len(tx_len: usize, add_accounts_len: usize) -> usize {
@@ -492,18 +502,24 @@ impl TransactionBuilder {
         &self,
         tx: ExecuteRequest,
     ) -> anyhow::Result<OngoingTransaction> {
-        let holder = self.new_holder_info(Some(&tx.tx))?;
-        let ixs = self.create_holder(&holder).await?;
+        let AcquireHolder {
+            info: holder,
+            create_ixs,
+        } = self.holder_mgr.acquire_holder(Some(&tx)).await?;
         tracing::debug!(tx_hash = %tx.tx_hash(), ?holder, "start holder execution");
 
-        Ok(TxStage::holder_fill(holder, tx).ongoing(&ixs, &self.pubkey()))
+        if let Some(ixs) = create_ixs {
+            Ok(TxStage::holder_fill(holder, tx).ongoing(&ixs, &self.pubkey()))
+        } else {
+            Ok(self.fill_holder(holder, tx))
+        }
     }
 
     /// Write next data chunk into holder account.
     fn fill_holder(&self, info: HolderInfo, tx: ExecuteRequest) -> OngoingTransaction {
         let offset_before = info.offset();
         let mut info = info;
-        let ix = self.write_next_holder_chunk(&mut info);
+        let ix = self.holder_mgr.write_next_holder_chunk(&mut info);
         tracing::debug!(tx_hash = %tx.tx_hash(), holder = ?info, offset_before, "next holder chunk");
         TxStage::holder_fill(info, tx).ongoing(&[ix], &self.pubkey())
     }
@@ -554,11 +570,11 @@ impl TransactionBuilder {
         let chain_id = match (chain_id, needs_iterative) {
             (None, _) => {
                 tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), "fallback to iterative, no chain id");
-                return fallback_to_iterative(tx_data, *holder.pubkey(), alt).await;
+                return fallback_to_iterative(tx_data, holder, alt).await;
             }
             (_, true) => {
                 tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), "fallback to iterative, resize iter count");
-                return fallback_to_iterative(tx_data, *holder.pubkey(), alt).await;
+                return fallback_to_iterative(tx_data, holder, alt).await;
             }
             (Some(chain_id), false) => chain_id,
         };
@@ -589,10 +605,10 @@ impl TransactionBuilder {
             .await?
         {
             tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), "fallback to iterative, failed single execution simulation");
-            return fallback_to_iterative(tx_data, *holder.pubkey(), alt).await;
+            return fallback_to_iterative(tx_data, holder, alt).await;
         }
 
-        let stage = TxStage::final_holder(*holder.pubkey(), tx_data);
+        let stage = TxStage::final_holder(holder, tx_data);
         self.build_ongoing(stage, &ixs, alt)
     }
 
@@ -611,7 +627,7 @@ impl TransactionBuilder {
         &self,
         iter_info: Option<IterInfo>,
         tx_data: TxData,
-        holder: Pubkey,
+        holder: HolderInfo,
         from_data: bool,
         alt: Option<AltInfo>,
     ) -> anyhow::Result<Option<OngoingTransaction>> {
@@ -627,8 +643,13 @@ impl TransactionBuilder {
                 let build_tx = |iter_info: &mut IterInfo| {
                     let mut txs = Vec::new();
                     while !iter_info.is_finished() {
-                        let ix =
-                            self.build_step(iter_info, &tx_data, holder, from_data, chain_id)?;
+                        let ix = self.build_step(
+                            iter_info,
+                            &tx_data,
+                            *holder.pubkey(),
+                            from_data,
+                            chain_id,
+                        )?;
                         txs.push(Transaction::new_with_payer(
                             &with_budget(ix, MAX_COMPUTE_UNITS),
                             Some(&self.pubkey()),
@@ -644,7 +665,13 @@ impl TransactionBuilder {
         };
 
         tracing::debug!(%tx_hash, ?iter_info, "new iteration");
-        let ix = self.build_step(&mut iter_info, &tx_data, holder, from_data, chain_id)?;
+        let ix = self.build_step(
+            &mut iter_info,
+            &tx_data,
+            *holder.pubkey(),
+            from_data,
+            chain_id,
+        )?;
         let cu_limit = iter_info.cu_limit();
         let stage = match (from_data, chain_id) {
             (true, Some(_)) => TxStage::step_data(holder, tx_data, Some(iter_info), alt.clone()),
