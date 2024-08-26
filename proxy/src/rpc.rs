@@ -369,7 +369,13 @@ impl EthApiServer for EthApiImpl {
         let slot = self.find_slot(number).await?;
         self.get_block(db::BlockBy::Slot(slot), false, number.is_pending())
             .await
-            .map(|block| block.map(|block| U256::from(block.transactions.len())))
+            .map(|block| {
+                Some(
+                    block
+                        .map(|block| U256::from(block.transactions.len()))
+                        .unwrap_or(U256::ZERO),
+                )
+            })
             .map_err(Into::into)
     }
 
