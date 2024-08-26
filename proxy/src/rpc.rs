@@ -174,13 +174,13 @@ fn unimplemented<T>() -> RpcResult<T> {
 
 #[rpc(server, namespace = "neon")]
 trait NeonCustomApi {
-    #[method(name = "proxyVersion")]
+    #[method(name = "proxyVersion", aliases = ["neon_proxy_version"])]
     fn proxy_version(&self) -> RpcResult<String>;
 
     #[method(name = "solanaVersion")]
     async fn solana_version(&self) -> RpcResult<String>;
 
-    #[method(name = "cliVersion")]
+    #[method(name = "cliVersion", aliases = ["neon_cli_version"])]
     fn cli_version(&self) -> RpcResult<String>;
 
     #[method(name = "evmVersion")]
