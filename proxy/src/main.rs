@@ -283,10 +283,9 @@ async fn main() {
             .expect("failed to parse symbology")
     } else if let Some(mapping_addr) = &opts.pyth_mapping_addr {
         tracing::info!(%mapping_addr, "loading symbology");
-        let symbology = mempool::pyth_collect_symbology(mapping_addr, &rpc_client)
+        mempool::pyth_collect_symbology(mapping_addr, &rpc_client)
             .await
-            .expect("failed to collect pyth symbology");
-        symbology
+            .expect("failed to collect pyth symbology")
     } else {
         HashMap::new()
     };
