@@ -52,6 +52,7 @@ const NEON_KEY: Pubkey = pubkey!("53DfF883gyixYNXnM7s5xhdeyV8mVk9T4i2hGV9vG9io")
 const NEON_TOKEN: Pubkey = pubkey!("HPsV9Deocecw3GeZv1FkAPNCBRfuVyfw9MMwjwRe1xaU");
 const FST_HOLDER_KEY: Pubkey = pubkey!("9X4CgVP88B3LeoX7oTmhj7vdkayBG9k73drCh2e4A61G");
 const CHAIN_ID: u64 = 111;
+const MAX_HOLDERS: u8 = 10;
 
 #[derive(Debug)]
 struct Wallet {
@@ -339,12 +340,6 @@ impl ExecutorTestEnvironment {
         ctx.add_program(path, NEON_KEY).await?;
         init_neon(&mut ctx).await?;
 
-        // let acc = Account {
-        //     owner: system_program::id(),
-        //     ..Default::default()
-        // };
-        // ctx.set_account(&FST_HOLDER_KEY, &acc.into());
-
         let payer = ctx.payer.insecure_clone();
 
         let banks_client = ctx.banks_client.clone();
@@ -382,7 +377,7 @@ impl ExecutorTestEnvironment {
             operator,
             None,
             false,
-            u8::MAX,
+            MAX_HOLDERS,
         )
         .await
         .context("failed initializing executor")?;
@@ -496,11 +491,29 @@ async fn transfer_no_chain_id() -> Result<()> {
     assert_eq!(balance[0].balance, eth_to_wei(1_000));
     assert_eq!(balance[1].balance, eth_to_wei(0));
 
+    executor
+        .handle_transaction(build_transfer_no_chain_id(&kp1, address2)?)
+        .await?;
+
+    // HACK: Fixes random AccountInUse error
+    let _ = test_ctx.banks_client.get_account(FST_HOLDER_KEY).await?;
+    let txs = executor.join_current_transactions().await;
+    println!("txs: {}", txs.len());
+    assert!(txs.len() > 1);
+
+    let balance = get_balances(&rpc, &[address1, address2]).await?;
+    assert!(balance[0].balance < eth_to_wei(100));
+    assert_eq!(balance[1].balance, eth_to_wei(900));
+
+    Ok(())
+}
+
+fn build_transfer_no_chain_id(kp1: &Wallet, addr2: Address) -> anyhow::Result<ExecuteRequest> {
     let mut tx = TxLegacy {
         nonce: 0,
         gas_price: 2,
         gas_limit: 2_000,
-        to: TxKind::Call(address2.0.into()),
+        to: TxKind::Call(addr2.0.into()),
         value: eth_to_wei(900).to_reth(),
         input: Default::default(),
         chain_id: None,
@@ -509,19 +522,7 @@ async fn transfer_no_chain_id() -> Result<()> {
     let v = signature.v().y_parity_byte() as u64 + 27;
     let signature = EthSignature::from_signature_and_parity(*signature.inner(), v)?;
 
-    let tx = tx.into_signed(signature);
-    executor.handle_transaction(req(tx)).await?;
-
-    // HACK: Fixes random AccountInUse error
-    let _ = test_ctx.banks_client.get_account(FST_HOLDER_KEY).await?;
-    let txs = executor.join_current_transactions().await;
-    assert!(txs.len() > 1);
-
-    let balance = get_balances(&rpc, &[address1, address2]).await?;
-    assert!(balance[0].balance < eth_to_wei(100));
-    assert_eq!(balance[1].balance, eth_to_wei(900));
-
-    Ok(())
+    Ok(req(tx.into_signed(signature)))
 }
 
 #[tokio::test]
@@ -763,6 +764,57 @@ async fn reload_config() -> Result<()> {
     // Transfer
     do_transfer(&executor, &rpc, &kp2, address3, 800, 1).await?;
 
+    Ok(())
+}
+
+/// Tests that holders get reused
+#[tokio::test]
+#[serial]
+async fn parallel_transfers() -> Result<()> {
+    const NUM_TRANSFERS: usize = 100;
+    let ExecutorTestEnvironment {
+        rpc,
+        // test_kp,
+        executor,
+        test_ctx: mut ctx,
+        ..
+    } = ExecutorTestEnvironment::start().await?;
+
+    let mut pairs = Vec::new();
+
+    for _ in 0..NUM_TRANSFERS {
+        let kp1 = Wallet::new();
+        let address1 = kp1.address();
+        let kp2 = Wallet::new();
+        let address2 = kp2.address();
+
+        mint_and_deposit_to_neon(&mut ctx, &kp1, 1_000).await?;
+
+        let balance = get_balances(&rpc, &[address1, address2]).await?;
+        assert_eq!(balance[0].balance, eth_to_wei(1_000));
+        assert_eq!(balance[1].balance, eth_to_wei(0));
+        pairs.push((kp1, address2));
+    }
+
+    // Transfer
+    for (kp, addr) in &pairs {
+        executor
+            .handle_transaction(build_transfer_no_chain_id(kp, *addr)?)
+            .await?;
+    }
+
+    // HACK: Fixes random AccountInUse error
+    let _ = ctx.banks_client.get_account(FST_HOLDER_KEY).await?;
+    let txs = executor.join_current_transactions().await;
+    // Each transfer without chain id results into at least 4 txs: 1 write to holder and 3 steps.
+    // First `MAX_HOLDERS` transfers will also create holder accounts which add 1 tx.
+    assert_eq!(txs.len(), 4 * NUM_TRANSFERS + 10);
+
+    for (kp, addr) in &pairs {
+        let balance = get_balances(&rpc, &[kp.address(), *addr]).await?;
+        assert!(balance[0].balance < eth_to_wei(100));
+        assert_eq!(balance[1].balance, eth_to_wei(900));
+    }
     Ok(())
 }
 
