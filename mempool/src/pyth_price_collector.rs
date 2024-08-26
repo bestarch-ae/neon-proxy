@@ -93,6 +93,7 @@ pub async fn pyth_collect_symbology(
 /// Collects the Pyth prices for the tokens in the symbology map.
 pub struct PythPricesCollector {
     client: Arc<PubsubClient>,
+    rpc_client: RpcClient,
     prices: Weak<DashMap<Pubkey, Price>>,
     subscriptions: HashMap<Pubkey, JoinHandle<Result<(), MempoolError>>>,
     unsubscribe_fns: HashMap<Pubkey, UnsubscribeFn>,
@@ -103,11 +104,13 @@ impl PythPricesCollector {
     pub async fn try_new(
         ws_url: &str,
         prices: Weak<DashMap<Pubkey, Price>>,
+        rpc_client: RpcClient,
     ) -> Result<Self, MempoolError> {
         let client = Arc::new(PubsubClient::new(ws_url).await?);
 
         Ok(Self {
             client,
+            rpc_client,
             prices,
             subscriptions: HashMap::new(),
             unsubscribe_fns: HashMap::new(),
@@ -119,6 +122,17 @@ impl PythPricesCollector {
         if self.subscriptions.contains_key(&token_pkey) {
             return Ok(());
         }
+
+        let mut price_info = self.rpc_client.get_account(&token_pkey).await?;
+        let price_feed: PriceFeed = load_price_feed_from_account(&token_pkey, &mut price_info)?;
+        let price = price_feed.get_price_unchecked();
+        if let Some(prices) = self.prices.upgrade() {
+            prices.insert(token_pkey, price);
+        } else {
+            info!("prices map dropped");
+            return Ok::<_, MempoolError>(());
+        }
+
         let (unsub_tx, unsub_rx) = oneshot::channel::<UnsubscribeFn>();
         let subs_handler = tokio::spawn({
             // From the `PubsubClient docs:

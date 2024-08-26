@@ -266,6 +266,11 @@ async fn main() {
         .collect::<HashMap<_, _>>();
     tracing::info!(?additional_chains, "additional chains");
 
+    let rpc_client = RpcClient::new(
+        opts.pyth_solana_url
+            .unwrap_or(opts.solana_url.clone())
+            .clone(),
+    );
     let pyth_symbology = if let Some(path) = opts.symbology_path.as_ref() {
         tracing::info!(?path, "loading symbology");
         let raw = std::fs::read_to_string(path).expect("failed to read symbology");
@@ -278,16 +283,9 @@ async fn main() {
             .expect("failed to parse symbology")
     } else if let Some(mapping_addr) = &opts.pyth_mapping_addr {
         tracing::info!(%mapping_addr, "loading symbology");
-        let rpc_client = RpcClient::new(
-            opts.pyth_solana_url
-                .unwrap_or(opts.solana_url.clone())
-                .clone(),
-        );
-        let symbology = mempool::pyth_collect_symbology(mapping_addr, &rpc_client)
+        mempool::pyth_collect_symbology(mapping_addr, &rpc_client)
             .await
-            .expect("failed to collect pyth symbology");
-        drop(rpc_client);
-        symbology
+            .expect("failed to collect pyth symbology")
     } else {
         HashMap::new()
     };
@@ -304,6 +302,7 @@ async fn main() {
     let mp_gas_prices = mempool::GasPrices::try_new(
         gas_prices_config,
         neon_api.clone(),
+        rpc_client,
         pyth_symbology,
         mp_gas_calculator_config,
     )
