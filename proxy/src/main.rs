@@ -317,6 +317,7 @@ async fn main() {
             operator,
             opts.executor.operator_address,
             opts.executor.init_operator_balance,
+            opts.executor.max_holders,
         )
         .await
         .expect("could not initialize executor");

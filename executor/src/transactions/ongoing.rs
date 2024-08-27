@@ -41,7 +41,7 @@ pub(super) enum TxStage {
     },
     IterativeExecution {
         tx_data: TxData,
-        holder: Pubkey,
+        holder: HolderInfo,
         iter_info: Option<IterInfo>,
         alt: Option<AltInfo>,
         from_data: bool,
@@ -49,14 +49,14 @@ pub(super) enum TxStage {
     DataExecution {
         tx_data: TxData,
         chain_id: u64,
-        holder: Pubkey,
+        holder: HolderInfo,
         alt: Option<AltInfo>,
     },
-    // Fields are for log purpose only
     Final {
         tx_data: Option<TxData>,
         #[allow(dead_code)]
-        holder: Option<Pubkey>,
+        // We need to hold holder occupied until the end
+        holder: Option<HolderInfo>,
     },
 }
 
@@ -97,7 +97,7 @@ impl TxStage {
         }
     }
 
-    pub fn data(tx_data: TxData, chain_id: u64, holder: Pubkey, alt: Option<AltInfo>) -> Self {
+    pub fn data(tx_data: TxData, chain_id: u64, holder: HolderInfo, alt: Option<AltInfo>) -> Self {
         Self::DataExecution {
             tx_data,
             chain_id,
@@ -113,7 +113,7 @@ impl TxStage {
         }
     }
 
-    pub fn final_holder(holder: Pubkey, tx_data: TxData) -> Self {
+    pub fn final_holder(holder: HolderInfo, tx_data: TxData) -> Self {
         Self::Final {
             tx_data: Some(tx_data),
             holder: Some(holder),
@@ -121,7 +121,7 @@ impl TxStage {
     }
 
     pub fn step_data(
-        holder: Pubkey,
+        holder: HolderInfo,
         tx_data: TxData,
         iter_info: Option<IterInfo>,
         alt: Option<AltInfo>,
@@ -136,7 +136,7 @@ impl TxStage {
     }
 
     pub fn step_holder(
-        holder: Pubkey,
+        holder: HolderInfo,
         tx_data: TxData,
         iter_info: IterInfo,
         alt: Option<AltInfo>,
