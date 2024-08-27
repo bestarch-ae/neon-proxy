@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Context;
+use common::neon_lib::commands::emulate::{EmulateResponse, SolanaAccount};
 use futures_util::{StreamExt, TryStreamExt};
 use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::proc_macros::rpc;
@@ -16,11 +18,14 @@ use rpc_api_types::{BlockOverrides, Header, RichBlock};
 use rpc_api_types::{Bundle, FeeHistory, Index, StateContext, SyncStatus, Work};
 use rpc_api_types::{Filter, FilterBlockOption, FilterChanges, FilterId};
 use rpc_api_types::{Log, PeerCount, PendingTransactionFilterKind, SyncInfo};
+use serde::{Deserialize, Serialize};
+use serde_with::{serde_as, DisplayFromStr};
 
 use sqlx::PgPool;
 
 use common::convert::{ToNeon, ToReth};
-use common::neon_lib::types::{BalanceAddress, TxParams};
+use common::neon_lib::types::{BalanceAddress, SerializedAccount, TxParams};
+use common::solana_sdk::pubkey::Pubkey;
 use common::types::NeonTxInfo;
 use db::WithBlockhash;
 use executor::{ExecuteRequest, Executor};
@@ -172,6 +177,45 @@ fn unimplemented<T>() -> RpcResult<T> {
     ))
 }
 
+#[serde_as]
+#[allow(unused)]
+#[derive(Deserialize, Debug)]
+pub struct NeonCall {
+    #[serde_as(as = "Option<HashMap<DisplayFromStr,_>>")]
+    #[serde(alias = "solana_overrides")]
+    sol_account_dict: Option<HashMap<Pubkey, Option<SerializedAccount>>>,
+}
+
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct NeonEmulateResponse {
+    exit_code: String,
+    external_solana_call: bool,
+    revert_before_solana_call: bool,
+    revert_after_solana_call: bool,
+    result: Bytes,
+    num_evm_steps: u64,
+    gas_used: u64,
+    num_iterations: u64,
+    solana_accounts: Vec<SolanaAccount>,
+}
+
+impl From<EmulateResponse> for NeonEmulateResponse {
+    fn from(value: EmulateResponse) -> Self {
+        NeonEmulateResponse {
+            exit_code: value.exit_status,
+            external_solana_call: value.external_solana_call,
+            revert_before_solana_call: value.reverts_before_solana_calls,
+            revert_after_solana_call: value.reverts_after_solana_calls,
+            result: Bytes::from(value.result),
+            num_evm_steps: value.steps_executed,
+            gas_used: value.used_gas,
+            num_iterations: value.iterations,
+            solana_accounts: value.solana_accounts,
+        }
+    }
+}
+
 #[rpc(server, namespace = "neon")]
 trait NeonCustomApi {
     #[method(name = "proxyVersion", aliases = ["neon_proxy_version"])]
@@ -185,6 +229,14 @@ trait NeonCustomApi {
 
     #[method(name = "evmVersion")]
     async fn evm_version(&self) -> RpcResult<String>;
+
+    #[method(name = "emulate")]
+    async fn emulate(
+        &self,
+        tx: Bytes,
+        neon_call: Option<NeonCall>,
+        tag: Option<BlockNumberOrTag>,
+    ) -> RpcResult<NeonEmulateResponse>;
 }
 
 #[rpc(server, namespace = "eth")]
@@ -211,7 +263,7 @@ impl NeonEthApiServer for EthApiImpl {
 #[async_trait]
 impl NeonCustomApiServer for EthApiImpl {
     fn proxy_version(&self) -> RpcResult<String> {
-        let version = format!("NeonProxy/v{}", env!("CARGO_PKG_VERSION"));
+        let version = format!("Neon-proxy/v{}", env!("CARGO_PKG_VERSION"));
         Ok(version)
     }
 
@@ -230,6 +282,24 @@ impl NeonCustomApiServer for EthApiImpl {
     fn cli_version(&self) -> RpcResult<String> {
         let version = format!("Neon-cli/v{}", self.lib_version);
         Ok(version)
+    }
+
+    async fn emulate(
+        &self,
+        tx: Bytes,
+        neon_call: Option<NeonCall>,
+        tag: Option<BlockNumberOrTag>,
+    ) -> RpcResult<NeonEmulateResponse> {
+        use common::evm_loader::types::Transaction;
+        tracing::info!(?tx, ?neon_call, ?tag, "neon_emulate");
+
+        let tx = Transaction::from_rlp(&tx)
+            .inspect_err(|error| tracing::warn!(%tx, %error, "could not decode transaction"))
+            .map_err(|_| ErrorObjectOwned::from(ErrorCode::InvalidParams))?;
+        let params = TxParams::from_transaction(Address::default().to_neon(), &tx);
+
+        let resp = self.neon_api.emulate_raw(params).await?;
+        Ok(resp.into())
     }
 }
 
