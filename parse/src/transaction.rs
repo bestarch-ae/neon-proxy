@@ -46,6 +46,7 @@ pub enum ParseResult {
     OperatorOperation(BalanceOperation),
 }
 
+#[allow(clippy::get_first)]
 pub fn parse(
     bytes: &[u8],
     accounts: &[Pubkey],
