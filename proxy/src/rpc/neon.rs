@@ -93,6 +93,12 @@ trait NeonCustomApi {
         address: Address,
         block_number: Option<BlockId>,
     ) -> RpcResult<NeonAccountResponse>;
+
+    #[method(name = "earliestBlockNumber")]
+    async fn earliest_block_number(&self) -> RpcResult<U64>;
+
+    #[method(name = "finalizedBlockNumber")]
+    async fn finalized_block_number(&self) -> RpcResult<U64>;
 }
 
 #[async_trait]
@@ -167,5 +173,21 @@ impl NeonCustomApiServer for EthApiImpl {
             contract_solana_address: account.contract_solana_address,
         };
         Ok(resp)
+    }
+
+    async fn earliest_block_number(&self) -> RpcResult<U64> {
+        self.blocks
+            .earliest_slot()
+            .await
+            .map(U64::from)
+            .map_err(|_| ErrorObjectOwned::from(ErrorCode::InternalError))
+    }
+
+    async fn finalized_block_number(&self) -> RpcResult<U64> {
+        self.blocks
+            .latest_number(true)
+            .await
+            .map(U64::from)
+            .map_err(|_| ErrorObjectOwned::from(ErrorCode::InternalError))
     }
 }
