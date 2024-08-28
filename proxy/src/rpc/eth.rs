@@ -1,393 +1,30 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use anyhow::Context;
-use futures_util::{StreamExt, TryStreamExt};
 use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::types::{ErrorCode, ErrorObjectOwned};
 use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, TxKind, B256, B64, U256, U64};
 use rpc_api::servers::EthApiServer;
-use rpc_api::{EthFilterApiServer, NetApiServer, Web3ApiServer};
+use rpc_api::EthFilterApiServer;
 use rpc_api_types::serde_helpers::JsonStorageKey;
 use rpc_api_types::state::StateOverride;
 use rpc_api_types::{AccessListWithGasUsed, EIP1186AccountProofResponse, EthCallResponse};
 use rpc_api_types::{AnyTransactionReceipt, Transaction, TransactionRequest};
 use rpc_api_types::{BlockOverrides, Header, RichBlock};
 use rpc_api_types::{Bundle, FeeHistory, Index, StateContext, SyncStatus, Work};
-use rpc_api_types::{Filter, FilterBlockOption, FilterChanges, FilterId};
-use rpc_api_types::{Log, PeerCount, PendingTransactionFilterKind, SyncInfo};
-use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, DisplayFromStr};
-
-use sqlx::PgPool;
+use rpc_api_types::{Filter, FilterChanges, FilterId};
+use rpc_api_types::{Log, PendingTransactionFilterKind, SyncInfo};
 
 use common::convert::{ToNeon, ToReth};
-use common::neon_lib::commands::emulate::{EmulateResponse, SolanaAccount};
-use common::neon_lib::commands::get_balance::BalanceStatus;
-use common::neon_lib::types::{BalanceAddress, SerializedAccount, TxParams};
-use common::solana_sdk::pubkey::Pubkey;
-use common::types::NeonTxInfo;
-use db::WithBlockhash;
-use executor::{ExecuteRequest, Executor};
-use neon_api::NeonApi;
+use common::neon_lib::types::{BalanceAddress, TxParams};
+use executor::ExecuteRequest;
 
-use crate::convert::{build_block, neon_to_eth, neon_to_eth_receipt};
-use crate::convert::{convert_filters, convert_rich_log, LogFilters};
+use crate::convert::convert_filters;
+use crate::convert::{neon_to_eth, neon_to_eth_receipt};
 use crate::convert::{NeonLog, NeonTransactionReceipt};
 use crate::Error;
 
-#[derive(Clone)]
-pub struct EthApiImpl {
-    transactions: ::db::TransactionRepo,
-    blocks: ::db::BlockRepo,
-    neon_api: NeonApi,
-    chain_id: u64,
-    executor: Option<Arc<Executor>>,
-    mp_gas_prices: mempool::GasPrices,
-    lib_version: String,
-}
-
-impl EthApiImpl {
-    pub fn new(
-        pool: PgPool,
-        neon_api: NeonApi,
-        chain_id: u64,
-        executor: Option<Arc<Executor>>,
-        mp_gas_prices: mempool::GasPrices,
-        lib_version: String,
-    ) -> Self {
-        let transactions = ::db::TransactionRepo::new(pool.clone());
-        let blocks = ::db::BlockRepo::new(pool.clone());
-
-        Self {
-            transactions,
-            blocks,
-            neon_api,
-            executor,
-            chain_id,
-            mp_gas_prices,
-            lib_version,
-        }
-    }
-
-    pub fn with_chain_id(self, chain_id: u64) -> Self {
-        Self { chain_id, ..self }
-    }
-
-    async fn find_slot(&self, tag: BlockNumberOrTag) -> Result<u64, Error> {
-        let is_finalized = match tag {
-            BlockNumberOrTag::Number(slot) => return Ok(slot),
-            BlockNumberOrTag::Earliest => return Ok(self.blocks.earliest_slot().await?),
-            BlockNumberOrTag::Pending => false,
-            // Confirmed
-            BlockNumberOrTag::Latest => false,
-            // Finalized
-            BlockNumberOrTag::Finalized | BlockNumberOrTag::Safe => true,
-        };
-
-        Ok(self.blocks.latest_number(is_finalized).await?)
-    }
-
-    async fn normalize_filter(&self, filter: Filter) -> Result<Filter, Error> {
-        let mut filter = filter;
-        if let FilterBlockOption::Range {
-            ref mut from_block,
-            ref mut to_block,
-        } = filter.block_option
-        {
-            for tag_ref in [from_block, to_block] {
-                if let Some(tag) = tag_ref {
-                    let tag = *tag;
-                    tag_ref.replace(BlockNumberOrTag::Number(self.find_slot(tag).await?));
-                }
-            }
-        }
-        Ok(filter)
-    }
-
-    async fn get_block(
-        &self,
-        by: db::BlockBy,
-        full: bool,
-        is_pending: bool,
-    ) -> Result<Option<RichBlock>, Error> {
-        let Some(mut block) = self.blocks.fetch_by(by).await? else {
-            return Ok(None);
-        };
-        let slot = block.slot;
-        let txs = if is_pending {
-            block.slot += 1;
-            Vec::new()
-        } else {
-            self.transactions
-                .fetch(::db::TransactionBy::Slot(slot))
-                .await?
-                .into_iter()
-                .map(|tx| tx.inner)
-                .collect()
-        };
-        Ok(Some(build_block(block, txs, full)?.into()))
-    }
-
-    async fn get_tag_by_block_id(&self, block_id: BlockId) -> RpcResult<BlockNumberOrTag> {
-        match block_id {
-            BlockId::Hash(hash) => {
-                use common::solana_sdk::hash::Hash;
-                let hash = Hash::new_from_array(hash.block_hash.0);
-                let block = self
-                    .get_block(db::BlockBy::Hash(hash), false, false)
-                    .await?;
-                Ok(block
-                    .and_then(|block| block.header.number.map(BlockNumberOrTag::Number))
-                    .ok_or::<ErrorObjectOwned>(ErrorCode::InternalError.into())?)
-            }
-            BlockId::Number(BlockNumberOrTag::Pending) => Ok(BlockNumberOrTag::Pending),
-            BlockId::Number(BlockNumberOrTag::Latest) => Ok(BlockNumberOrTag::Latest),
-            BlockId::Number(tag) => Ok(BlockNumberOrTag::Number(self.find_slot(tag).await?)),
-        }
-    }
-
-    async fn get_transaction(
-        &self,
-        by: db::TransactionBy,
-    ) -> Result<Option<WithBlockhash<NeonTxInfo>>, Error> {
-        let tx = self.transactions.fetch(by).await?.into_iter().next();
-        Ok(tx)
-    }
-
-    async fn get_logs(&self, filters: LogFilters) -> Result<Vec<Log>, Error> {
-        self.transactions
-            .fetch_rich_logs(
-                filters.block,
-                &filters.address,
-                filters.topics.each_ref().map(Vec::as_slice),
-            )
-            .map_ok(convert_rich_log)
-            .map(|item| Ok(item??))
-            .try_collect::<Vec<_>>()
-            .await
-    }
-}
-
-fn unimplemented<T>() -> RpcResult<T> {
-    Err(ErrorObjectOwned::borrowed(
-        ErrorCode::MethodNotFound.code(),
-        "method not implemented",
-        None,
-    ))
-}
-
-#[serde_as]
-#[allow(unused)]
-#[derive(Deserialize, Debug)]
-pub struct NeonCall {
-    #[serde_as(as = "Option<HashMap<DisplayFromStr,_>>")]
-    #[serde(alias = "solana_overrides")]
-    sol_account_dict: Option<HashMap<Pubkey, Option<SerializedAccount>>>,
-}
-
-#[derive(Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct NeonEmulateResponse {
-    exit_code: String,
-    external_solana_call: bool,
-    revert_before_solana_call: bool,
-    revert_after_solana_call: bool,
-    result: Bytes,
-    num_evm_steps: u64,
-    gas_used: u64,
-    num_iterations: u64,
-    solana_accounts: Vec<SolanaAccount>,
-}
-
-impl From<EmulateResponse> for NeonEmulateResponse {
-    fn from(value: EmulateResponse) -> Self {
-        NeonEmulateResponse {
-            exit_code: value.exit_status,
-            external_solana_call: value.external_solana_call,
-            revert_before_solana_call: value.reverts_before_solana_calls,
-            revert_after_solana_call: value.reverts_after_solana_calls,
-            result: Bytes::from(value.result),
-            num_evm_steps: value.steps_executed,
-            gas_used: value.used_gas,
-            num_iterations: value.iterations,
-            solana_accounts: value.solana_accounts,
-        }
-    }
-}
-
-#[derive(Serialize, Debug, Clone)]
-pub struct NeonAccountResponse {
-    status: BalanceStatus,
-    address: Address,
-    transaction_count: U256,
-    balance: U256,
-    chain_d: U64,
-    solana_address: Pubkey,
-    contract_solana_address: Pubkey,
-}
-
-#[rpc(server, namespace = "neon")]
-trait NeonCustomApi {
-    #[method(name = "proxyVersion", aliases = ["neon_proxy_version"])]
-    fn proxy_version(&self) -> RpcResult<String>;
-
-    #[method(name = "solanaVersion")]
-    async fn solana_version(&self) -> RpcResult<String>;
-
-    #[method(name = "cliVersion", aliases = ["neon_cli_version"])]
-    fn cli_version(&self) -> RpcResult<String>;
-
-    #[method(name = "evmVersion")]
-    async fn evm_version(&self) -> RpcResult<String>;
-
-    #[method(name = "emulate")]
-    async fn emulate(
-        &self,
-        tx: Bytes,
-        neon_call: Option<NeonCall>,
-        tag: Option<BlockNumberOrTag>,
-    ) -> RpcResult<NeonEmulateResponse>;
-    #[method(name = "getAccount")]
-    async fn get_account(
-        &self,
-        address: Address,
-        block_number: Option<BlockId>,
-    ) -> RpcResult<NeonAccountResponse>;
-}
-
-#[rpc(server, namespace = "eth")]
-trait NeonEthApi: EthApiServer {
-    #[method(name = "getTransactionReceipt")]
-    async fn neon_transaction_receipt(
-        &self,
-        hash: B256,
-    ) -> RpcResult<Option<NeonTransactionReceipt>>;
-}
-
-#[async_trait]
-impl NeonEthApiServer for EthApiImpl {
-    async fn neon_transaction_receipt(
-        &self,
-        hash: B256,
-    ) -> RpcResult<Option<NeonTransactionReceipt>> {
-        let receipt = <Self as EthApiServer>::transaction_receipt(self, hash).await?;
-        let receipt = receipt.map(crate::convert::to_neon_receipt);
-        Ok(receipt)
-    }
-}
-
-#[async_trait]
-impl NeonCustomApiServer for EthApiImpl {
-    fn proxy_version(&self) -> RpcResult<String> {
-        let version = format!("Neon-proxy/v{}", env!("CARGO_PKG_VERSION"));
-        Ok(version)
-    }
-
-    async fn solana_version(&self) -> RpcResult<String> {
-        let version = self.neon_api.get_solana_version().await?;
-        let version = format!("Solana/v{}", version.solana_core);
-        Ok(version)
-    }
-
-    async fn evm_version(&self) -> RpcResult<String> {
-        let config = self.neon_api.get_config().await?;
-        let version = format!("Neon-EVM/v{}-{}", config.version, config.revision);
-        Ok(version)
-    }
-
-    fn cli_version(&self) -> RpcResult<String> {
-        let version = format!("Neon-cli/v{}", self.lib_version);
-        Ok(version)
-    }
-
-    async fn emulate(
-        &self,
-        tx: Bytes,
-        neon_call: Option<NeonCall>,
-        tag: Option<BlockNumberOrTag>,
-    ) -> RpcResult<NeonEmulateResponse> {
-        use common::evm_loader::types::Transaction;
-        tracing::info!(?tx, ?neon_call, ?tag, "neon_emulate");
-
-        let tx = Transaction::from_rlp(&tx)
-            .inspect_err(|error| tracing::warn!(%tx, %error, "could not decode transaction"))
-            .map_err(|_| ErrorObjectOwned::from(ErrorCode::InvalidParams))?;
-        let params = TxParams::from_transaction(Address::default().to_neon(), &tx);
-
-        let resp = self.neon_api.emulate_raw(params).await?;
-        Ok(resp.into())
-    }
-
-    async fn get_account(
-        &self,
-        address: Address,
-        block_number: Option<BlockId>,
-    ) -> RpcResult<NeonAccountResponse> {
-        let slot = if let Some(block_number) = block_number {
-            Some(self.get_tag_by_block_id(block_number).await?)
-        } else {
-            None
-        };
-        let balance_address = BalanceAddress {
-            address: address.to_neon(),
-            chain_id: self.chain_id,
-        };
-
-        let account = self
-            .neon_api
-            .get_neon_account(balance_address, slot)
-            .await?;
-        let account = account
-            .first()
-            .ok_or::<ErrorObjectOwned>(ErrorCode::InternalError.into())?;
-        let resp = NeonAccountResponse {
-            status: account.status,
-            address,
-            transaction_count: U256::from(account.trx_count),
-            balance: account.balance.to_reth(),
-            chain_d: U64::from(self.chain_id),
-            solana_address: account.solana_address,
-            contract_solana_address: account.contract_solana_address,
-        };
-        Ok(resp)
-    }
-}
-
-#[async_trait]
-impl NetApiServer for EthApiImpl {
-    fn version(&self) -> RpcResult<String> {
-        Ok(self.chain_id.to_string())
-    }
-
-    fn peer_count(&self) -> RpcResult<PeerCount> {
-        let neon_api = self.neon_api.clone();
-        let peer_count = tokio::task::block_in_place(move || {
-            tokio::runtime::Handle::current()
-                .block_on(async move { neon_api.get_cluster_size().await })
-        })? as u64;
-
-        Ok(PeerCount::Hex(U64::from(peer_count)))
-    }
-
-    fn is_listening(&self) -> RpcResult<bool> {
-        Ok(false)
-    }
-}
-
-#[async_trait]
-impl Web3ApiServer for EthApiImpl {
-    async fn client_version(&self) -> RpcResult<String> {
-        self.evm_version().await
-    }
-
-    fn sha3(&self, data: Bytes) -> RpcResult<B256> {
-        use common::solana_sdk::keccak::Hash;
-        let Hash(hash) = Hash::new(&data);
-        Ok(B256::from(hash))
-    }
-}
+use crate::rpc::unimplemented;
+use crate::rpc::EthApiImpl;
 
 #[async_trait]
 impl EthApiServer for EthApiImpl {
@@ -956,6 +593,27 @@ impl EthApiServer for EthApiImpl {
         _block_number: Option<BlockId>,
     ) -> RpcResult<EIP1186AccountProofResponse> {
         unimplemented()
+    }
+}
+
+#[rpc(server, namespace = "eth")]
+trait NeonEthApi: EthApiServer {
+    #[method(name = "getTransactionReceipt")]
+    async fn neon_transaction_receipt(
+        &self,
+        hash: B256,
+    ) -> RpcResult<Option<NeonTransactionReceipt>>;
+}
+
+#[async_trait]
+impl NeonEthApiServer for EthApiImpl {
+    async fn neon_transaction_receipt(
+        &self,
+        hash: B256,
+    ) -> RpcResult<Option<NeonTransactionReceipt>> {
+        let receipt = <Self as EthApiServer>::transaction_receipt(self, hash).await?;
+        let receipt = receipt.map(crate::convert::to_neon_receipt);
+        Ok(receipt)
     }
 }
 
