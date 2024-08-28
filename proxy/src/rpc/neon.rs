@@ -80,6 +80,15 @@ pub struct EvmParams {
     neon_evm_program_id: String,
 }
 
+#[derive(Serialize, Debug, Clone)]
+pub struct NeonVersions {
+    proxy: String,
+    evm: String,
+    core: String,
+    cli: String,
+    solana: String,
+}
+
 #[rpc(server, namespace = "neon")]
 trait NeonCustomApi {
     #[method(name = "proxyVersion", aliases = ["neon_proxy_version"])]
@@ -93,6 +102,9 @@ trait NeonCustomApi {
 
     #[method(name = "evmVersion")]
     async fn evm_version(&self) -> RpcResult<String>;
+
+    #[method(name = "versions")]
+    async fn versions(&self) -> RpcResult<NeonVersions>;
 
     #[method(name = "emulate")]
     async fn emulate(
@@ -139,6 +151,17 @@ impl NeonCustomApiServer for EthApiImpl {
     fn cli_version(&self) -> RpcResult<String> {
         let version = format!("Neon-cli/v{}", self.lib_version);
         Ok(version)
+    }
+
+    async fn versions(&self) -> RpcResult<NeonVersions> {
+        let versions = NeonVersions {
+            proxy: self.proxy_version()?,
+            evm: self.evm_version().await?,
+            core: format!("Neon-Core-API/v{}", self.lib_version),
+            cli: self.cli_version()?,
+            solana: self.solana_version().await?,
+        };
+        Ok(versions)
     }
 
     async fn emulate(
