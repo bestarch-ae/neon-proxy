@@ -121,7 +121,7 @@ fn parse_transactions(
         let res = transaction::parse(&ix.data, &pubkeys_for_ix, accountsdb, neon_pubkey)?;
         tracing::debug!("parse result: {:?}", res);
         match res {
-            ParseResult::TransactionExecuted(neon_tx) => {
+            ParseResult::TransactionExecuted(neon_tx, holder) => {
                 let parsed_hash = TxHash::from(neon_tx.hash);
                 check_hash(parsed_hash)?;
 
@@ -131,6 +131,9 @@ fn parse_transactions(
                     is_cancelled: false,
                     is_completed: true,
                 }));
+                if let Some(holder) = holder {
+                    actions.push(Action::WriteHolder(HolderOperation::Delete(holder)));
+                }
             }
             ParseResult::TransactionStep(Some(neon_tx)) => {
                 let parsed_hash = TxHash::from(neon_tx.hash);

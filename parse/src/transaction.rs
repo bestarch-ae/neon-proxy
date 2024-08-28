@@ -34,7 +34,7 @@ pub enum BalanceOperation {
 
 #[derive(Debug)]
 pub enum ParseResult {
-    TransactionExecuted(Transaction),
+    TransactionExecuted(Transaction, /* holder */ Option<Pubkey>),
     TransactionStep(Option<Transaction>),
     TransactionCancel(TxHash),
     HolderOperation(HolderOperation),
@@ -89,7 +89,10 @@ pub fn parse(
                 tx = hex::encode(tx.hash),
                 "non-iterative execution from instruction data"
             );
-            ParseResult::TransactionExecuted(tx)
+            let holder = (*tag == tag::TX_EXEC_FROM_DATA)
+                .then(|| accounts.get(0).copied())
+                .flatten();
+            ParseResult::TransactionExecuted(tx, holder)
         }
         tag::TX_EXEC_FROM_DATA_SOLANA_CALL | tag::TX_EXEC_FROM_DATA_SOLANA_CALL_V13 => {
             tracing::debug!(%tag, "found tx exec from data with solana call");
@@ -98,7 +101,12 @@ pub fn parse(
                 tx = hex::encode(tx.hash),
                 "non-iterative execution from instruction data (solana call)"
             );
-            ParseResult::TransactionExecuted(tx)
+
+            let holder = (*tag == tag::TX_EXEC_FROM_DATA)
+                .then(|| accounts.get(0).copied())
+                .flatten();
+
+            ParseResult::TransactionExecuted(tx, holder)
         }
         tag::TX_STEP_FROM_DATA => {
             tracing::debug!("found tx step from data");
@@ -146,12 +154,14 @@ pub fn parse(
                 tx = hex::encode(tx.hash),
                 "non-iterative execution from holder account"
             );
-            ParseResult::TransactionExecuted(tx)
+            let holder = accounts.get(0).copied();
+            ParseResult::TransactionExecuted(tx, holder)
         }
         tag::TX_EXEC_FROM_ACCOUNT_DEPRECATED => {
             tracing::info!("found deprecated tx exec from account");
             let tx = decode_exec_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
-            ParseResult::TransactionExecuted(tx)
+            let holder = accounts.get(0).copied();
+            ParseResult::TransactionExecuted(tx, holder)
         }
         tag::TX_EXEC_FROM_ACCOUNT_SOLANA_CALL => {
             tracing::debug!("found tx exec from account with solana call");
@@ -160,7 +170,8 @@ pub fn parse(
                 tx = hex::encode(tx.hash),
                 "non-iterative execution from holder account (solana call)"
             );
-            ParseResult::TransactionExecuted(tx)
+            let holder = accounts.get(0).copied();
+            ParseResult::TransactionExecuted(tx, holder)
         }
         tag::HOLDER_CREATE => {
             tracing::info!("found holder create instruction");
@@ -185,7 +196,7 @@ pub fn parse(
         tag::TX_EXEC_FROM_DATA_DEPRECATED => {
             tracing::info!("found deprecated tx exec from data");
             let tx = decode_execute_from_ix(&bytes[1..])?;
-            ParseResult::TransactionExecuted(tx)
+            ParseResult::TransactionExecuted(tx, None)
         }
         tag::TX_STEP_FROM_DATA_DEPRECATED => {
             tracing::info!("found deprecated tx step from data");
