@@ -216,6 +216,7 @@ pub struct SimulateConfig {
 pub struct NeonApi {
     channel: Sender<Task>,
     gas_limit_calculator: GasLimitCalculator,
+    pubkey: Pubkey,
 }
 
 impl NeonApi {
@@ -304,9 +305,14 @@ impl NeonApi {
         });
 
         Self {
+            pubkey: neon_pubkey,
             channel: tx,
             gas_limit_calculator: GasLimitCalculator::new(max_tx_account_cnt),
         }
+    }
+
+    pub fn pubkey(&self) -> Pubkey {
+        self.pubkey
     }
 
     pub async fn get_solana_version(&self) -> Result<RpcVersionInfo, NeonApiError> {

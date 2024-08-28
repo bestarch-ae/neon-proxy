@@ -65,6 +65,21 @@ pub struct NeonAccountResponse {
     contract_solana_address: Pubkey,
 }
 
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EvmParams {
+    neon_account_seed_version: u64,
+    neon_max_evm_steps_in_last_iteration: u32,
+    neon_min_evm_steps_in_iteration: u64,
+    neon_gas_limit_multiplier_without_chain_id: u32,
+    neon_holder_message_size: usize,
+    neon_payment_to_treasury: i32,
+    neon_storage_entries_in_contract_account: u32,
+    neon_treasury_pool_count: u64,
+    neon_treasury_pool_seed: String,
+    neon_evm_program_id: String,
+}
+
 #[rpc(server, namespace = "neon")]
 trait NeonCustomApi {
     #[method(name = "proxyVersion", aliases = ["neon_proxy_version"])]
@@ -99,6 +114,9 @@ trait NeonCustomApi {
 
     #[method(name = "finalizedBlockNumber")]
     async fn finalized_block_number(&self) -> RpcResult<U64>;
+
+    #[method(name = "getEvmParams")]
+    async fn evm_params(&self) -> RpcResult<EvmParams>;
 }
 
 #[async_trait]
@@ -189,5 +207,50 @@ impl NeonCustomApiServer for EthApiImpl {
             .await
             .map(U64::from)
             .map_err(|_| ErrorObjectOwned::from(ErrorCode::InternalError))
+    }
+
+    async fn evm_params(&self) -> RpcResult<EvmParams> {
+        use std::collections::BTreeMap;
+        let config = self.neon_api.get_config().await?.config;
+        tracing::info!(?config, "EVM CONFIG");
+        fn get_int_param<T: std::str::FromStr>(
+            map: &BTreeMap<String, String>,
+            name: &str,
+        ) -> Option<T> {
+            map.get(name).and_then(|v| v.parse().ok())
+        }
+        let params = EvmParams {
+            neon_account_seed_version: get_int_param(&config, "NEON_ACCOUNT_SEED_VERSION")
+                .unwrap_or_default(),
+            neon_max_evm_steps_in_last_iteration: get_int_param(
+                &config,
+                "NEON_EVM_STEPS_LAST_ITERATION_MAX",
+            )
+            .unwrap_or_default(),
+            neon_min_evm_steps_in_iteration: get_int_param(&config, "NEON_EVM_STEPS_MIN")
+                .unwrap_or_default(),
+            neon_gas_limit_multiplier_without_chain_id: get_int_param(
+                &config,
+                "NEON_GAS_LIMIT_MULTIPLIER_NO_CHAINID",
+            )
+            .unwrap_or_default(),
+            neon_holder_message_size: get_int_param(&config, "NEON_HOLDER_MSG_SIZE")
+                .unwrap_or_default(),
+            neon_payment_to_treasury: get_int_param(&config, "NEON_PAYMENT_TO_TREASURE")
+                .unwrap_or_default(),
+            neon_storage_entries_in_contract_account: get_int_param(
+                &config,
+                "NEON_STORAGE_ENTRIES_IN_CONTRACT_ACCOUNT",
+            )
+            .unwrap_or_default(),
+            neon_treasury_pool_count: get_int_param(&config, "NEON_TREASURY_POOL_COUNT")
+                .unwrap_or_default(),
+            neon_treasury_pool_seed: config
+                .get("NEON_TREASURY_POOL_SEED")
+                .cloned()
+                .unwrap_or_default(),
+            neon_evm_program_id: self.neon_api.pubkey().to_string(),
+        };
+        Ok(params)
     }
 }
