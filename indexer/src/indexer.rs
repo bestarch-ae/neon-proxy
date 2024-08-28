@@ -207,7 +207,8 @@ impl Indexer {
 
             metrics().transactions_processed.inc();
 
-            let _span = tracing::info_span!("solana transaction", signature = %signature).entered();
+            let _span =
+                tracing::info_span!("solana transaction", signature = %signature, %slot).entered();
 
             self.adb.set_slot_idx(slot, tx_idx);
 
