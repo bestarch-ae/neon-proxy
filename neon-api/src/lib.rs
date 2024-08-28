@@ -4,6 +4,7 @@ use std::borrow::Borrow;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use common::neon_lib::commands::get_balance::GetBalanceResponse;
 use reth_primitives::{BlockNumberOrTag, Bytes};
 use serde::Deserialize;
 use thiserror::Error;
@@ -122,14 +123,6 @@ impl Task {
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 enum TaskCommand {
-    GetBalance {
-        addr: BalanceAddress,
-        response: oneshot::Sender<Result<U256, NeonError>>,
-    },
-    GetTransactionCount {
-        addr: BalanceAddress,
-        response: oneshot::Sender<Result<u64, NeonError>>,
-    },
     EmulateCall {
         tx: TxParams,
         response: oneshot::Sender<Result<EmulateResponse, NeonApiError>>,
@@ -158,6 +151,10 @@ enum TaskCommand {
     GetCode {
         response: oneshot::Sender<Result<Option<Bytes>, NeonApiError>>,
         address: Address,
+    },
+    GetNeonAccount {
+        response: oneshot::Sender<Result<Vec<GetBalanceResponse>, NeonApiError>>,
+        address: BalanceAddress,
     },
 }
 
@@ -219,6 +216,7 @@ pub struct SimulateConfig {
 pub struct NeonApi {
     channel: Sender<Task>,
     gas_limit_calculator: GasLimitCalculator,
+    pubkey: Pubkey,
 }
 
 impl NeonApi {
@@ -307,9 +305,14 @@ impl NeonApi {
         });
 
         Self {
+            pubkey: neon_pubkey,
             channel: tx,
             gas_limit_calculator: GasLimitCalculator::new(max_tx_account_cnt),
         }
+    }
+
+    pub fn pubkey(&self) -> Pubkey {
+        self.pubkey
     }
 
     pub async fn get_solana_version(&self) -> Result<RpcVersionInfo, NeonApiError> {
@@ -368,16 +371,12 @@ impl NeonApi {
         addr: BalanceAddress,
         tag: Option<BlockNumberOrTag>,
     ) -> Result<U256, NeonApiError> {
-        let (tx, rx) = oneshot::channel();
-        self.channel
-            .send(Task::new(
-                TaskCommand::GetBalance { addr, response: tx },
-                tag,
-                None,
-            ))
-            .await
-            .unwrap();
-        Ok(rx.await.unwrap()?)
+        let account = self.get_neon_account(addr, tag).await?;
+        let mut balance = common::ethnum::U256::default();
+        for resp in account {
+            balance = resp.balance;
+        }
+        Ok(balance)
     }
 
     pub async fn get_transaction_count(
@@ -385,16 +384,32 @@ impl NeonApi {
         addr: BalanceAddress,
         tag: Option<BlockNumberOrTag>,
     ) -> Result<u64, NeonApiError> {
+        let account = self.get_neon_account(addr, tag).await?;
+        let mut count = 0;
+        for resp in account {
+            count = resp.trx_count;
+        }
+        Ok(count)
+    }
+
+    pub async fn get_neon_account(
+        &self,
+        addr: BalanceAddress,
+        tag: Option<BlockNumberOrTag>,
+    ) -> Result<Vec<GetBalanceResponse>, NeonApiError> {
         let (tx, rx) = oneshot::channel();
         self.channel
             .send(Task::new(
-                TaskCommand::GetTransactionCount { addr, response: tx },
+                TaskCommand::GetNeonAccount {
+                    response: tx,
+                    address: addr,
+                },
                 tag,
                 None,
             ))
             .await
             .unwrap();
-        Ok(rx.await.unwrap()?)
+        rx.await.unwrap()
     }
 
     pub async fn call(
@@ -640,42 +655,6 @@ impl NeonApi {
                 let _ = response.send(resp);
             }
 
-            TaskCommand::GetBalance { addr, response } => {
-                let resp =
-                    commands::get_balance::execute(&ctx.default_rpc, &ctx.neon_pubkey, &[addr])
-                        .await;
-                tracing::info!(?resp, "get_balance");
-                let resp = match resp {
-                    Ok(resp) => {
-                        let mut balance = common::ethnum::U256::default();
-                        for resp in resp {
-                            balance = resp.balance;
-                        }
-                        Ok(balance)
-                    }
-                    Err(err) => Err(err),
-                };
-                let _ = response.send(resp);
-            }
-
-            TaskCommand::GetTransactionCount { addr, response } => {
-                let resp =
-                    commands::get_balance::execute(&ctx.default_rpc, &ctx.neon_pubkey, &[addr])
-                        .await;
-                tracing::info!(?resp, "get_transaction_count");
-                let resp = match resp {
-                    Ok(resp) => {
-                        let mut count = 0;
-                        for resp in resp {
-                            count = resp.trx_count;
-                        }
-                        Ok(count)
-                    }
-                    Err(err) => Err(err),
-                };
-                let _ = response.send(resp);
-            }
-
             TaskCommand::GetConfig(response) => {
                 let resp =
                     commands::get_config::execute(&ctx.rpc_client_finalized, ctx.neon_pubkey).await;
@@ -739,6 +718,13 @@ impl NeonApi {
                         .map_err(NeonError::from)
                         .map_err(Into::into),
                 );
+            }
+
+            TaskCommand::GetNeonAccount { response, address } => {
+                let resp =
+                    commands::get_balance::execute(&ctx.default_rpc, &ctx.neon_pubkey, &[address])
+                        .await;
+                let _ = response.send(resp.map_err(NeonError::from).map_err(Into::into));
             }
         }
     }
