@@ -721,9 +721,12 @@ impl NeonApi {
             }
 
             TaskCommand::GetNeonAccount { response, address } => {
-                let resp =
-                    commands::get_balance::execute(&ctx.default_rpc, &ctx.neon_pubkey, &[address])
-                        .await;
+                let resp = commands::get_balance::execute(
+                    &ctx.rpc_client_simulation,
+                    &ctx.neon_pubkey,
+                    &[address],
+                )
+                .await;
                 let _ = response.send(resp.map_err(NeonError::from).map_err(Into::into));
             }
         }
