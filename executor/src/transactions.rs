@@ -33,7 +33,7 @@ use solana_api::solana_api::SolanaApi;
 use crate::transactions::holder::AcquireHolder;
 use crate::ExecuteRequest;
 
-use self::alt::AltInfo;
+use self::alt::{AltInfo, AltManager, AltUpdateInfo};
 use self::emulator::{get_chain_id, Emulator, IterInfo};
 use self::holder::{HolderInfo, HolderManager};
 use self::ongoing::{TxData, TxStage};
@@ -60,6 +60,7 @@ pub struct TransactionBuilder {
 
     emulator: Emulator,
     holder_mgr: HolderManager,
+    alt_mgr: AltManager,
 
     chains: Vec<ChainInfo>,
     version: Version,
@@ -84,6 +85,7 @@ impl TransactionBuilder {
             solana_api.clone(),
             max_holders,
         );
+        let alt_mgr = AltManager::new(operator.pubkey(), solana_api.clone());
         let mut this = Self {
             program_id,
             solana_api,
@@ -94,6 +96,7 @@ impl TransactionBuilder {
             treasury_pool_seed: Vec::new(),
             emulator,
             holder_mgr,
+            alt_mgr,
             chains: Vec::new(),
             version: Self::DEFAULT_NEON_EVM_VERSION,
         };
@@ -113,6 +116,7 @@ impl TransactionBuilder {
         )
         .await?;
         new.holder_mgr = self.holder_mgr.clone();
+        new.alt_mgr = self.alt_mgr.clone();
         Ok(new)
     }
 
@@ -264,27 +268,8 @@ impl TransactionBuilder {
             TxStage::AltFill {
                 info,
                 tx_data,
-                holder: Some(holder),
-            } if info.is_empty() => self
-                .execute_from_holder_emulated(holder, tx_data, Some(info))
-                .await
-                .map(Some),
-            TxStage::AltFill {
-                info,
-                tx_data,
-                holder: None,
-            } if info.is_empty() => {
-                let chain_id = get_chain_id(&tx_data.envelope)
-                    .context("empty chain id in emulated from_data alt transaction")?;
-                self.dispatch_data_execution_by_version(tx_data, chain_id, Some(info))
-                    .await
-                    .map(Some)
-            }
-            TxStage::AltFill {
-                info,
-                tx_data,
                 holder,
-            } => self.fill_alt(info, tx_data, holder).map(Some),
+            } => self.fill_alt(info, tx_data, holder).await.map(Some),
             TxStage::IterativeExecution {
                 tx_data,
                 holder,
@@ -302,6 +287,68 @@ impl TransactionBuilder {
                 .await
                 .map(Some),
             TxStage::Final { .. } => Ok(None),
+        }
+    }
+}
+
+/// ## ALT helpers
+impl TransactionBuilder {
+    async fn start_from_alt(
+        &self,
+        tx_data: TxData,
+        holder: Option<HolderInfo>,
+    ) -> anyhow::Result<OngoingTransaction> {
+        let acquire = self
+            .alt_mgr
+            .acquire(tx_data.emulate.solana_accounts.iter().map(|acc| acc.pubkey))
+            .await?;
+        match acquire {
+            alt::UpdateProgress::WriteChunk { ix, info } => {
+                tracing::debug!(
+                    tx_hash = %tx_data.envelope.tx_hash(), ?info, ?holder,
+                    "creating new ALT"
+                );
+                Ok(TxStage::alt_fill(info, tx_data, holder).ongoing(&[ix], &self.pubkey()))
+            }
+            alt::UpdateProgress::Ready(alt) => self.proceed_with_alt(tx_data, holder, alt).await,
+        }
+    }
+
+    async fn fill_alt(
+        &self,
+        info: AltUpdateInfo,
+        tx_data: TxData,
+        holder: Option<HolderInfo>,
+    ) -> anyhow::Result<OngoingTransaction> {
+        match self.alt_mgr.update(info) {
+            alt::UpdateProgress::WriteChunk { ix, info } => {
+                tracing::debug!(
+                    tx_hash = %tx_data.envelope.tx_hash(), ?info, ?holder,
+                    "write next ALT chunk"
+                );
+                Ok(TxStage::alt_fill(info, tx_data, holder).ongoing(&[ix], &self.pubkey()))
+            }
+            alt::UpdateProgress::Ready(info) => self.proceed_with_alt(tx_data, holder, info).await,
+        }
+    }
+
+    async fn proceed_with_alt(
+        &self,
+        tx_data: TxData,
+        holder: Option<HolderInfo>,
+        alt: AltInfo,
+    ) -> anyhow::Result<OngoingTransaction> {
+        match holder {
+            Some(holder) => {
+                self.execute_from_holder_emulated(holder, tx_data, Some(alt))
+                    .await
+            }
+            None => {
+                let chain_id = get_chain_id(&tx_data.envelope)
+                    .context("empty chain id in emulated from_data alt transaction")?;
+                self.dispatch_data_execution_by_version(tx_data, chain_id, Some(alt))
+                    .await
+            }
         }
     }
 }
@@ -832,7 +879,7 @@ impl TransactionBuilder {
         alt: Option<AltInfo>,
     ) -> anyhow::Result<OngoingTransaction> {
         Ok(match alt {
-            Some(alt) => stage.ongoing_alt(ixs, &self.pubkey(), alt.into_account())?,
+            Some(alt) => stage.ongoing_alt(ixs, &self.pubkey(), alt)?,
             None => stage.ongoing(ixs, &self.pubkey()),
         })
     }

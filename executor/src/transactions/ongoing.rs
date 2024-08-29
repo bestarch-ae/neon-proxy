@@ -12,7 +12,7 @@ use common::solana_sdk::transaction::VersionedTransaction;
 
 use crate::ExecuteRequest;
 
-use super::alt::AltInfo;
+use super::alt::{AltInfo, AltUpdateInfo};
 use super::emulator::{get_chain_id, IterInfo};
 use super::holder::HolderInfo;
 
@@ -35,7 +35,7 @@ pub(super) enum TxStage {
         tx: ExecuteRequest,
     },
     AltFill {
-        info: AltInfo,
+        info: AltUpdateInfo,
         tx_data: TxData,
         holder: Option<HolderInfo>,
     },
@@ -89,7 +89,7 @@ impl TxStage {
         Self::HolderFill { info, tx }
     }
 
-    pub fn alt_fill(info: AltInfo, tx_data: TxData, holder: Option<HolderInfo>) -> Self {
+    pub fn alt_fill(info: AltUpdateInfo, tx_data: TxData, holder: Option<HolderInfo>) -> Self {
         Self::AltFill {
             info,
             tx_data,
