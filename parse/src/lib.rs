@@ -134,7 +134,13 @@ fn parse_transactions(
             }
             ParseResult::TransactionStep(Some(neon_tx)) => {
                 let parsed_hash = TxHash::from(neon_tx.hash);
-                check_hash(parsed_hash)?;
+                let neon_tx = if check_hash(parsed_hash).is_err() {
+                    neon_sig
+                        .and_then(|sig| txsdb.get_by_hash(sig))
+                        .ok_or(Error::InvalidStep)?
+                } else {
+                    neon_tx
+                };
 
                 actions.push(Action::AddTransaction(TransactionMeta {
                     neon_transaction: neon_tx,
