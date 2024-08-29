@@ -45,6 +45,8 @@ pub enum Error {
     InvalidStep,
     #[error("Failed to decode transaction")]
     Transaction(#[from] transaction::Error),
+    #[error("Parsing inconsitency")]
+    Inconsistency,
 }
 
 #[allow(dead_code)] // TODO
@@ -91,6 +93,20 @@ fn parse_transactions(
     };
     let mut actions = Vec::new();
 
+    let check_hash = |parsed_hash| {
+        if let Some(neon_sig) = neon_sig {
+            if neon_sig != parsed_hash {
+                tracing::warn!(
+                    "parsed hash {:?} is different from expected {:?}",
+                    parsed_hash,
+                    neon_sig
+                );
+                return Err(Error::Inconsistency);
+            }
+        };
+        Ok(())
+    };
+
     for (idx, ix) in tx.message.instructions().iter().enumerate() {
         tracing::debug!("instruction {:?}", ix);
         if ix.program_id_index != neon_idx as u8 {
@@ -106,6 +122,9 @@ fn parse_transactions(
         tracing::debug!("parse result: {:?}", res);
         match res {
             ParseResult::TransactionExecuted(neon_tx) => {
+                let parsed_hash = TxHash::from(neon_tx.hash);
+                check_hash(parsed_hash)?;
+
                 actions.push(Action::AddTransaction(TransactionMeta {
                     neon_transaction: neon_tx,
                     sol_ix_idx: idx,
@@ -114,6 +133,15 @@ fn parse_transactions(
                 }));
             }
             ParseResult::TransactionStep(Some(neon_tx)) => {
+                let parsed_hash = TxHash::from(neon_tx.hash);
+                let neon_tx = if check_hash(parsed_hash).is_err() {
+                    neon_sig
+                        .and_then(|sig| txsdb.get_by_hash(sig))
+                        .ok_or(Error::InvalidStep)?
+                } else {
+                    neon_tx
+                };
+
                 actions.push(Action::AddTransaction(TransactionMeta {
                     neon_transaction: neon_tx,
                     sol_ix_idx: idx,
@@ -134,6 +162,8 @@ fn parse_transactions(
                 }));
             }
             ParseResult::TransactionCancel(hash) => {
+                check_hash(hash)?;
+
                 actions.push(Action::CancelTransaction {
                     hash,
                     total_gas: U256::ZERO,
