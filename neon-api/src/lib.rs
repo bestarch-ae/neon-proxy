@@ -37,6 +37,9 @@ use solana_api::solana_rpc_client_api::response::RpcVersionInfo;
 
 use self::gas_limit_calculator::{GasLimitCalculator, GasLimitError};
 
+/* value from neon-proxy.py */
+const DEFAULT_MAX_EMULATE_EVM_STEP_COUNT: u64 = 500_000;
+
 #[derive(Copy, Clone, Debug)]
 enum ExitStatus {
     Success,
@@ -568,7 +571,7 @@ impl NeonApi {
                         .expect("config didnt fail"); // TODO
 
                 let req = EmulateRequest {
-                    step_limit: None,
+                    step_limit: Some(DEFAULT_MAX_EMULATE_EVM_STEP_COUNT),
                     chains: Some(config.chains.clone()),
                     trace_config: None,
                     accounts: Vec::new(),
@@ -603,7 +606,7 @@ impl NeonApi {
                         .expect("config didnt fail"); // TODO
 
                 let req = EmulateRequest {
-                    step_limit: None,
+                    step_limit: Some(DEFAULT_MAX_EMULATE_EVM_STEP_COUNT),
                     chains: Some(config.chains.clone()),
                     trace_config: None,
                     accounts: Vec::new(),
@@ -632,7 +635,7 @@ impl NeonApi {
                         .expect("config didnt fail"); // TODO
 
                 let req = EmulateRequest {
-                    step_limit: None,
+                    step_limit: Some(DEFAULT_MAX_EMULATE_EVM_STEP_COUNT),
                     chains: Some(config.chains),
                     trace_config: None,
                     accounts: Vec::new(),
