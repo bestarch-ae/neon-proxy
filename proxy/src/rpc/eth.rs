@@ -465,7 +465,13 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns the current price per gas in wei.
     async fn gas_price(&self) -> RpcResult<U256> {
-        let price = self.mp_gas_prices.get_gas_price(self.chain_id);
+        let price = self.mp_gas_prices.get_gas_price(self.chain_id).ok_or({
+            ErrorObjectOwned::owned(
+                -32000,
+                "Failed to calculate gas price. Try again later".to_string(),
+                None::<()>,
+            )
+        })?;
         Ok(U256::from(price))
     }
 

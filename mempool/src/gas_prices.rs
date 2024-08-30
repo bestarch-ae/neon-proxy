@@ -149,15 +149,15 @@ impl GasPrices {
 
     /// Get the gas price for the default token, or 0 if the price is not available.
     /// Precision is 18 decimal places.
-    pub fn get_gas_price(&self, chain_id: u64) -> u128 {
+    pub fn get_gas_price(&self, chain_id: u64) -> Option<u128> {
         if let Some(const_gas_price) = self.const_gas_price {
-            return const_gas_price;
+            return Some(const_gas_price);
         }
         let pubkey = self
             .chains
             .get(&chain_id)
             .unwrap_or(&self.default_token_pkey);
-        self.get_gas_for_token_pkey(pubkey).unwrap_or(0)
+        self.get_gas_for_token_pkey(pubkey)
     }
 
     fn get_gas_for_token_pkey(&self, token_pkey: &Pubkey) -> Option<u128> {
