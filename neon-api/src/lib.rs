@@ -376,6 +376,7 @@ impl NeonApi {
     ) -> Result<U256, NeonApiError> {
         let account = self.get_neon_account(addr, tag).await?;
         let mut balance = common::ethnum::U256::default();
+        tracing::info!(?addr, ?account, "get_balance");
         for resp in account {
             balance = resp.balance;
         }
@@ -578,6 +579,7 @@ impl NeonApi {
                     tx,
                     solana_overrides: None,
                 };
+                tracing::info!(?req, "estimate_gas");
                 if let RpcEnum::CloneRpcClient(rpc) = &ctx.default_rpc {
                     tracing::debug!(commitment = ?rpc.commitment(), "estimate gas task command, emulate commitment");
                 }
@@ -613,6 +615,7 @@ impl NeonApi {
                     tx,
                     solana_overrides: None,
                 };
+                tracing::info!(?req, "emulate");
                 let resp = commands::emulate::execute(
                     &ctx.rpc_client_simulation,
                     ctx.neon_pubkey,
@@ -628,7 +631,6 @@ impl NeonApi {
             }
 
             TaskCommand::EmulateCall { tx, response } => {
-                tracing::info!(?tx, "emulate_call");
                 let config =
                     commands::get_config::execute(&ctx.rpc_client_finalized, ctx.neon_pubkey)
                         .await
@@ -665,6 +667,7 @@ impl NeonApi {
             }
 
             TaskCommand::Simulate { request, response } => {
+                tracing::info!(?request, "simulate");
                 let resp =
                     commands::simulate_solana::execute(&ctx.rpc_client_simulation, request).await;
                 let _ = response.send(resp);
