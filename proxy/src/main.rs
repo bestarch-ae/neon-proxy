@@ -253,7 +253,7 @@ async fn main() {
     let chains = config
         .chains
         .iter()
-        .map(|info| (info.id, info.name.clone()))
+        .map(|info| (info.id, info.name.to_uppercase()))
         .collect::<HashMap<_, _>>();
     let default_token_name = opts.default_token_name.to_lowercase();
     let default_chain_id = config
