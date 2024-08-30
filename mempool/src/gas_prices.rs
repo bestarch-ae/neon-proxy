@@ -56,7 +56,8 @@ impl GasPrices {
         let prices_thread = Arc::clone(&prices);
         let ws_url_thread = config.ws_url;
 
-        let (base_token_pkey, default_token_pkey) = if calculator_config.const_gas_price.is_some() {
+        let (base_token_pkey, _default_token_pkey) = if calculator_config.const_gas_price.is_some()
+        {
             info!("using const_gas_price");
             (
                 symbology
