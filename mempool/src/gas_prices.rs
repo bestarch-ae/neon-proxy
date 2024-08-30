@@ -157,6 +157,7 @@ impl GasPrices {
             return Some(const_gas_price);
         }
         let name = self.chains.get(&chain_id)?;
+        tracing::debug!(%name, %chain_id, "get_gas_price");
         let pubkey = self.symbology.get(name)?;
         tracing::debug!(%pubkey, %chain_id, "get_gas_price");
         self.get_gas_for_token_pkey(pubkey)
