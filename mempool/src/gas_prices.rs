@@ -36,7 +36,7 @@ pub struct GasPrices {
     price_calculator: GasPriceCalculator,
     const_gas_price: Option<u128>,
     base_token_pkey: Pubkey,
-    default_token_pkey: Pubkey,
+    chains: HashMap<u64, Pubkey>,
 }
 
 impl GasPrices {
@@ -50,6 +50,7 @@ impl GasPrices {
         rpc_client: RpcClient,
         symbology: Symbology,
         calculator_config: GasPriceCalculatorConfig,
+        chains: HashMap<u64, Pubkey>,
     ) -> Result<Self, MempoolError> {
         let prices = Arc::new(DashMap::new());
         let prices_thread = Arc::clone(&prices);
@@ -140,19 +141,21 @@ impl GasPrices {
             price_calculator: GasPriceCalculator::new(calculator_config),
             const_gas_price,
             base_token_pkey,
-            default_token_pkey,
+            chains,
         })
     }
 
     /// Get the gas price for the default token, or 0 if the price is not available.
     /// Precision is 18 decimal places.
-    pub fn get_gas_price(&self) -> u128 {
+    pub fn get_gas_price(&self, chain_id: u64) -> u128 {
         if let Some(const_gas_price) = self.const_gas_price {
             return const_gas_price;
         }
-
-        self.get_gas_for_token_pkey(&self.default_token_pkey)
-            .unwrap_or(0)
+        if let Some(pubkey) = self.chains.get(&chain_id) {
+            self.get_gas_for_token_pkey(pubkey).unwrap_or(0)
+        } else {
+            0
+        }
     }
 
     fn get_gas_for_token_pkey(&self, token_pkey: &Pubkey) -> Option<u128> {

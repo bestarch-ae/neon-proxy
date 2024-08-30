@@ -250,6 +250,11 @@ async fn main() {
         .get_config()
         .await
         .expect("failed to get EVM config");
+    let chains = config
+        .chains
+        .iter()
+        .map(|info| (info.id, info.token))
+        .collect::<HashMap<_, _>>();
     let default_token_name = opts.default_token_name.to_lowercase();
     let default_chain_id = config
         .chains
@@ -305,6 +310,7 @@ async fn main() {
         rpc_client,
         pyth_symbology,
         mp_gas_calculator_config,
+        chains,
     )
     .expect("failed to create gas prices");
 
