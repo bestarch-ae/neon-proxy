@@ -36,6 +36,7 @@ pub struct GasPrices {
     price_calculator: GasPriceCalculator,
     const_gas_price: Option<u128>,
     base_token_pkey: Pubkey,
+    default_token_pkey: Pubkey,
     chains: HashMap<u64, Pubkey>,
 }
 
@@ -56,8 +57,7 @@ impl GasPrices {
         let prices_thread = Arc::clone(&prices);
         let ws_url_thread = config.ws_url;
 
-        let (base_token_pkey, _default_token_pkey) = if calculator_config.const_gas_price.is_some()
-        {
+        let (base_token_pkey, default_token_pkey) = if calculator_config.const_gas_price.is_some() {
             info!("using const_gas_price");
             (
                 symbology
@@ -142,6 +142,7 @@ impl GasPrices {
             price_calculator: GasPriceCalculator::new(calculator_config),
             const_gas_price,
             base_token_pkey,
+            default_token_pkey,
             chains,
         })
     }
@@ -152,11 +153,11 @@ impl GasPrices {
         if let Some(const_gas_price) = self.const_gas_price {
             return const_gas_price;
         }
-        if let Some(pubkey) = self.chains.get(&chain_id) {
-            self.get_gas_for_token_pkey(pubkey).unwrap_or(0)
-        } else {
-            0
-        }
+        let pubkey = self
+            .chains
+            .get(&chain_id)
+            .unwrap_or(&self.default_token_pkey);
+        self.get_gas_for_token_pkey(pubkey).unwrap_or(0)
     }
 
     fn get_gas_for_token_pkey(&self, token_pkey: &Pubkey) -> Option<u128> {
