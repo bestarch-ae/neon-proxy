@@ -21,4 +21,6 @@ pub enum MempoolError {
     BaseTokenNotFound(String),
     #[error("default token not found in pyth symbology: {0}")]
     DefaultTokenNotFound(String),
+    #[error("token not found in pyth symbology: {0}")]
+    TokenNotFound(String),
 }
