@@ -163,7 +163,7 @@ struct Args {
     /// Constant gas price
     const_gas_price: Option<u128>,
 
-    #[arg(long, env, default_value = "50000")]
+    #[arg(long, env, default_value = "10000")]
     /// Operator fee
     operator_fee: u128,
 
