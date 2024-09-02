@@ -115,6 +115,11 @@ pub enum TransactionBy {
     Slot(u64),
     BlockNumberAndIndex(u64, u64),
     BlockHashAndIndex(Hash, u64),
+    SenderNonce {
+        address: Address,
+        nonce: u64,
+        chain_id: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -123,6 +128,9 @@ struct TransactionByParams {
     tx_hash: Option<TxHash>,
     tx_idx: Option<u64>,
     block_hash: Option<Hash>,
+    sender: Option<PgAddress>,
+    nonce: Option<i64>,
+    chain_id: Option<i64>,
 }
 
 impl TransactionBy {
@@ -144,6 +152,16 @@ impl TransactionBy {
             TransactionBy::BlockHashAndIndex(hash, idx) => TransactionByParams {
                 block_hash: Some(hash),
                 tx_idx: Some(idx),
+                ..Default::default()
+            },
+            TransactionBy::SenderNonce {
+                address,
+                nonce,
+                chain_id,
+            } => TransactionByParams {
+                sender: Some(PgAddress::from(address)),
+                nonce: Some(nonce as i64),
+                chain_id: Some(chain_id as i64),
                 ..Default::default()
             },
         }
@@ -381,6 +399,9 @@ impl TransactionRepo {
             tx_hash,
             block_hash,
             tx_idx,
+            sender,
+            nonce,
+            chain_id,
         } = by.params();
         tracing::debug!(
             ?slot,
@@ -428,9 +449,17 @@ impl TransactionRepo {
                     WHERE NOT COALESCE(L.is_reverted, FALSE)) TL
                     WHERE
                         (TL.is_completed OR TL.is_canceled) AND
-                        TL.neon_sig = $1 OR ($2 AND block_slot = $3) AND
-                        (TL.tx_idx = $5 OR $6) AND
-                        (TL.block_hash = $7 OR $8)
+                        (TL.neon_sig = $1) --signature match
+                        OR (
+                            ($2 AND block_slot = $3) AND
+                            (TL.tx_idx = $5 OR $6) AND
+                            (TL.block_hash = $7 OR $8)
+                        ) --block match
+                        OR (
+                            (TL.from_addr = $9 OR $10) AND
+                            (TL.nonce = $11 OR $12) AND
+                            (TL.chain_id = $13 OR $14)
+                        ) -- from + nonce + chain
                     ORDER BY TL.block_slot,TL.tx_idx,tx_log_idx
            "#,
         )
@@ -442,6 +471,12 @@ impl TransactionRepo {
         .bind(tx_idx.is_none()) // 6
         .bind(block_hash.map(PgSolanaBlockHash::from).unwrap_or_default()) // 7
         .bind(block_hash.is_none()) // 8
+        .bind(sender.unwrap_or_default()) // 9
+        .bind(sender.is_none()) // 10
+        .bind(nonce.unwrap_or(0)) // 11
+        .bind(nonce.is_none()) // 12
+        .bind(chain_id.unwrap_or(0)) // 13
+        .bind(chain_id.is_none()) // 14
         .fetch(&self.pool)
         .map(move |row| row.map(|row: NeonTransactionRowWithLogs| row.with_logs()))
         .map(move |res| Ok(res??))

@@ -4,6 +4,7 @@ use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::types::{ErrorCode, ErrorObjectOwned};
 use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, U256, U64};
+use rpc_api_types::Transaction;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
 
@@ -13,7 +14,9 @@ use common::neon_lib::commands::get_balance::BalanceStatus;
 use common::neon_lib::types::{BalanceAddress, SerializedAccount, TxParams};
 use common::solana_sdk::pubkey::Pubkey;
 
+use crate::convert::neon_to_eth;
 use crate::rpc::EthApiImpl;
+use crate::Error;
 
 #[serde_as]
 #[allow(unused)]
@@ -129,6 +132,13 @@ trait NeonCustomApi {
 
     #[method(name = "getEvmParams")]
     async fn evm_params(&self) -> RpcResult<EvmParams>;
+
+    #[method(name = "getTransactionBySenderNonce")]
+    async fn transaction_by_sender_nonce(
+        &self,
+        sender: Address,
+        nonce: U256,
+    ) -> RpcResult<Option<Transaction>>;
 }
 
 #[async_trait]
@@ -275,5 +285,24 @@ impl NeonCustomApiServer for EthApiImpl {
             neon_evm_program_id: self.neon_api.pubkey().to_string(),
         };
         Ok(params)
+    }
+
+    async fn transaction_by_sender_nonce(
+        &self,
+        sender: Address,
+        nonce: U256,
+    ) -> RpcResult<Option<Transaction>> {
+        tracing::info!(%sender, %nonce, "by sender nonce");
+        let tx = self
+            .get_transaction(db::TransactionBy::SenderNonce {
+                address: sender.to_neon(),
+                nonce: nonce.to_neon().as_u64(),
+                chain_id: self.chain_id,
+            })
+            .await?
+            .map(|tx| neon_to_eth(tx.inner, tx.blockhash).map_err(Error::from))
+            .transpose()?;
+        tracing::info!("tx {:?}", tx);
+        Ok(tx)
     }
 }
