@@ -299,12 +299,18 @@ async fn main() {
         base_token: opts.chain_token_name.to_owned(),
         default_token: opts.default_token_name.to_owned(),
     };
+    let chain_token_map = config
+        .chains
+        .iter()
+        .map(|c| (c.id, c.name.to_uppercase()))
+        .collect::<HashMap<_, _>>();
     let mp_gas_prices = mempool::GasPrices::try_new(
         gas_prices_config,
         neon_api.clone(),
         rpc_client,
         pyth_symbology,
         mp_gas_calculator_config,
+        chain_token_map,
     )
     .expect("failed to create gas prices");
 

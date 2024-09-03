@@ -37,6 +37,7 @@ pub struct GasPrices {
     const_gas_price: Option<u128>,
     base_token_pkey: Pubkey,
     default_token_pkey: Pubkey,
+    chain_token_map: HashMap<u64, Pubkey>,
 }
 
 impl GasPrices {
@@ -50,6 +51,7 @@ impl GasPrices {
         rpc_client: RpcClient,
         symbology: Symbology,
         calculator_config: GasPriceCalculatorConfig,
+        chain_token_map: HashMap<u64, String>,
     ) -> Result<Self, MempoolError> {
         let prices = Arc::new(DashMap::new());
         let prices_thread = Arc::clone(&prices);
@@ -77,6 +79,17 @@ impl GasPrices {
                     .ok_or(MempoolError::DefaultTokenNotFound(config.default_token))?,
             )
         };
+
+        let chain_token_map = chain_token_map
+            .iter()
+            .map(|(&chain_id, token)| {
+                let token_pkey = symbology
+                    .get(token)
+                    .copied()
+                    .ok_or(MempoolError::TokenNotFound(token.clone()))?;
+                Ok((chain_id, token_pkey))
+            })
+            .collect::<Result<HashMap<_, _>, MempoolError>>()?;
 
         if !symbology.is_empty() {
             tokio::spawn(async move {
@@ -141,18 +154,22 @@ impl GasPrices {
             const_gas_price,
             base_token_pkey,
             default_token_pkey,
+            chain_token_map,
         })
     }
 
-    /// Get the gas price for the default token, or 0 if the price is not available.
-    /// Precision is 18 decimal places.
-    pub fn get_gas_price(&self) -> u128 {
+    /// Get the gas price for the given chain_id token (or default if not present), or 0 if the
+    /// price is not available. Precision is 18 decimal places.
+    pub fn get_gas_price(&self, chain_id: Option<u64>) -> u128 {
         if let Some(const_gas_price) = self.const_gas_price {
             return const_gas_price;
         }
 
-        self.get_gas_for_token_pkey(&self.default_token_pkey)
-            .unwrap_or(0)
+        let token_pkey = chain_id
+            .and_then(|chain_id| self.chain_token_map.get(&chain_id))
+            .unwrap_or(&self.default_token_pkey);
+
+        self.get_gas_for_token_pkey(token_pkey).unwrap_or(0)
     }
 
     fn get_gas_for_token_pkey(&self, token_pkey: &Pubkey) -> Option<u128> {
