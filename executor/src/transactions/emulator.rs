@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+
 use alloy_consensus::TxEnvelope;
 use anyhow::{anyhow, Context};
 use reth_primitives::B256;
@@ -52,10 +54,10 @@ impl IterInfo {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Emulator {
     neon_api: NeonApi,
-    evm_steps_min: u64,
+    evm_steps_min: AtomicU64,
     payer: Pubkey,
 }
 
@@ -63,7 +65,7 @@ impl Emulator {
     pub fn new(neon_api: NeonApi, evm_steps_min: u64, payer: Pubkey) -> Self {
         Self {
             neon_api,
-            evm_steps_min,
+            evm_steps_min: evm_steps_min.into(),
             payer,
         }
     }
@@ -144,14 +146,14 @@ impl Emulator {
         let mut f = f;
         let total_steps = emulate.steps_executed;
         let wrap_iter = self.calculate_wrap_iter_cnt(emulate);
-        let mut iter_steps = self.evm_steps_min.max(emulate.steps_executed);
+        let mut iter_steps = self.evm_steps_min.load(Relaxed).max(emulate.steps_executed);
         let max_cu_limit: u64 = (dec!(0.95) * Decimal::from(MAX_COMPUTE_UNITS))
             .round()
             .try_into()
             .expect("rounded and fits");
 
         for retry in 0..RETRIES {
-            if iter_steps <= self.evm_steps_min {
+            if iter_steps <= self.evm_steps_min.load(Relaxed) {
                 break;
             }
 
@@ -191,6 +193,7 @@ impl Emulator {
             );
             iter_steps = self
                 .evm_steps_min
+                .load(Relaxed)
                 .max(ratio.saturating_mul(iter_steps.into()).try_into()?);
         }
 
@@ -198,8 +201,8 @@ impl Emulator {
         Ok(self.default_iter_info(emulate))
     }
 
-    pub(super) fn set_evm_steps_min(&mut self, evm_steps_min: u64) {
-        self.evm_steps_min = evm_steps_min;
+    pub(super) fn set_evm_steps_min(&self, evm_steps_min: u64) {
+        self.evm_steps_min.store(evm_steps_min, Relaxed);
     }
 
     fn calculate_resize_iter_cnt(&self, emulate: &EmulateResponse) -> u64 {
@@ -207,7 +210,8 @@ impl Emulator {
     }
 
     fn calculate_exec_iter_cnt(&self, emulate: &EmulateResponse) -> u64 {
-        (emulate.steps_executed + self.evm_steps_min).saturating_sub(1) / self.evm_steps_min
+        (emulate.steps_executed + self.evm_steps_min.load(Relaxed)).saturating_sub(1)
+            / self.evm_steps_min.load(Relaxed)
     }
 
     fn calculate_wrap_iter_cnt(&self, emulate: &EmulateResponse) -> u64 {
@@ -215,7 +219,7 @@ impl Emulator {
     }
 
     fn default_iter_info(&self, emulate: &EmulateResponse) -> IterInfo {
-        let steps_per_iteration = self.evm_steps_min;
+        let steps_per_iteration = self.evm_steps_min.load(Relaxed);
         let iterations =
             self.calculate_exec_iter_cnt(emulate) + self.calculate_wrap_iter_cnt(emulate);
         IterInfo::new(

@@ -8,6 +8,8 @@ use std::mem;
 use alloy_eips::eip2718::Encodable2718;
 use alloy_rlp::Encodable;
 use anyhow::{bail, Context};
+use arc_swap::access::Access;
+use arc_swap::ArcSwap;
 use reth_primitives::B256;
 use semver::Version;
 
@@ -54,31 +56,45 @@ pub struct Config {
     pub pg_pool: Option<db::PgPool>,
 }
 
-#[derive(Debug)]
-pub struct TransactionBuilder {
-    program_id: Pubkey,
-
-    solana_api: SolanaApi,
-    neon_api: NeonApi,
-
-    operator: Keypair,
-    operator_address: Address,
-
+#[derive(Debug, Clone)]
+pub struct EvmConfig {
     treasury_pool_count: u32,
     treasury_pool_seed: Vec<u8>,
-
-    emulator: Emulator,
-    holder_mgr: HolderManager,
-    alt_mgr: AltManager,
 
     chains: Vec<ChainInfo>,
     version: Version,
 }
 
-/// ## Utility methods.
-impl TransactionBuilder {
+impl EvmConfig {
     const DEFAULT_NEON_EVM_VERSION: Version = Version::new(1, 14, 0);
 
+    pub fn empty() -> Self {
+        Self {
+            treasury_pool_count: 0,
+            treasury_pool_seed: Vec::new(),
+            chains: Vec::new(),
+            version: Self::DEFAULT_NEON_EVM_VERSION,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct TransactionBuilder {
+    program_id: Pubkey,
+    neon_api: NeonApi,
+
+    operator: Keypair,
+    operator_address: Address,
+
+    emulator: Emulator,
+    holder_mgr: HolderManager,
+    alt_mgr: AltManager,
+
+    evm_config: ArcSwap<EvmConfig>,
+}
+
+/// ## Utility methods.
+impl TransactionBuilder {
     pub async fn new(
         solana_api: SolanaApi,
         neon_api: NeonApi,
@@ -99,40 +115,22 @@ impl TransactionBuilder {
             max_holders,
         );
         let alt_mgr = AltManager::new(operator.pubkey(), solana_api.clone(), pg_pool).await;
-        let mut this = Self {
+        let this = Self {
             program_id,
-            solana_api,
             neon_api,
             operator,
             operator_address: address,
-            treasury_pool_count: 0,
-            treasury_pool_seed: Vec::new(),
             emulator,
             holder_mgr,
             alt_mgr,
-            chains: Vec::new(),
-            version: Self::DEFAULT_NEON_EVM_VERSION,
+            evm_config: ArcSwap::from_pointee(EvmConfig::empty()),
         };
         this.reload_config().await?;
 
         Ok(this)
     }
 
-    pub async fn try_reload_clone(&self) -> anyhow::Result<Self> {
-        let config = Config {
-            program_id: self.program_id,
-            operator: self.operator.insecure_clone(),
-            address: self.operator_address,
-            max_holders: 0,
-            pg_pool: None,
-        };
-        let mut new = Self::new(self.solana_api.clone(), self.neon_api.clone(), config).await?;
-        new.holder_mgr = self.holder_mgr.clone();
-        new.alt_mgr = self.alt_mgr.clone();
-        Ok(new)
-    }
-
-    pub async fn reload_config(&mut self) -> anyhow::Result<()> {
+    pub async fn reload_config(&self) -> anyhow::Result<()> {
         let config = self.neon_api.get_config().await?;
 
         let treasury_pool_count: u32 = config
@@ -152,20 +150,24 @@ impl TransactionBuilder {
             .context("missing NEON_EVM_STEPS_MIN in config")?
             .parse()?;
 
+        let chains = config.chains;
         let version: Version = config.version.parse().unwrap_or_else(|error| {
             tracing::error!(
-                %error, version = config.version, default = %Self::DEFAULT_NEON_EVM_VERSION,
+                %error, version = config.version, default = %EvmConfig::DEFAULT_NEON_EVM_VERSION,
                 "error parsing version in config, fallback to default"
             );
-            Self::DEFAULT_NEON_EVM_VERSION
+            EvmConfig::DEFAULT_NEON_EVM_VERSION
         });
-        println!("setting new version: {version}");
 
-        self.treasury_pool_count = treasury_pool_count;
-        self.treasury_pool_seed = treasury_pool_seed;
-        self.version = version;
+        let config = EvmConfig {
+            treasury_pool_count,
+            treasury_pool_seed,
+            version,
+            chains,
+        };
+
+        self.evm_config.store(config.into());
         self.emulator.set_evm_steps_min(evm_steps_min);
-        self.chains = config.chains;
 
         Ok(())
     }
@@ -178,8 +180,8 @@ impl TransactionBuilder {
         self.operator.pubkey()
     }
 
-    pub fn chains(&self) -> &[ChainInfo] {
-        &self.chains
+    pub fn chains(&self) -> impl Access<Vec<ChainInfo>> + '_ {
+        self.evm_config.map(|config: &EvmConfig| &config.chains)
     }
 
     pub fn operator_balance(&self, chain_id: u64) -> Pubkey {
@@ -197,9 +199,13 @@ impl TransactionBuilder {
 
     pub fn treasury_pool(&self, hash: &B256) -> anyhow::Result<(u32, Pubkey)> {
         let base_idx = u32::from_le_bytes(*hash.0.first_chunk().expect("B256 is longer than 4"));
-        let treasury_pool_idx = base_idx % self.treasury_pool_count;
+        let evm_config = self.evm_config.load();
+        let treasury_pool_idx = base_idx % evm_config.treasury_pool_count;
         let (treasury_pool_address, _seed) = Pubkey::try_find_program_address(
-            &[&self.treasury_pool_seed, &treasury_pool_idx.to_le_bytes()],
+            &[
+                &evm_config.treasury_pool_seed,
+                &treasury_pool_idx.to_le_bytes(),
+            ],
             &self.program_id,
         )
         .context("cannot find program address")?;
@@ -408,7 +414,7 @@ impl TransactionBuilder {
         // (e.g. 1.0.0-dev < 1.0.0)
         const BREAKPOINT: Version = Version::new(1, 14, u64::MAX);
 
-        if self.version > BREAKPOINT {
+        if self.evm_config.load().version > BREAKPOINT {
             self.empty_holder_for_data(tx_data, chain_id, alt, false)
                 .await
         } else {
