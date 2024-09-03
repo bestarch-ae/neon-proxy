@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
+use futures_util::stream::TryStreamExt;
 use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::types::{ErrorCode, ErrorObjectOwned};
-use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, U256, U64};
+use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, B256, U256, U64};
 use rpc_api_types::{Filter, Log, Transaction};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
@@ -18,6 +19,26 @@ use common::solana_sdk::signature::Signature;
 use crate::convert::neon_to_eth;
 use crate::rpc::EthApiImpl;
 use crate::Error;
+
+#[serde_as]
+#[derive(Serialize, Debug, Clone)]
+#[serde(transparent)]
+pub struct SignatureList {
+    #[serde_as(as = "Vec<DisplayFromStr>")]
+    inner: Vec<Signature>,
+}
+
+#[derive(Serialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum SolanaByNeonResponse {
+    Signatures(SignatureList),
+}
+
+impl From<Vec<Signature>> for SolanaByNeonResponse {
+    fn from(value: Vec<Signature>) -> Self {
+        SolanaByNeonResponse::Signatures(SignatureList { inner: value })
+    }
+}
 
 #[serde_as]
 #[derive(Serialize, Debug, Clone)]
@@ -161,6 +182,13 @@ trait NeonCustomApi {
 
     #[method(name = "getLogs")]
     async fn logs(&self, request: Filter) -> RpcResult<Vec<NeonLog>>;
+
+    #[method(name = "getSolanaTransactionByNeonTransaction")]
+    async fn solana_by_neon(
+        &self,
+        hash: B256,
+        full: Option<bool>,
+    ) -> RpcResult<SolanaByNeonResponse>;
 }
 
 #[async_trait]
@@ -332,6 +360,7 @@ impl NeonCustomApiServer for EthApiImpl {
         use crate::convert::convert_filters;
 
         let filters = convert_filters(filter).map_err(Error::from)?;
+        // TODO: get more data from logs
         let logs = self
             .get_logs(filters)
             .await?
@@ -351,5 +380,17 @@ impl NeonCustomApiServer for EthApiImpl {
             })
             .collect();
         Ok(logs)
+    }
+
+    async fn solana_by_neon(
+        &self,
+        hash: B256,
+        _full: Option<bool>,
+    ) -> RpcResult<SolanaByNeonResponse> {
+        let stream = self.transactions.fetch_solana_signatures(hash.0);
+        let signatures: Vec<_> = stream.try_collect().await.map_err(|err| {
+            ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
+        })?;
+        Ok(SolanaByNeonResponse::from(signatures))
     }
 }
