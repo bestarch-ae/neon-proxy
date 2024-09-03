@@ -46,6 +46,15 @@ const MAX_HEAP_SIZE: u32 = 256 * 1024;
 const MAX_COMPUTE_UNITS: u32 = 1_400_000;
 
 #[derive(Debug)]
+pub struct Config {
+    pub program_id: Pubkey,
+    pub operator: Keypair,
+    pub address: Address,
+    pub max_holders: u8,
+    pub pg_pool: Option<db::PgPool>,
+}
+
+#[derive(Debug)]
 pub struct TransactionBuilder {
     program_id: Pubkey,
 
@@ -71,13 +80,17 @@ impl TransactionBuilder {
     const DEFAULT_NEON_EVM_VERSION: Version = Version::new(1, 14, 0);
 
     pub async fn new(
-        program_id: Pubkey,
         solana_api: SolanaApi,
         neon_api: NeonApi,
-        operator: Keypair,
-        address: Address,
-        max_holders: u8,
+        config: Config,
     ) -> anyhow::Result<Self> {
+        let Config {
+            program_id,
+            operator,
+            address,
+            max_holders,
+            pg_pool,
+        } = config;
         let emulator = Emulator::new(neon_api.clone(), 0, operator.pubkey());
         let holder_mgr = HolderManager::new(
             operator.pubkey(),
@@ -85,7 +98,7 @@ impl TransactionBuilder {
             solana_api.clone(),
             max_holders,
         );
-        let alt_mgr = AltManager::new(operator.pubkey(), solana_api.clone());
+        let alt_mgr = AltManager::new(operator.pubkey(), solana_api.clone(), pg_pool).await;
         let mut this = Self {
             program_id,
             solana_api,
@@ -106,15 +119,14 @@ impl TransactionBuilder {
     }
 
     pub async fn try_reload_clone(&self) -> anyhow::Result<Self> {
-        let mut new = Self::new(
-            self.program_id,
-            self.solana_api.clone(),
-            self.neon_api.clone(),
-            self.operator.insecure_clone(),
-            self.operator_address,
-            0,
-        )
-        .await?;
+        let config = Config {
+            program_id: self.program_id,
+            operator: self.operator.insecure_clone(),
+            address: self.operator_address,
+            max_holders: 0,
+            pg_pool: None,
+        };
+        let mut new = Self::new(self.solana_api.clone(), self.neon_api.clone(), config).await?;
         new.holder_mgr = self.holder_mgr.clone();
         new.alt_mgr = self.alt_mgr.clone();
         Ok(new)

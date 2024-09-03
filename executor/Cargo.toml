@@ -7,6 +7,7 @@ edition = "2021"
 common = { path = '../common', package = "neon-proxy-common", features = ["reth"] }
 solana-api = { path = '../solana-api' }
 neon-api = { path = '../neon-api', features = ["jsonrpsee"] }
+db = { path = '../db' }
 
 reth-primitives.workspace = true
 
@@ -16,11 +17,12 @@ alloy-eips.workspace = true
 alloy-rlp.workspace = true
 
 anyhow.workspace = true
+dashmap.workspace = true
 hex.workspace = true
+futures-util.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
-dashmap.workspace = true
 rust_decimal = "1.35"
 rust_decimal_macros = "1.35"
 serde_json = "1"

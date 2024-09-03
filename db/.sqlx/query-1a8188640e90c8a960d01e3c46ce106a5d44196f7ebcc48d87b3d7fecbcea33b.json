@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO solana_alts (address) VALUES ($1)\n            ON CONFLICT DO NOTHING\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1a8188640e90c8a960d01e3c46ce106a5d44196f7ebcc48d87b3d7fecbcea33b"
+}

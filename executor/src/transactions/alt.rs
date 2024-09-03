@@ -1,15 +1,17 @@
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-use anyhow::Context;
+use anyhow::{bail, Context};
+use dashmap::DashMap;
+use futures_util::StreamExt;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use common::solana_sdk::address_lookup_table::{self, AddressLookupTableAccount};
+use common::solana_sdk::address_lookup_table::{self, state, AddressLookupTableAccount};
 use common::solana_sdk::commitment_config::CommitmentLevel;
 use common::solana_sdk::instruction::Instruction;
 use common::solana_sdk::pubkey::Pubkey;
-use dashmap::DashMap;
 use solana_api::solana_api::SolanaApi;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tracing::warn;
 
 const ACCOUNTS_PER_TX: usize = 27;
 const MAX_ACCOUNTS_PER_ALT: usize = 256;
@@ -40,6 +42,14 @@ struct Alt {
 }
 
 impl Alt {
+    fn new(pubkey: Pubkey, accounts: HashSet<Pubkey>) -> Self {
+        Self {
+            pubkey,
+            accounts,
+            write_lock: Arc::new(Semaphore::new(1)),
+        }
+    }
+
     fn get_account(&self) -> AltInfo {
         AddressLookupTableAccount {
             key: self.pubkey,
@@ -53,6 +63,7 @@ pub struct AltManager {
     operator: Pubkey,
     solana_api: SolanaApi,
     alts: DashMap<Pubkey, Alt>,
+    repo: Option<db::AltRepo>,
 }
 
 #[derive(Debug)]
@@ -65,12 +76,16 @@ pub enum UpdateProgress {
 }
 
 impl AltManager {
-    pub fn new(operator: Pubkey, solana_api: SolanaApi) -> Self {
-        Self {
+    pub async fn new(operator: Pubkey, solana_api: SolanaApi, pg_pool: Option<db::PgPool>) -> Self {
+        let this = Self {
             operator,
             solana_api,
             alts: DashMap::new(),
-        }
+            repo: pg_pool.map(db::AltRepo::new),
+        };
+        this.recover().await;
+
+        this
     }
 
     pub async fn acquire<I>(&self, accounts: I) -> anyhow::Result<UpdateProgress>
@@ -104,7 +119,8 @@ impl AltManager {
                 let _guard = semaphore.acquire_owned().await.unwrap();
 
                 let alt = alt();
-                let accounts = alt.accounts.difference(&new_accounts).copied().collect();
+                let accounts: VecDeque<_> =
+                    alt.accounts.difference(&new_accounts).copied().collect();
 
                 // WARN: There is a small chance that while we were awaiting on the semaphore
                 //     : this ALT got updated to the point where new accounts no longer fit .
@@ -113,7 +129,7 @@ impl AltManager {
                 }
 
                 let mut info = AltUpdateInfo {
-                    pubkey: alt_guard.pubkey,
+                    pubkey: alt.pubkey,
                     accounts,
                     _guard,
                     idx: 0,
@@ -156,11 +172,10 @@ impl AltManager {
         I: IntoIterator<Item = Pubkey>,
     {
         let (ix, pubkey) = self.create_alt_ix().await?;
-        let alt = Alt {
-            pubkey,
-            accounts: HashSet::new(),
-            write_lock: Arc::new(Semaphore::new(1)),
-        };
+        let alt = Alt::new(pubkey, HashSet::new());
+        if let Err(err) = self.save_account(pubkey).await {
+            warn!(%pubkey, %err, "could not save ALT to db");
+        }
         let _guard = alt.write_lock.clone().acquire_owned().await.unwrap();
         self.alts.insert(pubkey, alt);
         let update_info = AltUpdateInfo {
@@ -196,5 +211,39 @@ impl AltManager {
             Some(self.operator),
             info.accounts.iter().copied().take(to).collect(),
         )
+    }
+
+    async fn recover(&self) {
+        if let Some(repo) = self.repo.as_ref() {
+            let alts_stream = repo.fetch();
+            tokio::pin!(alts_stream);
+            while let Some(item) = alts_stream.next().await {
+                let Ok(key) = item.inspect_err(|err| warn!(%err, "invalid ALT address")) else {
+                    continue;
+                };
+
+                if let Err(err) = self.load_account(key).await {
+                    warn!(%key, %err, "could not load account");
+                }
+            }
+        }
+    }
+
+    async fn load_account(&self, pubkey: Pubkey) -> anyhow::Result<()> {
+        let Some(acc) = self.solana_api.get_account(&pubkey).await? else {
+            bail!("account {pubkey} does not exist");
+        };
+        let state = state::AddressLookupTable::deserialize(&acc.data)?;
+        let alt = Alt::new(pubkey, state.addresses.iter().copied().collect());
+        self.alts.insert(pubkey, alt);
+        Ok(())
+    }
+
+    async fn save_account(&self, pubkey: Pubkey) -> anyhow::Result<()> {
+        if let Some(repo) = self.repo.as_ref() {
+            repo.insert(pubkey).await?;
+        }
+
+        Ok(())
     }
 }

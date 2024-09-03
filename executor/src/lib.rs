@@ -11,7 +11,7 @@ use std::time::Duration;
 use alloy_consensus::TxEnvelope;
 use alloy_rlp::Decodable;
 use alloy_signer_wallet::LocalWallet;
-use anyhow::Context;
+use anyhow::{anyhow, bail, Context};
 use arc_swap::ArcSwap;
 use clap::Args;
 use dashmap::DashMap;
@@ -21,7 +21,7 @@ use tokio::time::sleep;
 use common::neon_lib::types::Address;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::{Keypair, Signature};
-use common::solana_sdk::signer::Signer;
+use common::solana_sdk::signer::{EncodableKey, Signer};
 use common::solana_sdk::transaction::TransactionError;
 use common::solana_transaction_status::TransactionStatus;
 use neon_api::NeonApi;
@@ -95,28 +95,36 @@ impl Executor {
         neon_api: NeonApi,
         solana_api: SolanaApi,
         neon_pubkey: Pubkey,
-        operator: Keypair,
-        operator_addr: Option<Address>,
-        init_balances: bool,
-        max_holders: u8,
+        config: Config,
+        pg_pool: Option<db::PgPool>,
     ) -> anyhow::Result<(Arc<Self>, impl Future<Output = anyhow::Result<()>>)> {
-        let operator_addr = match operator_addr {
+        let Some(keypair_path) = config.operator_keypair else {
+            bail!("missing operator keypair");
+        };
+        let operator = Keypair::read_from_file(&keypair_path).map_err(|err| anyhow!("{err}"))?;
+
+        let address = match config.operator_address {
             Some(addr) => addr,
             None => {
                 let operator_signer = LocalWallet::from_slice(operator.secret().as_ref())?;
                 operator_signer.address().0 .0.into()
             }
         };
-        tracing::info!(sol_key = %operator.pubkey(), eth_key = %operator_addr, "executor operator keys");
+        tracing::info!(sol_key = %operator.pubkey(), eth_key = %address, "executor operator keys");
+
+        let tx_builder_config = transactions::Config {
+            program_id: neon_pubkey,
+            operator,
+            address,
+            max_holders: config.max_holders,
+            pg_pool,
+        };
 
         let this = Self::initialize(
             neon_api,
             solana_api,
-            neon_pubkey,
-            operator,
-            operator_addr,
-            init_balances,
-            max_holders,
+            tx_builder_config,
+            config.init_operator_balance,
         )
         .await?;
         let this = Arc::new(this);
@@ -127,27 +135,17 @@ impl Executor {
     async fn initialize(
         neon_api: NeonApi,
         solana_api: SolanaApi,
-        neon_pubkey: Pubkey,
-        operator: Keypair,
-        operator_addr: Address,
+        config: transactions::Config,
         init_balances: bool,
-        max_holders: u8,
     ) -> anyhow::Result<Self> {
         let notify = Notify::new();
 
-        let builder = TransactionBuilder::new(
-            neon_pubkey,
-            solana_api.clone(),
-            neon_api.clone(),
-            operator,
-            operator_addr,
-            max_holders,
-        )
-        .await?;
+        let program_id = config.program_id;
+        let builder = TransactionBuilder::new(solana_api.clone(), neon_api.clone(), config).await?;
         let builder = ArcSwap::from_pointee(builder);
 
         let this = Self {
-            program_id: neon_pubkey,
+            program_id,
             solana_api,
             builder,
             pending_transactions: DashMap::new(),
