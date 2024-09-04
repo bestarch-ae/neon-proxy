@@ -24,7 +24,6 @@ use crate::finalization_tracker::{BlockStatus, FinalizationTracker};
 
 const ERROR_RECHECK_INTERVAL: Duration = Duration::from_secs(1);
 const REGULAR_RECHECK_INTERVAL: Duration = Duration::from_millis(400);
-const EMPTY_BLOCK_RETRIES: u32 = 10;
 
 macro_rules! retry {
     ($val:expr, $message:literal) => {
@@ -177,7 +176,6 @@ impl TraverseLedger {
     }
 
     async fn get_block(api: &SolanaApi, slot: u64, full: bool) -> Option<UiConfirmedBlock> {
-        let mut empty_retries = 0;
         loop {
             match api.get_block(slot, full).await {
                 Ok(block) => {
@@ -193,14 +191,6 @@ impl TraverseLedger {
                         })
                     ) =>
                 {
-                    // This is a hack to work around RPC missing blocks.
-                    // TODO: Remove it after the problem is fixed
-                    if empty_retries < EMPTY_BLOCK_RETRIES {
-                        tracing::warn!(%slot, "retrying missing block");
-                        empty_retries += 1;
-                        sleep(ERROR_RECHECK_INTERVAL).await;
-                        continue;
-                    }
                     tracing::info!(%slot, "skipped slot");
                     break None;
                 }
