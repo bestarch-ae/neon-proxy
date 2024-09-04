@@ -17,8 +17,34 @@ use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
 
 use crate::convert::neon_to_eth;
+use crate::convert::NeonTransactionReceipt;
 use crate::rpc::EthApiImpl;
 use crate::Error;
+
+use super::unimplemented;
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct NeonReceipt {
+    receipt: NeonTransactionReceipt,
+    solana_block_hash: String,
+    solana_complete_transaction_signature: String,
+    solana_complete_instruction_index: u32,
+    solana_complete_inner_instruction_index: u32,
+    neon_raw_transaction: Bytes,
+    neon_is_completed: bool,
+    neon_is_canceled: bool,
+    solana_transactions: Vec<()>,
+    neon_costs: Vec<()>,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub enum ReceiptDetail {
+    Ethereum,
+    Neon,
+    SolanaTransactionList,
+}
 
 #[serde_as]
 #[derive(Serialize, Debug, Clone)]
@@ -189,6 +215,9 @@ trait NeonCustomApi {
         hash: B256,
         full: Option<bool>,
     ) -> RpcResult<SolanaByNeonResponse>;
+
+    #[method(name = "neon_getTransactionReceipt")]
+    async fn transaction_receipt(&self, hash: B256, detail: ReceiptDetail) -> RpcResult<()>;
 }
 
 #[async_trait]
@@ -392,5 +421,9 @@ impl NeonCustomApiServer for EthApiImpl {
             ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
         })?;
         Ok(SolanaByNeonResponse::from(signatures))
+    }
+
+    async fn transaction_receipt(&self, _hash: B256, _detail: ReceiptDetail) -> RpcResult<()> {
+        unimplemented()
     }
 }
