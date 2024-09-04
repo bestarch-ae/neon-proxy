@@ -11,7 +11,7 @@ use common::solana_sdk::commitment_config::CommitmentLevel;
 use common::solana_sdk::instruction::Instruction;
 use common::solana_sdk::pubkey::Pubkey;
 use solana_api::solana_api::SolanaApi;
-use tracing::warn;
+use tracing::{debug, info, warn};
 
 const ACCOUNTS_PER_TX: usize = 27;
 const MAX_ACCOUNTS_PER_ALT: usize = 256;
@@ -110,7 +110,7 @@ impl AltManager {
 
         const RETRIES: usize = 5;
 
-        for _ in 0..RETRIES {
+        for retry_idx in 0..RETRIES {
             if let Some((_, candidate)) = candidates.pop_last() {
                 // WARN: Do not hold lock into the map while awaiting on semaphore,
                 //     : so other tx chain can finish updating alt
@@ -125,6 +125,12 @@ impl AltManager {
                 // WARN: There is a small chance that while we were awaiting on the semaphore
                 //     : this ALT got updated to the point where new accounts no longer fit .
                 if alt.accounts.len() + accounts.len() > MAX_ACCOUNTS_PER_ALT {
+                    debug!(
+                        alt_len = alt.accounts.len(),
+                        extension_len = accounts.len(),
+                        retry_idx,
+                        "skipping ALT due to race"
+                    );
                     continue;
                 }
 
@@ -137,6 +143,8 @@ impl AltManager {
                 };
                 let ix = self.write_next_chunk(&mut info);
                 return Ok(UpdateProgress::WriteChunk { ix, info });
+            } else {
+                break;
             }
         }
 
@@ -158,11 +166,18 @@ impl AltManager {
             .expect("alts dont get deleted");
         assert_eq!(info.pubkey, alt.pubkey);
         alt.accounts.extend(info.accounts.drain(0..info.idx));
+        let alt_len = alt.accounts.len();
 
         if info.is_empty() {
             UpdateProgress::Ready(alt.get_account())
         } else {
+            drop(alt);
             let ix = self.write_next_chunk(&mut info);
+            info!(
+                extension_length = info.idx,
+                alt_length = alt_len,
+                "extending ALT"
+            );
             UpdateProgress::WriteChunk { ix, info }
         }
     }
@@ -185,6 +200,7 @@ impl AltManager {
             idx: 0,
             written: 0,
         };
+        info!(%pubkey, length = update_info.accounts.len(), "creating new alt");
 
         Ok((update_info, ix))
     }
