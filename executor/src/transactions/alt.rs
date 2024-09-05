@@ -100,10 +100,10 @@ impl AltManager {
             if intersection_len == new_accounts.len() {
                 return Ok(UpdateProgress::Ready(alt.get_account()));
             }
-            if intersection_len > 0
-                && alt.accounts.len() + (new_accounts.len() - intersection_len)
-                    < MAX_ACCOUNTS_PER_ALT
-            {
+            // if intersection_len > 0
+            //     && alt.accounts.len() + (new_accounts.len() - intersection_len)
+            //         < MAX_ACCOUNTS_PER_ALT
+            if alt.accounts.len() + (new_accounts.len() - intersection_len) < MAX_ACCOUNTS_PER_ALT {
                 candidates.insert(intersection_len, alt.pubkey);
             }
         }
