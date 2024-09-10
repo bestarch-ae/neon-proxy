@@ -71,6 +71,24 @@ impl FinalizationTracker {
         BlockStatus::Pending
     }
 
+    pub async fn try_next(&mut self) -> Result<Option<(u64, bool)>, ClientError> {
+        loop {
+            if let Some(pending_slot) = self.pending_slots.front().copied() {
+                if let Some(is_finalized) = self.make_progress_for_slot(pending_slot) {
+                    self.pending_slots.pop_front();
+                    return Ok(Some((pending_slot, is_finalized)));
+                }
+
+                // At this point `self.finalized_slots` must be empty`
+                self.update_finalized_slots().await?;
+                continue;
+            }
+
+            // At this point there's no point in looping since we have no slots to check
+            return Ok(None);
+        }
+    }
+
     /// Returns next pending slot and a boolean if the slot was finalized or purged.
     /// Is cancel safe
     pub async fn next(&mut self) -> Result<(u64, bool), ClientError> {
