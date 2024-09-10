@@ -21,6 +21,7 @@ either = "1"
 solana-client.workspace = true
 solana-rpc-client.workspace = true
 solana-rpc-client-api.workspace = true
+tokio-util = "0.7.12"
 
 [dev-dependencies]
 anyhow = "1.0.82"

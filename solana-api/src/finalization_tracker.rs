@@ -1,9 +1,12 @@
 use std::collections::VecDeque;
-use std::future;
+use std::future::Future;
 use std::time::Duration;
 
+use common::solana_sdk::clock::Slot;
+use futures_util::future::{self, OptionFuture};
 use solana_client::client_error::ClientError;
 use tokio::time::{sleep_until, Instant};
+use tokio_util::sync::ReusableBoxFuture;
 
 use crate::solana_api::SolanaApi;
 
@@ -16,6 +19,12 @@ pub(super) enum BlockStatus {
     Finalized,
 }
 
+type GetBlockOutput = Result<Vec<Slot>, ClientError>;
+
+fn empty_future<T>() -> OptionFuture<impl Future<Output = T>> {
+    OptionFuture::from(None::<future::Pending<_>>)
+}
+
 #[derive(Debug)]
 pub(super) struct FinalizationTracker {
     init_slot: u64,
@@ -24,6 +33,7 @@ pub(super) struct FinalizationTracker {
     api: SolanaApi,
     last_checked: Instant,
     poll_interval: Duration,
+    get_blocks_future: ReusableBoxFuture<'static, Option<GetBlockOutput>>,
 }
 
 impl FinalizationTracker {
@@ -36,6 +46,7 @@ impl FinalizationTracker {
             api,
             last_checked: Instant::now(),
             poll_interval,
+            get_blocks_future: ReusableBoxFuture::new(empty_future()),
         })
     }
 
@@ -115,11 +126,25 @@ impl FinalizationTracker {
     }
 
     async fn update_finalized_slots(&mut self) -> Result<(), ClientError> {
-        if let Some(from) = self.pending_slots.front() {
-            if self.last_checked.elapsed() < self.poll_interval {
-                sleep_until(self.last_checked + self.poll_interval).await;
-            }
-            let new_blocks = self.api.get_finalized_blocks(*from).await?;
+        if let Some(from) = self.pending_slots.front().copied() {
+            let new_blocks = loop {
+                match self.get_blocks_future.get_pin().await {
+                    Some(result) => {
+                        self.get_blocks_future.set(empty_future());
+                        break result?;
+                    }
+                    None => {
+                        if self.last_checked.elapsed() < self.poll_interval {
+                            sleep_until(self.last_checked + self.poll_interval).await;
+                        }
+                        let api = self.api.clone();
+                        let fut: OptionFuture<_> =
+                            Some(async move { api.get_finalized_blocks(from).await }).into();
+                        self.get_blocks_future.set(fut);
+                        continue;
+                    }
+                }
+            };
             self.last_checked = Instant::now();
             self.finalized_slots.extend(new_blocks);
         }
