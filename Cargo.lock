@@ -1482,9 +1482,9 @@ dependencies = [
 
 [[package]]
 name = "bytemuck"
-version = "1.16.0"
+version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78834c15cb5d5efe3452d58b1e8ba890dd62d21907f867f383358198e56ebca5"
+checksum = "94bbb0ad554ad961ddc5da507a12a29b14e4ae5bda06b19f575a3e6079d2e2ae"
 dependencies = [
  "bytemuck_derive",
 ]
@@ -2782,6 +2782,7 @@ dependencies = [
  "base64 0.21.7",
  "bincode",
  "bs58 0.5.1",
+ "bytemuck",
  "clap 4.5.4",
  "dashmap 6.0.1",
  "db",

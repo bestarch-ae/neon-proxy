@@ -1,7 +1,7 @@
 use alloy_consensus::TxEnvelope;
 use anyhow::Context;
 
-use common::neon_lib::commands::emulate::EmulateResponse;
+use common::neon_lib::commands::emulate::{EmulateResponse, SolanaAccount};
 use common::solana_sdk::address_lookup_table::AddressLookupTableAccount;
 use common::solana_sdk::hash::Hash;
 use common::solana_sdk::instruction::Instruction;
@@ -9,6 +9,7 @@ use common::solana_sdk::message::{self, VersionedMessage};
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Keypair;
 use common::solana_sdk::transaction::VersionedTransaction;
+use reth_primitives::B256;
 
 use crate::ExecuteRequest;
 
@@ -51,6 +52,13 @@ pub(super) enum TxStage {
         chain_id: u64,
         holder: HolderInfo,
         alt: Option<AltInfo>,
+    },
+    RecoveredHolder {
+        tx_hash: B256,
+        chain_id: u64,
+        holder: HolderInfo,
+        iter_info: IterInfo,
+        accounts: Vec<SolanaAccount>,
     },
     Final {
         tx_data: Option<TxData>,
@@ -150,6 +158,22 @@ impl TxStage {
         }
     }
 
+    pub fn recovered_holder(
+        tx_hash: B256,
+        chain_id: u64,
+        holder: HolderInfo,
+        iter_info: IterInfo,
+        accounts: Vec<SolanaAccount>,
+    ) -> Self {
+        Self::RecoveredHolder {
+            tx_hash,
+            chain_id,
+            holder,
+            iter_info,
+            accounts,
+        }
+    }
+
     pub fn operational() -> Self {
         Self::Final {
             tx_data: None,
@@ -184,7 +208,7 @@ impl OngoingTransaction {
                 tx_data: Some(TxData { envelope, .. }),
                 ..
             } => Some(&envelope.tx),
-            TxStage::Final { tx_data: None, .. } => None,
+            TxStage::Final { tx_data: None, .. } | TxStage::RecoveredHolder { .. } => None,
         }
     }
 
@@ -212,8 +236,15 @@ impl OngoingTransaction {
                 }),
                 ..
             }
+            | TxStage::AltFill {
+                tx_data: TxData {
+                    envelope: ref tx, ..
+                },
+                ..
+            }
             | TxStage::HolderFill { ref tx, .. } => get_chain_id(&tx.tx),
-            _ => None,
+            TxStage::RecoveredHolder { chain_id, .. } => Some(chain_id),
+            TxStage::Final { tx_data: None, .. } => None,
         }
     }
 

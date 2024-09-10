@@ -144,7 +144,7 @@ impl Executor {
         let builder = TransactionBuilder::new(solana_api.clone(), neon_api.clone(), config).await?;
         let builder = builder;
 
-        let this = Self {
+        let mut this = Self {
             program_id,
             solana_api,
             builder,
@@ -160,6 +160,11 @@ impl Executor {
                 tracing::info!(name = chain.name, id = chain.id, "initializing balance");
                 this.init_operator_balance(chain.id).await?;
             }
+        }
+
+        // Recovery
+        for tx in this.builder.recover().await? {
+            this.sign_and_send_transaction(tx).await?;
         }
 
         Ok(this)

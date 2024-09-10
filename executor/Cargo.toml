@@ -11,6 +11,7 @@ db = { path = '../db' }
 
 reth-primitives.workspace = true
 
+alloy-signer.workspace = true
 alloy-signer-wallet.workspace = true
 alloy-consensus.workspace = true
 alloy-eips.workspace = true
@@ -31,6 +32,7 @@ hex-literal = "0.4.1"
 semver = "1.0.23"
 arc-swap = "1.7.1"
 async-channel = "2.3.1"
+bytemuck = "1.18.0"
 
 [dev-dependencies]
 serial_test = "3.1.1"
@@ -40,7 +42,6 @@ base64 = "0.21"
 bincode = "1.3.3"
 bs58 = "0.5.1"
 
-alloy-signer.workspace = true
 alloy-network.workspace = true
 alloy-sol-types.workspace = true
 

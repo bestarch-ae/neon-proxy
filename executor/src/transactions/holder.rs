@@ -1,20 +1,32 @@
+mod parse;
+
 use std::fmt;
 use std::mem;
 use std::sync::atomic::{AtomicU8, Ordering::SeqCst};
 use std::sync::Arc;
 
 use alloy_consensus::TxEnvelope;
+use alloy_eips::eip2718::Decodable2718;
 use alloy_eips::eip2718::Encodable2718;
+use anyhow::bail;
+use anyhow::Context;
 use async_channel::Receiver;
 use async_channel::Sender;
+use async_channel::TrySendError;
 use reth_primitives::B256;
 
 use common::evm_loader::account;
+use common::evm_loader::account::Holder;
+use common::evm_loader::types::Transaction;
 use common::neon_instruction::tag;
+use common::solana_sdk::account_info::IntoAccountInfo;
 use common::solana_sdk::instruction::{AccountMeta, Instruction};
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::system_instruction;
 use solana_api::solana_api::SolanaApi;
+
+use crate::transactions::holder::parse::parse_state;
+use crate::transactions::holder::parse::StateData;
 
 const HOLDER_DATA_LEN: usize = 256 * 1024; // neon_proxy.py default
 const HOLDER_META_LEN: usize =
@@ -42,7 +54,10 @@ pub(super) struct HolderInfo {
 
 impl Drop for HolderInfo {
     fn drop(&mut self) {
-        self.sender.try_send(self.meta).expect("must fit") // TODO: Really expect??
+        match self.sender.try_send(self.meta) {
+            Ok(()) | Err(TrySendError::Closed(_)) => (),
+            Err(TrySendError::Full(meta)) => panic!("holder do not fit: {}", meta.pubkey),
+        }
     }
 }
 
@@ -73,6 +88,67 @@ impl HolderInfo {
     pub fn hash(&self) -> &B256 {
         &self.hash
     }
+}
+
+#[derive(Debug)]
+enum HolderState {
+    Incomplete,
+    Pending(TxEnvelope),
+    State {
+        tx_hash: B256,
+        chain_id: Option<u64>,
+        accounts: Vec<Pubkey>,
+    },
+    Finalized,
+}
+
+impl HolderState {
+    fn recoverable(self) -> Option<RecoverableHolderState> {
+        match self {
+            Self::Incomplete | Self::Finalized => None,
+            Self::Pending(tx) => Some(RecoverableHolderState::Pending(tx)),
+            Self::State {
+                tx_hash,
+                chain_id,
+                accounts,
+            } => Some(RecoverableHolderState::State {
+                tx_hash,
+                chain_id,
+                accounts,
+            }),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum RecoverableHolderState {
+    Pending(TxEnvelope),
+    State {
+        tx_hash: B256,
+        chain_id: Option<u64>,
+        accounts: Vec<Pubkey>,
+    },
+}
+
+impl RecoverableHolderState {
+    pub fn tx_hash(&self) -> &B256 {
+        match self {
+            Self::Pending(tx) => tx.tx_hash(),
+            Self::State { tx_hash, .. } => tx_hash,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RecoveredHolder {
+    meta: HolderMeta,
+    state: HolderState,
+}
+
+#[derive(Debug)]
+pub struct HolderToFinalize {
+    pub info: HolderInfo,
+    pub state: RecoverableHolderState,
 }
 
 #[derive(Debug, Clone)]
@@ -113,6 +189,78 @@ impl HolderManager {
         }
     }
 
+    pub async fn recover(&mut self) -> anyhow::Result<Vec<HolderToFinalize>> {
+        let mut output = Vec::new();
+        let mut idx = self.counter.fetch_add(1, SeqCst);
+        while idx < self.max_holders {
+            match self.try_recover_holder(idx).await? {
+                None => {
+                    self.counter.store(idx, SeqCst);
+                    break;
+                }
+                Some(recovered_holder) => {
+                    let info = self.attach_info(recovered_holder.meta, None);
+                    match recovered_holder.state.recoverable() {
+                        None => drop(info),
+                        Some(state) => output.push(HolderToFinalize { info, state }),
+                    }
+                }
+            }
+            idx = self.counter.fetch_add(1, SeqCst);
+        }
+
+        Ok(output)
+    }
+
+    async fn try_recover_holder(&self, idx: u8) -> anyhow::Result<Option<RecoveredHolder>> {
+        use common::evm_loader::account::{self, legacy, tag};
+
+        let seed = holder_seed(idx);
+        let pubkey = Pubkey::create_with_seed(&self.operator, &seed, &self.program_id)
+            .expect("create with seed failed");
+        let Some(mut account) = self.solana_api.get_account(&pubkey).await? else {
+            return Ok(None);
+        };
+
+        let meta = HolderMeta { idx, pubkey };
+        let account_info = (&pubkey, &mut account).into_account_info();
+        let state = match tag(&self.program_id, &account_info).context("invalid holder account")? {
+            account::TAG_STATE_FINALIZED | legacy::TAG_STATE_FINALIZED_DEPRECATED => {
+                HolderState::Finalized
+            }
+            account::TAG_HOLDER | legacy::TAG_HOLDER_DEPRECATED => {
+                let holder = Holder::from_account(&self.program_id, account_info)
+                    .context("cannot parse holder")?;
+                let state = match Transaction::from_rlp(holder.transaction().as_ref())
+                    .and_then(|trx| holder.validate_transaction(&trx))
+                {
+                    Ok(()) => {
+                        let tx_buf = holder.transaction();
+                        let tx = TxEnvelope::decode_2718(&mut tx_buf.as_ref())
+                            .context("cannot decode transaction from holder")?;
+                        HolderState::Pending(tx)
+                    }
+                    Err(_) => HolderState::Incomplete,
+                };
+                state
+            }
+            account::TAG_STATE | legacy::TAG_STATE_DEPRECATED => {
+                let StateData {
+                    tx_hash,
+                    chain_id,
+                    accounts,
+                } = parse_state(&self.program_id, &account_info)?;
+                HolderState::State {
+                    tx_hash,
+                    chain_id,
+                    accounts,
+                }
+            }
+            n => anyhow::bail!("invalid holder tag: {n}"),
+        };
+        Ok(Some(RecoveredHolder { meta, state }))
+    }
+
     pub async fn acquire_holder(&self, tx: Option<&TxEnvelope>) -> anyhow::Result<AcquireHolder> {
         let existing = |meta| {
             let info = self.attach_info(meta, tx);
@@ -137,6 +285,21 @@ impl HolderManager {
             let meta = self.receiver.recv().await.expect("Manager dropped?");
             Ok(existing(meta))
         }
+    }
+
+    pub async fn is_holder_finalized(&self, key: &Pubkey) -> anyhow::Result<bool> {
+        use common::evm_loader::account::{self, legacy, tag};
+
+        let Some(mut account) = self.solana_api.get_account(key).await? else {
+            bail!("account not found: {key}")
+        };
+
+        let account_info = (key, &mut account).into_account_info();
+        let tag = tag(&self.program_id, &account_info).context("invalid holder account")?;
+        Ok(matches!(
+            tag,
+            account::TAG_STATE_FINALIZED | legacy::TAG_STATE_FINALIZED_DEPRECATED
+        ))
     }
 
     fn new_holder_info(&self, tx: Option<&TxEnvelope>) -> HolderInfo {

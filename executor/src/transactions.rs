@@ -5,6 +5,7 @@ mod ongoing;
 
 use std::mem;
 
+use alloy_consensus::TxEnvelope;
 use alloy_eips::eip2718::Encodable2718;
 use alloy_rlp::Encodable;
 use anyhow::{bail, Context};
@@ -37,7 +38,7 @@ use crate::ExecuteRequest;
 
 use self::alt::{AltInfo, AltManager, AltUpdateInfo};
 use self::emulator::{get_chain_id, Emulator, IterInfo};
-use self::holder::{HolderInfo, HolderManager};
+use self::holder::{HolderInfo, HolderManager, RecoverableHolderState};
 use self::ongoing::{TxData, TxStage};
 
 pub use self::ongoing::OngoingTransaction;
@@ -172,6 +173,59 @@ impl TransactionBuilder {
         Ok(())
     }
 
+    pub async fn recover(&mut self) -> anyhow::Result<Vec<OngoingTransaction>> {
+        let mut output = Vec::new();
+        let holders = self.holder_mgr.recover().await?;
+
+        for holder in holders {
+            let stage = match holder.state {
+                RecoverableHolderState::Pending(tx) => {
+                    let Some(chain_id) = get_chain_id(&tx) else {
+                        tracing::warn!(
+                            pubkey = %holder.info.pubkey(),
+                            tx_hash = %tx.tx_hash(),
+                            "cannot determine chain id for recovered holder"
+                        );
+                        continue;
+                    };
+                    let request = ExecuteRequest::new(tx, chain_id);
+                    TxStage::holder_fill(holder.info, request)
+                }
+                RecoverableHolderState::State {
+                    tx_hash,
+                    chain_id: Some(chain_id),
+                    accounts,
+                } => {
+                    let iter_info = IterInfo::max(self.emulator.evm_steps_min() as u32); // FIXME
+                    let accounts = accounts
+                        .into_iter()
+                        .map(|pubkey| NeonSolanaAccount {
+                            pubkey,
+                            is_writable: true,
+                            is_legacy: true,
+                        })
+                        .collect();
+                    TxStage::recovered_holder(tx_hash, chain_id, holder.info, iter_info, accounts)
+                }
+                RecoverableHolderState::State { chain_id: None, .. } => {
+                    tracing::warn!(
+                        pubkey = %holder.info.pubkey(),
+                        tx_hash = %holder.state.tx_hash(),
+                        "cannot determine chain id for recovered holder"
+                    );
+                    continue;
+                }
+            };
+            output.push(
+                self.next_step_inner(stage)
+                    .await?
+                    .expect("filled holder proceeds to execution"),
+            );
+        }
+
+        Ok(output)
+    }
+
     pub fn keypair(&self) -> &Keypair {
         &self.operator
     }
@@ -275,7 +329,10 @@ impl TransactionBuilder {
         &self,
         tx: OngoingTransaction,
     ) -> anyhow::Result<Option<OngoingTransaction>> {
-        let stage = tx.disassemble();
+        self.next_step_inner(tx.disassemble()).await
+    }
+
+    async fn next_step_inner(&self, stage: TxStage) -> anyhow::Result<Option<OngoingTransaction>> {
         match stage {
             TxStage::HolderFill { info, tx: envelope } if info.is_empty() => {
                 self.execute_from_holder(info, envelope).await.map(Some)
@@ -304,6 +361,16 @@ impl TransactionBuilder {
                 .execute_from_data(tx_data, holder, chain_id, alt)
                 .await
                 .map(Some),
+            TxStage::RecoveredHolder {
+                tx_hash,
+                chain_id,
+                holder,
+                iter_info,
+                accounts,
+            } => {
+                self.recovered_step(tx_hash, chain_id, holder, iter_info, accounts)
+                    .await
+            }
             TxStage::Final { .. } => Ok(None),
         }
     }
@@ -715,13 +782,12 @@ impl TransactionBuilder {
                 let build_tx = |iter_info: &mut IterInfo| {
                     let mut txs = Vec::new();
                     while !iter_info.is_finished() {
-                        let ix = self.build_step(
+                        let ix = self.build_step(BuildStep::collect(
+                            from_data,
                             iter_info,
                             &tx_data,
                             *holder.pubkey(),
-                            from_data,
-                            chain_id,
-                        )?;
+                        ))?;
                         txs.push(Transaction::new_with_payer(
                             &with_budget(ix, MAX_COMPUTE_UNITS),
                             Some(&self.pubkey()),
@@ -737,13 +803,12 @@ impl TransactionBuilder {
         };
 
         tracing::debug!(%tx_hash, ?iter_info, "new iteration");
-        let ix = self.build_step(
+        let ix = self.build_step(BuildStep::collect(
+            from_data,
             &mut iter_info,
             &tx_data,
             *holder.pubkey(),
-            from_data,
-            chain_id,
-        )?;
+        ))?;
         let cu_limit = iter_info.cu_limit();
         let stage = match (from_data, chain_id) {
             (true, Some(_)) => TxStage::step_data(holder, tx_data, Some(iter_info), alt.clone()),
@@ -757,37 +822,97 @@ impl TransactionBuilder {
             .map(Some)
     }
 
-    fn build_step(
+    async fn recovered_step(
         &self,
-        iter_info: &mut IterInfo,
-        tx_data: &TxData,
-        holder: Pubkey,
-        from_data: bool,
-        chain_id: Option<u64>,
-    ) -> anyhow::Result<Instruction> {
+        tx_hash: B256,
+        chain_id: u64,
+        holder: HolderInfo,
+        iter_info: IterInfo,
+        accounts: Vec<NeonSolanaAccount>,
+    ) -> anyhow::Result<Option<OngoingTransaction>> {
+        if self.holder_mgr.is_holder_finalized(holder.pubkey()).await? {
+            return Ok(None);
+        }
+
         let mut iter_info = iter_info;
-        let (tag, chain_id) = match (from_data, chain_id) {
+        let ix = self.build_step(BuildStep {
+            iter_info: &mut iter_info,
+            tx_hash: &tx_hash,
+            tx: None,
+            solana_accounts: &accounts,
+            holder: *holder.pubkey(),
+            chain_id: Some(chain_id),
+            fallback_chain_id: chain_id,
+        })?;
+
+        self.build_ongoing(
+            TxStage::recovered_holder(tx_hash, chain_id, holder, iter_info, accounts),
+            &[ix],
+            None, // TODO
+        )
+        .map(Some)
+    }
+}
+
+struct BuildStep<'a> {
+    iter_info: &'a mut IterInfo,
+    tx_hash: &'a B256,
+    tx: Option<&'a TxEnvelope>,
+    solana_accounts: &'a [NeonSolanaAccount],
+    holder: Pubkey,
+    chain_id: Option<u64>,
+    fallback_chain_id: u64,
+}
+
+impl<'a> BuildStep<'a> {
+    fn collect(
+        from_data: bool,
+        iter_info: &'a mut IterInfo,
+        tx_data: &'a TxData,
+        holder: Pubkey,
+    ) -> Self {
+        Self {
+            iter_info,
+            tx_hash: tx_data.envelope.tx_hash(),
+            tx: from_data.then_some(&tx_data.envelope),
+            solana_accounts: &tx_data.emulate.solana_accounts,
+            holder,
+            chain_id: get_chain_id(&tx_data.envelope),
+            fallback_chain_id: tx_data.envelope.fallback_chain_id,
+        }
+    }
+}
+
+impl TransactionBuilder {
+    fn build_step(&self, params: BuildStep<'_>) -> anyhow::Result<Instruction> {
+        let BuildStep {
+            mut iter_info,
+            tx_hash,
+            tx,
+            solana_accounts,
+            holder,
+            chain_id,
+            fallback_chain_id,
+        } = params;
+        let (tag, chain_id) = match (tx.is_some(), chain_id) {
             (true, Some(chain_id)) => (tag::TX_STEP_FROM_DATA, chain_id),
             (false, Some(chain_id)) => (tag::TX_STEP_FROM_ACCOUNT, chain_id),
-            (false, None) => (
-                tag::TX_STEP_FROM_ACCOUNT_NO_CHAINID,
-                tx_data.envelope.fallback_chain_id,
-            ),
-            (true, None) => bail!("missing chain_id in step from data: {tx_data:?}"),
+            (false, None) => (tag::TX_STEP_FROM_ACCOUNT_NO_CHAINID, fallback_chain_id),
+            (true, None) => bail!("missing chain_id in step from data: {tx:?}"),
         };
 
         let (accounts, mut data) = self.execute_base(
             tag,
-            tx_data.envelope.tx_hash(),
+            tx_hash,
             chain_id,
-            &tx_data.emulate.solana_accounts,
+            solana_accounts,
             Some(holder),
             Some(&mut iter_info),
         )?;
 
-        if from_data {
-            data.reserve(tx_data.envelope.tx.encode_2718_len());
-            tx_data.envelope.tx.encode_2718(&mut &mut data);
+        if let Some(tx) = tx {
+            data.reserve(tx.encode_2718_len());
+            tx.encode_2718(&mut &mut data);
         }
 
         let ix = Instruction {

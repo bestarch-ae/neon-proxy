@@ -68,4 +68,32 @@ mod reth {
             U256::from_le_bytes(self.to_le_bytes())
         }
     }
+
+    impl ToReth for evm_loader::types::Address {
+        type RethType = Address;
+
+        fn to_reth(self) -> Self::RethType {
+            Address(self.0.into())
+        }
+    }
+
+    impl ToReth
+        for (
+            evm_loader::types::Address,
+            evm_loader::types::Vector<evm_loader::types::StorageKey>,
+        )
+    {
+        type RethType = AccessListItem;
+
+        fn to_reth(self) -> Self::RethType {
+            AccessListItem {
+                address: self.0.to_reth(),
+                storage_keys: self
+                    .1
+                    .into_iter()
+                    .map(|item| B256::from_slice(item.as_ref()))
+                    .collect(),
+            }
+        }
+    }
 }
