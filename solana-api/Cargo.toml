@@ -10,6 +10,7 @@ common = { path = "../common", package = "neon-proxy-common" }
 tokio.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+anyhow.workspace = true
 
 async-trait = "0.1.80"
 stream_generator = "0.1"
