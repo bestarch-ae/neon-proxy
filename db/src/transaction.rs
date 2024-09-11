@@ -135,6 +135,16 @@ struct TransactionByParams {
 }
 
 impl TransactionBy {
+    fn id(&self) -> i32 {
+        match self {
+            TransactionBy::Hash(_) => 1,
+            TransactionBy::Slot(_) => 2,
+            TransactionBy::BlockNumberAndIndex(_, _) => 3,
+            TransactionBy::BlockHashAndIndex(_, _) => 4,
+            TransactionBy::SenderNonce { .. } => 5,
+        }
+    }
+
     fn params(self) -> TransactionByParams {
         match self {
             TransactionBy::Hash(hash) => TransactionByParams {
@@ -395,6 +405,7 @@ impl TransactionRepo {
         &self,
         by: TransactionBy,
     ) -> impl Stream<Item = Result<WithBlockhash<NeonTxInfo>, Error>> + '_ {
+        let case = by.id();
         let TransactionByParams {
             slot,
             tx_hash,
@@ -404,11 +415,12 @@ impl TransactionRepo {
             nonce,
             chain_id,
         } = by.params();
-        tracing::debug!(
+        tracing::info!(
             ?slot,
             ?tx_hash,
             ?block_hash,
             ?tx_idx,
+            ?case,
             "fetching transactions with events"
         );
         sqlx::query_as::<_, NeonTransactionRowWithLogs>(
@@ -450,34 +462,32 @@ impl TransactionRepo {
                     WHERE NOT COALESCE(L.is_reverted, FALSE)) TL
                     WHERE
                         (TL.is_completed OR TL.is_canceled) AND
-                        (TL.neon_sig = $1) --signature match
-                        OR (
-                            ($2 AND block_slot = $3) AND
-                            (TL.tx_idx = $5 OR $6) AND
-                            (TL.block_hash = $7 OR $8)
-                        ) --block match
-                        OR (
-                            (TL.from_addr = $9 OR $10) AND
-                            (TL.nonce = $11 OR $12) AND
-                            (TL.chain_id = $13 OR $14)
-                        ) -- from + nonce + chain
+                        CASE
+                            -- signature match
+                            WHEN $4 = 1 THEN TL.neon_sig = $1
+                            -- slot match
+                            WHEN $4 = 2 THEN block_slot = $3
+                            -- block number and index
+                            WHEN $4 = 3 THEN block_slot = $3 AND TL.tx_idx = $5
+                            -- block hash and index
+                            WHEN $4 = 4 THEN TL.block_hash = $6 AND TL.tx_idx = $5
+                            -- sender + nonce + chain_id
+                            WHEN $4 = 5 THEN TL.from_addr = $7 AND
+                                             TL.nonce = $8 AND
+                                             TL.chain_id = $9
+                        END
                     ORDER BY TL.block_slot,TL.tx_idx,tx_log_idx
            "#,
         )
         .bind(tx_hash.map(|hash| *hash.as_array()).unwrap_or_default()) // 1
         .bind(tx_hash.is_none()) // 2
         .bind(slot.unwrap_or(0) as i64) // 3
-        .bind(slot.is_none()) // 4
+        .bind(case) // 4
         .bind(tx_idx.unwrap_or(0) as i64) // 5
-        .bind(tx_idx.is_none()) // 6
-        .bind(block_hash.map(PgSolanaBlockHash::from).unwrap_or_default()) // 7
-        .bind(block_hash.is_none()) // 8
-        .bind(sender.unwrap_or_default()) // 9
-        .bind(sender.is_none()) // 10
-        .bind(nonce.unwrap_or(0)) // 11
-        .bind(nonce.is_none()) // 12
-        .bind(chain_id.unwrap_or(0)) // 13
-        .bind(chain_id.is_none()) // 14
+        .bind(block_hash.map(PgSolanaBlockHash::from).unwrap_or_default()) // 6
+        .bind(sender.unwrap_or_default()) // 7
+        .bind(nonce.unwrap_or(0)) // 8
+        .bind(chain_id.unwrap_or(0)) // 9
         .fetch(&self.pool)
         .map(move |row| row.map(|row: NeonTransactionRowWithLogs| row.with_logs()))
         .map(move |res| Ok(res??))
