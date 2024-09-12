@@ -4239,11 +4239,17 @@ dependencies = [
 name = "mempool"
 version = "0.1.0"
 dependencies = [
+ "alloy-consensus",
+ "alloy-network",
+ "alloy-signer-wallet",
  "clap 4.5.4",
+ "crossbeam-queue",
  "dashmap 6.0.1",
+ "executor",
  "futures-util",
  "neon-api",
  "neon-proxy-common",
+ "priority-queue",
  "pyth-sdk-solana",
  "reth-primitives",
  "serde",
@@ -5205,6 +5211,17 @@ dependencies = [
  "impl-rlp",
  "impl-serde",
  "uint",
+]
+
+[[package]]
+name = "priority-queue"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "560bcab673ff7f6ca9e270c17bf3affd8a05e3bd9207f123b0d45076fd8197e8"
+dependencies = [
+ "autocfg",
+ "equivalent",
+ "indexmap 2.4.0",
 ]
 
 [[package]]

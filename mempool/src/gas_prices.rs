@@ -56,6 +56,10 @@ pub struct GasPriceModel {
     pub min_wo_chain_id_acceptable_gas_price: U128,
 }
 
+pub trait GasPricesTrait: Clone + Send + Sync + 'static {
+    fn get_gas_price(&self, chain_id: Option<u64>) -> u128;
+}
+
 /// Gas prices for EVM transactions
 #[derive(Clone)]
 pub struct GasPrices {
@@ -136,21 +140,23 @@ impl GasPrices {
         })
     }
 
-    /// Get the gas price for the given chain_id token (or default if not present), or 0 if the
-    /// price is not available. Precision is 18 decimal places.
-    pub fn get_gas_price(&self, chain_id: Option<u64>) -> u128 {
-        let chain_id = chain_id.unwrap_or(self.default_chain_id);
-        self.gas_price_models
-            .get(&chain_id)
-            .map(|r| r.value().suggested_gas_price.try_into().unwrap())
-            .unwrap_or(0)
-    }
-
     pub fn get_gas_price_model(&self, chain_id: Option<u64>) -> Option<GasPriceModel> {
         let chain_id = chain_id.unwrap_or(self.default_chain_id);
         self.gas_price_models
             .get(&chain_id)
             .map(|r| r.value().clone())
+    }
+}
+
+impl GasPricesTrait for GasPrices {
+    /// Get the gas price for the given chain_id token (or default if not present), or 0 if the
+    /// price is not available. Precision is 18 decimal places.
+    fn get_gas_price(&self, chain_id: Option<u64>) -> u128 {
+        let chain_id = chain_id.unwrap_or(self.default_chain_id);
+        self.gas_price_models
+            .get(&chain_id)
+            .map(|r| r.value().suggested_gas_price.try_into().unwrap())
+            .unwrap_or(0)
     }
 }
 

@@ -1,4 +1,6 @@
 use pyth_sdk_solana::PythError;
+use reth_primitives::alloy_primitives::{SignatureError, TxNonce};
+use reth_primitives::ChainId;
 use thiserror::Error;
 
 use solana_api::solana_client::pubsub_client::PubsubClientError;
@@ -23,4 +25,18 @@ pub enum MempoolError {
     DefaultTokenNotFound(String),
     #[error("token not found in pyth symbology: {0}")]
     TokenNotFound(String),
+    #[error("tx is already known")]
+    AlreadyKnown,
+    #[error("unknown chain id: {0}")]
+    UnknownChainID(ChainId),
+    #[error("tx is underpriced")]
+    Underprice,
+    #[error("cannot recover signer from tx: {0}")]
+    SignaturesError(#[from] SignatureError),
+    #[error("nonce is too low: {0} <= {1}")]
+    NonceTooLow(TxNonce, TxNonce),
+    #[error("nonce is too high: {0} > {1}")]
+    NonceTooHigh(TxNonce, TxNonce),
+    #[error("unsupported tx type")]
+    UnsupportedTxType,
 }
