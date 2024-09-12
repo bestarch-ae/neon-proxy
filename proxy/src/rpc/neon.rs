@@ -216,8 +216,11 @@ trait NeonCustomApi {
         full: Option<bool>,
     ) -> RpcResult<SolanaByNeonResponse>;
 
-    #[method(name = "neon_getTransactionReceipt")]
+    #[method(name = "getTransactionReceipt")]
     async fn transaction_receipt(&self, hash: B256, detail: ReceiptDetail) -> RpcResult<()>;
+
+    #[method(name = "getNativeTokenList")]
+    async fn native_token_list(&self) -> RpcResult<()>;
 }
 
 #[async_trait]
@@ -424,6 +427,10 @@ impl NeonCustomApiServer for EthApiImpl {
     }
 
     async fn transaction_receipt(&self, _hash: B256, _detail: ReceiptDetail) -> RpcResult<()> {
+        unimplemented()
+    }
+
+    async fn native_token_list(&self) -> RpcResult<()> {
         unimplemented()
     }
 }
