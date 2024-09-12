@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
+use futures_util::stream::TryStreamExt;
 use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::types::{ErrorCode, ErrorObjectOwned};
-use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, U256, U64};
+use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, B256, U256, U64};
+use rpc_api_types::{Filter, Log, Transaction};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
 
@@ -12,8 +14,85 @@ use common::neon_lib::commands::emulate::{EmulateResponse, SolanaAccount};
 use common::neon_lib::commands::get_balance::BalanceStatus;
 use common::neon_lib::types::{BalanceAddress, SerializedAccount, TxParams};
 use common::solana_sdk::pubkey::Pubkey;
+use common::solana_sdk::signature::Signature;
 
+use crate::convert::neon_to_eth;
+use crate::convert::NeonTransactionReceipt;
 use crate::rpc::EthApiImpl;
+use crate::Error;
+
+use super::unimplemented;
+
+#[serde_as]
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Token {
+    token_name: String,
+    #[serde_as(as = "DisplayFromStr")]
+    token_mint: Pubkey,
+    token_chain_id: U64,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct NeonReceipt {
+    receipt: NeonTransactionReceipt,
+    solana_block_hash: String,
+    solana_complete_transaction_signature: String,
+    solana_complete_instruction_index: u32,
+    solana_complete_inner_instruction_index: u32,
+    neon_raw_transaction: Bytes,
+    neon_is_completed: bool,
+    neon_is_canceled: bool,
+    solana_transactions: Vec<()>,
+    neon_costs: Vec<()>,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub enum ReceiptDetail {
+    Ethereum,
+    Neon,
+    SolanaTransactionList,
+}
+
+#[serde_as]
+#[derive(Serialize, Debug, Clone)]
+#[serde(transparent)]
+pub struct SignatureList {
+    #[serde_as(as = "Vec<DisplayFromStr>")]
+    inner: Vec<Signature>,
+}
+
+#[derive(Serialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum SolanaByNeonResponse {
+    Signatures(SignatureList),
+}
+
+impl From<Vec<Signature>> for SolanaByNeonResponse {
+    fn from(value: Vec<Signature>) -> Self {
+        SolanaByNeonResponse::Signatures(SignatureList { inner: value })
+    }
+}
+
+#[serde_as]
+#[derive(Serialize, Debug, Clone)]
+pub struct NeonLog {
+    #[serde(flatten)]
+    log: Log,
+    removed: bool,
+    #[serde_as(as = "DisplayFromStr")]
+    solana_transaction_signature: Signature,
+    solana_instruction_index: u32,
+    solana_inner_instruction_index: Option<u32>,
+    solana_address: Option<()>,
+    neon_event_type: String,
+    neon_event_level: u32,
+    neon_event_order: u32,
+    neon_is_hidden: bool,
+    neon_is_reverted: bool,
+}
 
 #[serde_as]
 #[allow(unused)]
@@ -129,6 +208,29 @@ trait NeonCustomApi {
 
     #[method(name = "getEvmParams")]
     async fn evm_params(&self) -> RpcResult<EvmParams>;
+
+    #[method(name = "getTransactionBySenderNonce")]
+    async fn transaction_by_sender_nonce(
+        &self,
+        sender: Address,
+        nonce: U256,
+    ) -> RpcResult<Option<Transaction>>;
+
+    #[method(name = "getLogs")]
+    async fn logs(&self, request: Filter) -> RpcResult<Vec<NeonLog>>;
+
+    #[method(name = "getSolanaTransactionByNeonTransaction")]
+    async fn solana_by_neon(
+        &self,
+        hash: B256,
+        full: Option<bool>,
+    ) -> RpcResult<SolanaByNeonResponse>;
+
+    #[method(name = "getTransactionReceipt")]
+    async fn transaction_receipt(&self, hash: B256, detail: ReceiptDetail) -> RpcResult<()>;
+
+    #[method(name = "getNativeTokenList")]
+    async fn native_token_list(&self) -> RpcResult<Vec<Token>>;
 }
 
 #[async_trait]
@@ -275,5 +377,79 @@ impl NeonCustomApiServer for EthApiImpl {
             neon_evm_program_id: self.neon_api.pubkey().to_string(),
         };
         Ok(params)
+    }
+
+    async fn transaction_by_sender_nonce(
+        &self,
+        sender: Address,
+        nonce: U256,
+    ) -> RpcResult<Option<Transaction>> {
+        tracing::info!(%sender, %nonce, "by sender nonce");
+        let tx = self
+            .get_transaction(db::TransactionBy::SenderNonce {
+                address: sender.to_neon(),
+                nonce: nonce.to_neon().as_u64(),
+                chain_id: self.chain_id,
+            })
+            .await?
+            .map(|tx| neon_to_eth(tx.inner, tx.blockhash).map_err(Error::from))
+            .transpose()?;
+        tracing::info!("tx {:?}", tx);
+        Ok(tx)
+    }
+
+    async fn logs(&self, filter: Filter) -> RpcResult<Vec<NeonLog>> {
+        use crate::convert::convert_filters;
+
+        let filters = convert_filters(filter).map_err(Error::from)?;
+        // TODO: get more data from logs
+        let logs = self
+            .get_logs(filters)
+            .await?
+            .into_iter()
+            .map(|log| NeonLog {
+                log,
+                removed: false,
+                solana_transaction_signature: Signature::default(),
+                solana_instruction_index: 0,
+                solana_inner_instruction_index: None,
+                solana_address: None,
+                neon_event_type: "".to_string(),
+                neon_event_level: 0,
+                neon_event_order: 0,
+                neon_is_hidden: false,
+                neon_is_reverted: false,
+            })
+            .collect();
+        Ok(logs)
+    }
+
+    async fn solana_by_neon(
+        &self,
+        hash: B256,
+        _full: Option<bool>,
+    ) -> RpcResult<SolanaByNeonResponse> {
+        let stream = self.transactions.fetch_solana_signatures(hash.0);
+        let signatures: Vec<_> = stream.try_collect().await.map_err(|err| {
+            ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
+        })?;
+        Ok(SolanaByNeonResponse::from(signatures))
+    }
+
+    async fn transaction_receipt(&self, _hash: B256, _detail: ReceiptDetail) -> RpcResult<()> {
+        unimplemented()
+    }
+
+    async fn native_token_list(&self) -> RpcResult<Vec<Token>> {
+        let config = self.neon_api.get_config().await?;
+        Ok(config
+            .chains
+            .iter()
+            .map(|chain| Token {
+                token_name: chain.name.to_uppercase(),
+                token_mint: chain.token,
+                token_chain_id: U64::from(chain.id),
+            })
+            .collect())
     }
 }

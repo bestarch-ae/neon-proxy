@@ -7,6 +7,7 @@ use common::ethnum::U256;
 use common::evm_loader::types::vector::{VectorVecExt, VectorVecSlowExt};
 use common::evm_loader::types::{AccessListTx, Address, LegacyTx, Transaction, TransactionPayload};
 use common::solana_sdk::hash::Hash;
+use common::solana_sdk::signature::Signature;
 use common::types::{EventKind, EventLog, NeonTxInfo, TxHash};
 
 use crate::PgSolanaBlockHash;
@@ -115,6 +116,11 @@ pub enum TransactionBy {
     Slot(u64),
     BlockNumberAndIndex(u64, u64),
     BlockHashAndIndex(Hash, u64),
+    SenderNonce {
+        address: Address,
+        nonce: u64,
+        chain_id: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -123,9 +129,22 @@ struct TransactionByParams {
     tx_hash: Option<TxHash>,
     tx_idx: Option<u64>,
     block_hash: Option<Hash>,
+    sender: Option<PgAddress>,
+    nonce: Option<i64>,
+    chain_id: Option<i64>,
 }
 
 impl TransactionBy {
+    fn id(&self) -> i32 {
+        match self {
+            TransactionBy::Hash(_) => 1,
+            TransactionBy::Slot(_) => 2,
+            TransactionBy::BlockNumberAndIndex(_, _) => 3,
+            TransactionBy::BlockHashAndIndex(_, _) => 4,
+            TransactionBy::SenderNonce { .. } => 5,
+        }
+    }
+
     fn params(self) -> TransactionByParams {
         match self {
             TransactionBy::Hash(hash) => TransactionByParams {
@@ -144,6 +163,16 @@ impl TransactionBy {
             TransactionBy::BlockHashAndIndex(hash, idx) => TransactionByParams {
                 block_hash: Some(hash),
                 tx_idx: Some(idx),
+                ..Default::default()
+            },
+            TransactionBy::SenderNonce {
+                address,
+                nonce,
+                chain_id,
+            } => TransactionByParams {
+                sender: Some(PgAddress::from(address)),
+                nonce: Some(nonce as i64),
+                chain_id: Some(chain_id as i64),
                 ..Default::default()
             },
         }
@@ -376,17 +405,22 @@ impl TransactionRepo {
         &self,
         by: TransactionBy,
     ) -> impl Stream<Item = Result<WithBlockhash<NeonTxInfo>, Error>> + '_ {
+        let case = by.id();
         let TransactionByParams {
             slot,
             tx_hash,
             block_hash,
             tx_idx,
+            sender,
+            nonce,
+            chain_id,
         } = by.params();
-        tracing::debug!(
+        tracing::info!(
             ?slot,
             ?tx_hash,
             ?block_hash,
             ?tx_idx,
+            ?case,
             "fetching transactions with events"
         );
         sqlx::query_as::<_, NeonTransactionRowWithLogs>(
@@ -428,20 +462,32 @@ impl TransactionRepo {
                     WHERE NOT COALESCE(L.is_reverted, FALSE)) TL
                     WHERE
                         (TL.is_completed OR TL.is_canceled) AND
-                        TL.neon_sig = $1 OR ($2 AND block_slot = $3) AND
-                        (TL.tx_idx = $5 OR $6) AND
-                        (TL.block_hash = $7 OR $8)
+                        CASE
+                            -- signature match
+                            WHEN $4 = 1 THEN TL.neon_sig = $1
+                            -- slot match
+                            WHEN $4 = 2 THEN block_slot = $3
+                            -- block number and index
+                            WHEN $4 = 3 THEN block_slot = $3 AND TL.tx_idx = $5
+                            -- block hash and index
+                            WHEN $4 = 4 THEN TL.block_hash = $6 AND TL.tx_idx = $5
+                            -- sender + nonce + chain_id
+                            WHEN $4 = 5 THEN TL.from_addr = $7 AND
+                                             TL.nonce = $8 AND
+                                             TL.chain_id = $9
+                        END
                     ORDER BY TL.block_slot,TL.tx_idx,tx_log_idx
            "#,
         )
         .bind(tx_hash.map(|hash| *hash.as_array()).unwrap_or_default()) // 1
         .bind(tx_hash.is_none()) // 2
         .bind(slot.unwrap_or(0) as i64) // 3
-        .bind(slot.is_none()) // 4
+        .bind(case) // 4
         .bind(tx_idx.unwrap_or(0) as i64) // 5
-        .bind(tx_idx.is_none()) // 6
-        .bind(block_hash.map(PgSolanaBlockHash::from).unwrap_or_default()) // 7
-        .bind(block_hash.is_none()) // 8
+        .bind(block_hash.map(PgSolanaBlockHash::from).unwrap_or_default()) // 6
+        .bind(sender.unwrap_or_default()) // 7
+        .bind(nonce.unwrap_or(0)) // 8
+        .bind(chain_id.unwrap_or(0)) // 9
         .fetch(&self.pool)
         .map(move |row| row.map(|row: NeonTransactionRowWithLogs| row.with_logs()))
         .map(move |res| Ok(res??))
@@ -459,6 +505,33 @@ impl TransactionRepo {
         .fetch_one(&self.pool)
         .await
         .map(|row| row.log_idx)
+    }
+
+    pub fn fetch_solana_signatures(
+        &self,
+        hash: [u8; 32],
+    ) -> impl Stream<Item = Result<Signature, Error>> + '_ {
+        struct Row {
+            sol_sig: Option<Vec<u8>>,
+        }
+        sqlx::query_as!(
+            Row,
+            r#"SELECT sol_sig
+               FROM neon_transactions
+               WHERE neon_sig = $1 ORDER BY block_slot,tx_idx"#,
+            &hash,
+        )
+        .map(|row| {
+            let sol_sig = row
+                .sol_sig
+                .ok_or_else(|| anyhow::anyhow!("missing sol_sig"))?;
+            let sol_sig = Signature::from(
+                <[u8; 64]>::try_from(sol_sig).map_err(|_| anyhow::anyhow!("bad signature"))?,
+            );
+            Ok::<_, Error>(sol_sig)
+        })
+        .fetch(&self.pool)
+        .map(|res| res?)
     }
 
     pub fn fetch_rich_logs(
