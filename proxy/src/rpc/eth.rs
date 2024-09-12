@@ -212,7 +212,7 @@ impl EthApiServer for EthApiImpl {
         let tx = self
             .get_transaction(db::TransactionBy::BlockHashAndIndex(
                 hash.0.into(),
-                usize::from(index) as u64,
+                Some(usize::from(index) as u64),
             ))
             .await?
             .map(|tx| neon_to_eth(tx.inner, tx.blockhash).map_err(Error::from))

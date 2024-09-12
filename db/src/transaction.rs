@@ -1,5 +1,5 @@
 use anyhow::{bail, Context};
-use futures_util::{Stream, StreamExt, TryStreamExt};
+use futures_util::{stream, Stream, StreamExt, TryStreamExt};
 use sqlx::postgres::{PgRow, Postgres};
 use sqlx::FromRow;
 
@@ -15,13 +15,19 @@ use crate::PgSolanaBlockHash;
 use super::Error;
 
 #[derive(Debug, Clone)]
+struct EventFilter<'a> {
+    address: &'a [Address],
+    topics: [&'a [Vec<u8>]; 4],
+}
+
+#[derive(Debug, Clone)]
 /// [`EventLog`] with additional block and transaction data
 pub struct RichLog {
     pub blockhash: Hash,
     pub slot: u64,
     pub timestamp: i64,
     pub tx_idx: u64,
-    pub tx_hash: Vec<u8>,
+    pub tx_hash: TxHash,
     pub event: EventLog,
 }
 
@@ -29,15 +35,6 @@ pub struct RichLog {
 pub enum RichLogBy {
     Hash([u8; 32]),
     SlotRange { from: Option<u64>, to: Option<u64> },
-}
-
-impl RichLogBy {
-    fn bounds(self) -> (Option<u64>, Option<u64>, Option<[u8; 32]>) {
-        match self {
-            Self::SlotRange { from, to } => (from, to, None),
-            Self::Hash(hash) => (None, None, Some(hash)),
-        }
-    }
 }
 
 #[derive(sqlx::Type, Copy, Clone, Debug, Default)]
@@ -115,17 +112,22 @@ pub enum TransactionBy {
     Hash(TxHash),
     Slot(u64),
     BlockNumberAndIndex(u64, u64),
-    BlockHashAndIndex(Hash, u64),
+    BlockHashAndIndex(Hash, Option<u64>),
     SenderNonce {
         address: Address,
         nonce: u64,
         chain_id: u64,
     },
+    SlotRange {
+        from: Option<u64>,
+        to: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 struct TransactionByParams {
-    slot: Option<u64>,
+    from_slot: Option<u64>,
+    to_slot: Option<u64>,
     tx_hash: Option<TxHash>,
     tx_idx: Option<u64>,
     block_hash: Option<Hash>,
@@ -138,7 +140,7 @@ impl TransactionBy {
     fn id(&self) -> i32 {
         match self {
             TransactionBy::Hash(_) => 1,
-            TransactionBy::Slot(_) => 2,
+            TransactionBy::Slot(_) | TransactionBy::SlotRange { .. } => 2,
             TransactionBy::BlockNumberAndIndex(_, _) => 3,
             TransactionBy::BlockHashAndIndex(_, _) => 4,
             TransactionBy::SenderNonce { .. } => 5,
@@ -152,17 +154,19 @@ impl TransactionBy {
                 ..Default::default()
             },
             TransactionBy::Slot(slot) => TransactionByParams {
-                slot: Some(slot),
+                from_slot: Some(slot),
+                to_slot: Some(slot),
                 ..Default::default()
             },
             TransactionBy::BlockNumberAndIndex(slot, idx) => TransactionByParams {
-                slot: Some(slot),
+                from_slot: Some(slot),
+                to_slot: Some(slot),
                 tx_idx: Some(idx),
                 ..Default::default()
             },
             TransactionBy::BlockHashAndIndex(hash, idx) => TransactionByParams {
                 block_hash: Some(hash),
-                tx_idx: Some(idx),
+                tx_idx: idx,
                 ..Default::default()
             },
             TransactionBy::SenderNonce {
@@ -173,6 +177,11 @@ impl TransactionBy {
                 sender: Some(PgAddress::from(address)),
                 nonce: Some(nonce as i64),
                 chain_id: Some(chain_id as i64),
+                ..Default::default()
+            },
+            TransactionBy::SlotRange { from, to } => TransactionByParams {
+                from_slot: from,
+                to_slot: to,
                 ..Default::default()
             },
         }
@@ -405,9 +414,24 @@ impl TransactionRepo {
         &self,
         by: TransactionBy,
     ) -> impl Stream<Item = Result<WithBlockhash<NeonTxInfo>, Error>> + '_ {
+        self.fetch_with_events_inner(by, None)
+    }
+
+    fn fetch_with_events_inner(
+        &self,
+        by: TransactionBy,
+        filter: Option<EventFilter>,
+    ) -> impl Stream<Item = Result<WithBlockhash<NeonTxInfo>, Error>> + '_ {
         let case = by.id();
+        tracing::info!(?by, %case, ?filter, "fetching transactions with events");
+
+        let address_ref: Vec<_> = filter
+            .as_ref()
+            .map(|f| f.address.iter().map(|addr| addr.0.to_vec()).collect())
+            .unwrap_or_default();
         let TransactionByParams {
-            slot,
+            from_slot,
+            to_slot,
             tx_hash,
             block_hash,
             tx_idx,
@@ -415,21 +439,13 @@ impl TransactionRepo {
             nonce,
             chain_id,
         } = by.params();
-        tracing::info!(
-            ?slot,
-            ?tx_hash,
-            ?block_hash,
-            ?tx_idx,
-            ?case,
-            "fetching transactions with events"
-        );
         sqlx::query_as::<_, NeonTransactionRowWithLogs>(
             r#"SELECT * FROM
                    (WITH tx_block_slot AS
                     (
                      SELECT block_slot
                      FROM neon_transactions
-                     WHERE neon_sig = $1 OR ($2 AND block_slot = $3)
+                     WHERE neon_sig = $1 OR ($2 AND block_slot between $3 AND $4)
                     )
                     SELECT
                       neon_sig, tx_type, from_addr,
@@ -464,30 +480,48 @@ impl TransactionRepo {
                         (TL.is_completed OR TL.is_canceled) AND
                         CASE
                             -- signature match
-                            WHEN $4 = 1 THEN TL.neon_sig = $1
+                            WHEN $5 = 1 THEN TL.neon_sig = $1
                             -- slot match
-                            WHEN $4 = 2 THEN block_slot = $3
+                            WHEN $5 = 2 THEN block_slot BETWEEN $3 AND $4
                             -- block number and index
-                            WHEN $4 = 3 THEN block_slot = $3 AND TL.tx_idx = $5
-                            -- block hash and index
-                            WHEN $4 = 4 THEN TL.block_hash = $6 AND TL.tx_idx = $5
+                            WHEN $5 = 3 THEN block_slot BETWEEN $3 AND $4 AND TL.tx_idx = $6
+                            -- block hash and maybe index
+                            WHEN $5 = 4 THEN TL.block_hash = $7 AND (TL.tx_idx = $6 OR $8)
                             -- sender + nonce + chain_id
-                            WHEN $4 = 5 THEN TL.from_addr = $7 AND
-                                             TL.nonce = $8 AND
-                                             TL.chain_id = $9
+                            WHEN $5 = 5 THEN TL.from_addr = $9 AND
+                                             TL.nonce = $10 AND
+                                             TL.chain_id = $11
+                        END
+                        AND CASE
+                            -- additionally filter by address & logs
+                            WHEN $12 THEN
+                                address = ANY($13) AND
+                                (log_topic1 = ANY($14) OR $14 = '{}') AND
+                                (log_topic2 = ANY($15) OR $15 = '{}') AND
+                                (log_topic3 = ANY($16) OR $16 = '{}') AND
+                                (log_topic4 = ANY($17) OR $17 = '{}')
+                            ELSE TRUE
                         END
                     ORDER BY TL.block_slot,TL.tx_idx,tx_log_idx
            "#,
         )
         .bind(tx_hash.map(|hash| *hash.as_array()).unwrap_or_default()) // 1
         .bind(tx_hash.is_none()) // 2
-        .bind(slot.unwrap_or(0) as i64) // 3
-        .bind(case) // 4
-        .bind(tx_idx.unwrap_or(0) as i64) // 5
-        .bind(block_hash.map(PgSolanaBlockHash::from).unwrap_or_default()) // 6
-        .bind(sender.unwrap_or_default()) // 7
-        .bind(nonce.unwrap_or(0)) // 8
-        .bind(chain_id.unwrap_or(0)) // 9
+        .bind(from_slot.unwrap_or(0) as i64) // 3
+        .bind(to_slot.unwrap_or(i64::MAX as u64) as i64) // 4
+        .bind(case) // 5
+        .bind(tx_idx.unwrap_or(0) as i64) // 6
+        .bind(block_hash.map(PgSolanaBlockHash::from).unwrap_or_default()) // 7
+        .bind(tx_idx.is_none()) // 8
+        .bind(sender.unwrap_or_default()) // 9
+        .bind(nonce.unwrap_or(0)) // 10
+        .bind(chain_id.unwrap_or(0)) // 11
+        .bind(filter.is_some()) // 12
+        .bind(address_ref) // 13
+        .bind(filter.as_ref().map(|f| f.topics[0]).unwrap_or_default().to_vec()) // 14
+        .bind(filter.as_ref().map(|f| f.topics[1]).unwrap_or_default().to_vec()) // 15
+        .bind(filter.as_ref().map(|f| f.topics[2]).unwrap_or_default().to_vec()) // 16
+        .bind(filter.as_ref().map(|f| f.topics[3]).unwrap_or_default().to_vec()) // 17
         .fetch(&self.pool)
         .map(move |row| row.map(|row: NeonTransactionRowWithLogs| row.with_logs()))
         .map(move |res| Ok(res??))
@@ -541,53 +575,31 @@ impl TransactionRepo {
         topics: [&[Vec<u8>]; 4],
     ) -> impl Stream<Item = Result<RichLog, Error>> + '_ {
         tracing::debug!(?by, ?address, ?topics, "fetching logs");
-        let (from, to, hash) = by.bounds();
-        let address_ref: Vec<_> = address.iter().map(|addr| addr.0.to_vec()).collect();
+        let filter = EventFilter { address, topics };
+        let by = match by {
+            RichLogBy::Hash(hash) => TransactionBy::BlockHashAndIndex(hash.into(), None),
+            RichLogBy::SlotRange { from, to } => TransactionBy::SlotRange { from, to },
+        };
+        self.fetch_with_events_inner(by, Some(filter))
+            .map(|tx| {
+                tx.map(|tx| {
+                    let block_hash = tx.blockhash.unwrap_or_default();
+                    let slot = tx.inner.sol_slot;
+                    let tx_hash = tx.inner.neon_signature;
 
-        sqlx::query_as!(
-            NeonRichLogRow,
-            r#"SELECT
-                address as "address?: PgAddress", tx_hash as "tx_hash!",
-                (row_number() over (partition by T.block_slot ORDER BY T.block_slot, T.tx_idx, tx_log_idx))-1 as "log_idx!",
-                tx_log_idx as "tx_log_idx!", L.block_slot as "block_slot!",
-                event_level as "event_level!", event_order as "event_order!",
-                log_topic1 as "log_topic1?", log_topic2 as "log_topic2?",
-                log_topic3 as "log_topic3?", log_topic4 as "log_topic4?",
-                log_topic_cnt as "log_topic_cnt!", log_data as "log_data!",
-                block_hash as "block_hash!: PgSolanaBlockHash", block_time as "block_time!",
-                T.tx_idx as "tx_idx!"
-               FROM neon_transactions T
-               LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
-               INNER JOIN neon_transaction_logs L ON tx_hash = neon_sig
-               WHERE T.is_completed AND T.is_canceled = FALSE
-                   AND (T.block_slot >= $1) AND (T.block_slot <= $2)
-                   AND (block_hash = $3 OR $4)
-                   AND (address = ANY($5) OR $6)
-                   AND (log_topic1 = ANY($7) OR $8)
-                   AND (log_topic2 = ANY($9) OR $10)
-                   AND (log_topic3 = ANY($11) OR $12)
-                   AND (log_topic4 = ANY($13) OR $14)
-                   AND is_reverted = FALSE
-               ORDER BY (T.block_slot, T.tx_idx, tx_log_idx) ASC
-            "#,
-            from.unwrap_or(0) as i64,                // 1
-            to.map_or(i64::MAX, |to| to as i64),     // 2
-            hash.as_ref().map(<[u8; 32]>::as_slice), // 3
-            hash.is_none(),                          // 4
-            address_ref.as_slice(),                  // 5
-            address.is_empty(),                      // 6
-            topics[0],                               // 7
-            topics[0].is_empty(),                    // 8
-            topics[1],                               // 9
-            topics[1].is_empty(),                    // 10
-            topics[2],                               // 11
-            topics[2].is_empty(),                    // 12
-            topics[3],                               // 13
-            topics[3].is_empty(),                    // 14
-        )
-        .map(TryInto::try_into)
-        .fetch(&self.pool)
-        .map(|res| Ok(res??))
+                    stream::iter(tx.inner.events.into_iter().map(move |ev| {
+                        Ok(RichLog {
+                            blockhash: block_hash,
+                            slot,
+                            timestamp: 0,
+                            tx_idx: tx.inner.tx_idx,
+                            tx_hash,
+                            event: ev,
+                        })
+                    }))
+                })
+            })
+            .try_flatten()
     }
 
     pub async fn fetch(&self, by: TransactionBy) -> Result<Vec<WithBlockhash<NeonTxInfo>>, Error> {
@@ -898,12 +910,15 @@ impl TryFrom<NeonRichLogRow> for RichLog {
             log_data: value.log_data,
         };
 
+        let tx_hash = TxHash::try_from(value.tx_hash)
+            .map_err(|_| anyhow::anyhow!("failed to parse tx_hash"))?;
+
         Ok(RichLog {
             blockhash: value.block_hash.into(),
             slot: value.block_slot.try_into().context("block_slot")?,
             timestamp: value.block_time,
             tx_idx: value.tx_idx.try_into().context("tx_idx")?,
-            tx_hash: value.tx_hash,
+            tx_hash,
             event: log.try_into()?,
         })
     }
