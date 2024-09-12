@@ -45,7 +45,7 @@ use common::solana_sdk::{bpf_loader_upgradeable, system_instruction, system_prog
 use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
 
-use crate::ExecuteRequest;
+use crate::{ExecuteRequest, ExecutorTrait};
 
 use self::mock::BanksRpcMock;
 use super::Executor;
@@ -469,7 +469,7 @@ async fn do_transfer(
     };
     let signature = from.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
-    executor.handle_transaction(req(tx)).await?;
+    executor.handle_transaction(req(tx), None).await?;
 
     let txs = executor.join_current_transactions().await;
     assert_eq!(txs.len(), expected_txs);
@@ -502,7 +502,7 @@ async fn transfer_no_chain_id() -> Result<()> {
     assert_eq!(balance[1].balance, eth_to_wei(0));
 
     executor
-        .handle_transaction(build_transfer_no_chain_id(&kp1, address2)?)
+        .handle_transaction(build_transfer_no_chain_id(&kp1, address2)?, None)
         .await?;
 
     // HACK: Fixes random AccountInUse error
@@ -548,7 +548,7 @@ async fn deploy_contract() -> anyhow::Result<()> {
     let mut tx = code.deploy_tx();
     let signature = kp.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
-    executor.handle_transaction(req(tx)).await?;
+    executor.handle_transaction(req(tx), None).await?;
 
     let _ = env.banks_client.get_account(FST_HOLDER_KEY).await?;
     let txs = executor.join_current_transactions().await;
@@ -582,7 +582,7 @@ async fn recover_holder() -> anyhow::Result<()> {
     let mut tx = code.deploy_tx();
     let signature = kp.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
-    executor.handle_transaction(req(tx)).await?;
+    executor.handle_transaction(req(tx), None).await?;
 
     let _ = env.banks_client.get_account(FST_HOLDER_KEY).await?;
     let txs = executor.stop_after(3 /* Create + 2 Writes */).await;
@@ -639,7 +639,7 @@ async fn iterations() -> anyhow::Result<()> {
     let tx = tx.into_signed(signature);
     // HACK: Fixes random AccountInUse error
     let _ = env.banks_client.get_account(FST_HOLDER_KEY).await?;
-    executor.handle_transaction(req(tx)).await?;
+    executor.handle_transaction(req(tx), None).await?;
 
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
@@ -665,7 +665,7 @@ async fn iterations() -> anyhow::Result<()> {
     let signature = kp.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
 
-    executor.handle_transaction(req(tx)).await?;
+    executor.handle_transaction(req(tx), None).await?;
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
 
@@ -697,7 +697,7 @@ async fn recover_state() -> anyhow::Result<()> {
     let tx = tx.into_signed(signature);
     // HACK: Fixes random AccountInUse error
     let _ = env.banks_client.get_account(FST_HOLDER_KEY).await?;
-    executor.handle_transaction(req(tx)).await?;
+    executor.handle_transaction(req(tx), None).await?;
 
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
@@ -723,7 +723,7 @@ async fn recover_state() -> anyhow::Result<()> {
     let signature = kp.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
 
-    executor.handle_transaction(req(tx)).await?;
+    executor.handle_transaction(req(tx), None).await?;
     let txs = executor.stop_after(2).await;
     assert!(txs.len() > 1);
     let account = env.banks_client.get_account(FST_HOLDER_KEY).await?.unwrap();
@@ -769,7 +769,7 @@ async fn alt() -> anyhow::Result<()> {
     let mut tx = code.deploy_tx();
     let signature = kp.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
-    executor.handle_transaction(req(tx)).await?;
+    executor.handle_transaction(req(tx), None).await?;
 
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
@@ -796,7 +796,7 @@ async fn alt() -> anyhow::Result<()> {
     let signature = kp.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
 
-    executor.handle_transaction(req(tx)).await?;
+    executor.handle_transaction(req(tx), None).await?;
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
 
@@ -817,7 +817,7 @@ async fn sol_call() -> anyhow::Result<()> {
     let mut tx = code.deploy_tx();
     let signature = kp.eth.sign_transaction_sync(&mut tx)?;
     let tx = tx.into_signed(signature);
-    executor.handle_transaction(req(tx)).await?;
+    executor.handle_transaction(req(tx), None).await?;
 
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
@@ -933,7 +933,7 @@ async fn parallel_transfers() -> Result<()> {
     // Transfer
     for (kp, addr) in &pairs {
         executor
-            .handle_transaction(build_transfer_no_chain_id(kp, *addr)?)
+            .handle_transaction(build_transfer_no_chain_id(kp, *addr)?, None)
             .await?;
     }
 
