@@ -23,6 +23,16 @@ use crate::Error;
 
 use super::unimplemented;
 
+#[serde_as]
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Token {
+    token_name: String,
+    #[serde_as(as = "DisplayFromStr")]
+    token_mint: Pubkey,
+    token_chain_id: U64,
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct NeonReceipt {
@@ -220,7 +230,7 @@ trait NeonCustomApi {
     async fn transaction_receipt(&self, hash: B256, detail: ReceiptDetail) -> RpcResult<()>;
 
     #[method(name = "getNativeTokenList")]
-    async fn native_token_list(&self) -> RpcResult<()>;
+    async fn native_token_list(&self) -> RpcResult<Vec<Token>>;
 }
 
 #[async_trait]
@@ -430,7 +440,16 @@ impl NeonCustomApiServer for EthApiImpl {
         unimplemented()
     }
 
-    async fn native_token_list(&self) -> RpcResult<()> {
-        unimplemented()
+    async fn native_token_list(&self) -> RpcResult<Vec<Token>> {
+        let config = self.neon_api.get_config().await?;
+        Ok(config
+            .chains
+            .iter()
+            .map(|chain| Token {
+                token_name: chain.name.to_uppercase(),
+                token_mint: chain.token,
+                token_chain_id: U64::from(chain.id),
+            })
+            .collect())
     }
 }
