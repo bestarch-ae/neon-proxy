@@ -420,7 +420,7 @@ impl TransactionRepo {
     fn fetch_with_events_inner(
         &self,
         by: TransactionBy,
-        filter: Option<EventFilter>,
+        filter: Option<EventFilter<'_>>,
     ) -> impl Stream<Item = Result<WithBlockhash<NeonTxInfo>, Error>> + '_ {
         let case = by.id();
         tracing::info!(?by, %case, ?filter, "fetching transactions with events");
@@ -453,7 +453,7 @@ impl TransactionRepo {
                       sol_ix_inner_idx, T.block_slot,
                       CAST
                         (DENSE_RANK() OVER (
-                          PARTITION BY T.block_slot ORDER BY T.block_slot,T.tx_idx
+                          PARTITION BY T.block_slot ORDER BY T.block_slot,T.tx_idx,sol_ix_idx
                         )-1 AS INTEGER) as tx_idx,
                       nonce, gas_price,
                       gas_limit, value, gas_used,
@@ -495,7 +495,7 @@ impl TransactionRepo {
                         AND CASE
                             -- additionally filter by address & logs
                             WHEN $12 THEN
-                                address = ANY($13) AND
+                                address = ANY($13) OR $13 = '{}' AND
                                 (log_topic1 = ANY($14) OR $14 = '{}') AND
                                 (log_topic2 = ANY($15) OR $15 = '{}') AND
                                 (log_topic3 = ANY($16) OR $16 = '{}') AND
