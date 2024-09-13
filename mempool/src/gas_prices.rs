@@ -56,8 +56,9 @@ impl GasPrices {
         let prices = Arc::new(DashMap::new());
         let prices_thread = Arc::clone(&prices);
         let ws_url_thread = config.ws_url;
+        let is_const_gas_price = calculator_config.const_gas_price.is_some();
 
-        let (base_token_pkey, default_token_pkey) = if calculator_config.const_gas_price.is_some() {
+        let (base_token_pkey, default_token_pkey) = if is_const_gas_price {
             info!("using const_gas_price");
             (
                 symbology
@@ -82,12 +83,16 @@ impl GasPrices {
 
         let chain_token_map = chain_token_map
             .iter()
-            .map(|(&chain_id, token)| {
-                let token_pkey = symbology
-                    .get(token)
-                    .copied()
-                    .ok_or(MempoolError::TokenNotFound(token.clone()))?;
-                Ok((chain_id, token_pkey))
+            .filter_map(|(&chain_id, token)| {
+                let token_pkey = symbology.get(token).copied();
+                if is_const_gas_price {
+                    token_pkey.map(|tk| Ok((chain_id, tk)))
+                } else {
+                    match token_pkey {
+                        Some(tk) => Some(Ok((chain_id, tk))),
+                        None => Some(Err(MempoolError::TokenNotFound(token.clone()))),
+                    }
+                }
             })
             .collect::<Result<HashMap<_, _>, MempoolError>>()?;
 

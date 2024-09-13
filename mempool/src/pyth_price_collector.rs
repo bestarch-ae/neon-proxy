@@ -140,7 +140,6 @@ impl PythPricesCollector {
             //   messages, because the subscription streams hold a reference to the `PubsubClient`.
             //   Otherwise, we would just subscribe on the main task and send the receivers out
             //   to other tasks.
-            // let unsub_tx = unsub_tx.clone();
             let client = Arc::clone(&self.client);
             let token_key = token_pkey;
             let prices = Weak::clone(&self.prices);
