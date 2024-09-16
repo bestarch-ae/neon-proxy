@@ -137,6 +137,7 @@ impl FinalizationTracker {
             if self.last_checked.elapsed() < self.poll_interval {
                 sleep_until(self.last_checked + self.poll_interval).await;
             }
+            tracing::debug!(%from, "fetching finalized blocks");
             let new_blocks = self.api.get_finalized_blocks(*from).await?;
             self.last_checked = Instant::now();
             self.finalized_slots.extend(new_blocks);

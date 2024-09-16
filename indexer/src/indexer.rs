@@ -36,7 +36,6 @@ pub struct Indexer {
     holder_repo: db::HolderRepo,
     block_repo: db::BlockRepo,
     tx_log_idx: TxLogIdx,
-    neon_tx_idx: u64,
     block_gas_used: U256,
     block_log_idx: u64,
     adb: DummyAdb,
@@ -60,7 +59,6 @@ impl Indexer {
             sig_repo,
             holder_repo,
             block_repo,
-            neon_tx_idx: 0,
             tx_log_idx,
             block_gas_used: U256::new(0),
             block_log_idx: 0,
@@ -180,8 +178,6 @@ impl Indexer {
         txs: Vec<SolanaTransaction>,
         _commitment: CommitmentLevel,
     ) -> anyhow::Result<NeonBlock> {
-        /* TODO: remove these entirely */
-        self.neon_tx_idx = 0;
         self.block_gas_used = U256::new(0);
         self.block_log_idx = 0;
 
@@ -226,12 +222,11 @@ impl Indexer {
             for action in actions {
                 match action {
                     Action::AddTransaction(mut tx) => {
-                        tx.tx_idx = self.neon_tx_idx;
+                        tx.tx_idx = tx_idx as u64;
                         tx.sol_signature = signature;
 
                         // only completed transactions increment gas and idx
                         if tx.is_completed {
-                            self.neon_tx_idx += 1;
                             self.block_gas_used += tx.gas_used;
                             tx.sum_gas_used = self.block_gas_used;
 
