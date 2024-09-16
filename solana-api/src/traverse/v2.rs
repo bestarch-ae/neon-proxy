@@ -270,6 +270,7 @@ impl TraverseLedger {
             let mut tracker = FinalizationTracker::init(api, poll_interval).await?;
 
             while let Some(slot) = rx.recv().await {
+                tracing::debug!(%slot, "checking slot");
                 match tracker.check_or_schedule_new_slot(slot) {
                     status @ (BlockStatus::Finalized | BlockStatus::Purged) => {
                         let item = Ok(LedgerItem::BlockUpdate {
@@ -277,22 +278,48 @@ impl TraverseLedger {
                             commitment: (status == BlockStatus::Finalized)
                                 .then_some(CommitmentLevel::Finalized),
                         });
-                        tracing::debug!(%slot, %is_finalized, "block updated");
+                        tracing::debug!(%slot, ?status, "block updated (check)");
                         stream.send(Ok(item)).await;
                     }
-                    BlockStatus::Pending => {
-                        if let Some((slot, is_finalized)) = tracker.try_next().await? {
-                            let item = Ok(LedgerItem::BlockUpdate {
-                                slot,
-                                commitment: is_finalized.then_some(CommitmentLevel::Finalized),
-                            });
-                            tracing::debug!(%slot, %is_finalized, "block updated");
-                            stream.send(Ok(item)).await;
+                    BlockStatus::Pending => loop {
+                        match tracker.try_next().await {
+                            Ok(Some((slot, is_finalized))) => {
+                                let item = Ok(LedgerItem::BlockUpdate {
+                                    slot,
+                                    commitment: is_finalized.then_some(CommitmentLevel::Finalized),
+                                });
+                                tracing::debug!(%slot, %is_finalized, "block updated (next)");
+                                stream.send(Ok(item)).await;
+                            }
+                            Ok(None) => {
+                                break;
+                            }
+                            Err(err) => {
+                                tracing::warn!(%err, "tracker error");
+                                break;
+                            }
                         }
-                    }
+                    },
                 }
             }
             Ok(())
+        });
+
+        let slots = slots.then(move |block| {
+            let tx = tx.clone();
+            async move {
+                if let Ok(Ok(
+                    blk @ LedgerItem::Block {
+                        commitment: CommitmentLevel::Processed | CommitmentLevel::Confirmed,
+                        ..
+                    },
+                )) = &block
+                {
+                    let slot = blk.slot();
+                    let _ = tx.send(slot).await;
+                }
+                block
+            }
         });
 
         let slots = futures_util::stream::select(tracker_stream, slots);
@@ -314,8 +341,6 @@ impl TraverseLedger {
                         stream.send(Ok(block)).await;
                     }
                     Ok(block @ LedgerItem::Block { .. }) => {
-                        let slot = block.slot();
-                        let _ = tx.send(slot).await;
                         stream.send(Ok(block)).await;
                     }
                     Ok(update) => stream.send(Ok(update)).await,

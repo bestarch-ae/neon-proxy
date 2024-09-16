@@ -556,6 +556,7 @@ impl EthApiServer for EthApiImpl {
                     )
                 })?;
 
+            tracing::info!(tx_hash = %hash, "sendRawTransaction done");
             Ok(hash)
         } else {
             tracing::debug!(%bytes, "skip sendRawTransaction, executor disabled");
