@@ -370,17 +370,16 @@ impl ExecutorTestEnvironment {
         let ix =
             system_instruction::transfer(&payer.pubkey(), &operator.pubkey(), 100 * 10u64.pow(9));
         ctx.send_instructions(&[ix], &[&payer]).await?;
-        let (executor, task) = Executor::initialize_and_start(
-            neon_api.clone(),
-            solana_api,
-            NEON_KEY,
-            operator,
-            None,
-            false,
-            MAX_HOLDERS,
-        )
-        .await
-        .context("failed initializing executor")?;
+        let config = super::Config {
+            operator_keypair: Some("tests/keys/operator.json".into()),
+            operator_address: None,
+            init_operator_balance: false,
+            max_holders: MAX_HOLDERS,
+        };
+        let (executor, task) =
+            Executor::initialize_and_start(neon_api.clone(), solana_api, NEON_KEY, config, None)
+                .await
+                .context("failed initializing executor")?;
         tokio::spawn(task);
         executor.init_operator_balance(CHAIN_ID).await?.unwrap();
         executor.join_current_transactions().await;

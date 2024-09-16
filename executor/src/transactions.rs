@@ -8,6 +8,8 @@ use std::mem;
 use alloy_eips::eip2718::Encodable2718;
 use alloy_rlp::Encodable;
 use anyhow::{bail, Context};
+use arc_swap::access::Access;
+use arc_swap::ArcSwap;
 use reth_primitives::B256;
 use semver::Version;
 
@@ -33,7 +35,7 @@ use solana_api::solana_api::SolanaApi;
 use crate::transactions::holder::AcquireHolder;
 use crate::ExecuteRequest;
 
-use self::alt::AltInfo;
+use self::alt::{AltInfo, AltManager, AltUpdateInfo};
 use self::emulator::{get_chain_id, Emulator, IterInfo};
 use self::holder::{HolderInfo, HolderManager};
 use self::ongoing::{TxData, TxStage};
@@ -46,37 +48,65 @@ const MAX_HEAP_SIZE: u32 = 256 * 1024;
 const MAX_COMPUTE_UNITS: u32 = 1_400_000;
 
 #[derive(Debug)]
-pub struct TransactionBuilder {
-    program_id: Pubkey,
+pub struct Config {
+    pub program_id: Pubkey,
+    pub operator: Keypair,
+    pub address: Address,
+    pub max_holders: u8,
+    pub pg_pool: Option<db::PgPool>,
+}
 
-    solana_api: SolanaApi,
-    neon_api: NeonApi,
-
-    operator: Keypair,
-    operator_address: Address,
-
+#[derive(Debug, Clone)]
+pub struct EvmConfig {
     treasury_pool_count: u32,
     treasury_pool_seed: Vec<u8>,
-
-    emulator: Emulator,
-    holder_mgr: HolderManager,
 
     chains: Vec<ChainInfo>,
     version: Version,
 }
 
-/// ## Utility methods.
-impl TransactionBuilder {
+impl EvmConfig {
     const DEFAULT_NEON_EVM_VERSION: Version = Version::new(1, 14, 0);
 
+    pub fn empty() -> Self {
+        Self {
+            treasury_pool_count: 0,
+            treasury_pool_seed: Vec::new(),
+            chains: Vec::new(),
+            version: Self::DEFAULT_NEON_EVM_VERSION,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct TransactionBuilder {
+    program_id: Pubkey,
+    neon_api: NeonApi,
+
+    operator: Keypair,
+    operator_address: Address,
+
+    emulator: Emulator,
+    holder_mgr: HolderManager,
+    alt_mgr: AltManager,
+
+    evm_config: ArcSwap<EvmConfig>,
+}
+
+/// ## Utility methods.
+impl TransactionBuilder {
     pub async fn new(
-        program_id: Pubkey,
         solana_api: SolanaApi,
         neon_api: NeonApi,
-        operator: Keypair,
-        address: Address,
-        max_holders: u8,
+        config: Config,
     ) -> anyhow::Result<Self> {
+        let Config {
+            program_id,
+            operator,
+            address,
+            max_holders,
+            pg_pool,
+        } = config;
         let emulator = Emulator::new(neon_api.clone(), 0, operator.pubkey());
         let holder_mgr = HolderManager::new(
             operator.pubkey(),
@@ -84,39 +114,23 @@ impl TransactionBuilder {
             solana_api.clone(),
             max_holders,
         );
-        let mut this = Self {
+        let alt_mgr = AltManager::new(operator.pubkey(), solana_api.clone(), pg_pool).await;
+        let this = Self {
             program_id,
-            solana_api,
             neon_api,
             operator,
             operator_address: address,
-            treasury_pool_count: 0,
-            treasury_pool_seed: Vec::new(),
             emulator,
             holder_mgr,
-            chains: Vec::new(),
-            version: Self::DEFAULT_NEON_EVM_VERSION,
+            alt_mgr,
+            evm_config: ArcSwap::from_pointee(EvmConfig::empty()),
         };
         this.reload_config().await?;
 
         Ok(this)
     }
 
-    pub async fn try_reload_clone(&self) -> anyhow::Result<Self> {
-        let mut new = Self::new(
-            self.program_id,
-            self.solana_api.clone(),
-            self.neon_api.clone(),
-            self.operator.insecure_clone(),
-            self.operator_address,
-            0,
-        )
-        .await?;
-        new.holder_mgr = self.holder_mgr.clone();
-        Ok(new)
-    }
-
-    pub async fn reload_config(&mut self) -> anyhow::Result<()> {
+    pub async fn reload_config(&self) -> anyhow::Result<()> {
         let config = self.neon_api.get_config().await?;
 
         let treasury_pool_count: u32 = config
@@ -136,20 +150,24 @@ impl TransactionBuilder {
             .context("missing NEON_EVM_STEPS_MIN in config")?
             .parse()?;
 
+        let chains = config.chains;
         let version: Version = config.version.parse().unwrap_or_else(|error| {
             tracing::error!(
-                %error, version = config.version, default = %Self::DEFAULT_NEON_EVM_VERSION,
+                %error, version = config.version, default = %EvmConfig::DEFAULT_NEON_EVM_VERSION,
                 "error parsing version in config, fallback to default"
             );
-            Self::DEFAULT_NEON_EVM_VERSION
+            EvmConfig::DEFAULT_NEON_EVM_VERSION
         });
-        println!("setting new version: {version}");
 
-        self.treasury_pool_count = treasury_pool_count;
-        self.treasury_pool_seed = treasury_pool_seed;
-        self.version = version;
+        let config = EvmConfig {
+            treasury_pool_count,
+            treasury_pool_seed,
+            version,
+            chains,
+        };
+
+        self.evm_config.store(config.into());
         self.emulator.set_evm_steps_min(evm_steps_min);
-        self.chains = config.chains;
 
         Ok(())
     }
@@ -162,8 +180,8 @@ impl TransactionBuilder {
         self.operator.pubkey()
     }
 
-    pub fn chains(&self) -> &[ChainInfo] {
-        &self.chains
+    pub fn chains(&self) -> impl Access<Vec<ChainInfo>> + '_ {
+        self.evm_config.map(|config: &EvmConfig| &config.chains)
     }
 
     pub fn operator_balance(&self, chain_id: u64) -> Pubkey {
@@ -181,9 +199,13 @@ impl TransactionBuilder {
 
     pub fn treasury_pool(&self, hash: &B256) -> anyhow::Result<(u32, Pubkey)> {
         let base_idx = u32::from_le_bytes(*hash.0.first_chunk().expect("B256 is longer than 4"));
-        let treasury_pool_idx = base_idx % self.treasury_pool_count;
+        let evm_config = self.evm_config.load();
+        let treasury_pool_idx = base_idx % evm_config.treasury_pool_count;
         let (treasury_pool_address, _seed) = Pubkey::try_find_program_address(
-            &[&self.treasury_pool_seed, &treasury_pool_idx.to_le_bytes()],
+            &[
+                &evm_config.treasury_pool_seed,
+                &treasury_pool_idx.to_le_bytes(),
+            ],
             &self.program_id,
         )
         .context("cannot find program address")?;
@@ -264,27 +286,8 @@ impl TransactionBuilder {
             TxStage::AltFill {
                 info,
                 tx_data,
-                holder: Some(holder),
-            } if info.is_empty() => self
-                .execute_from_holder_emulated(holder, tx_data, Some(info))
-                .await
-                .map(Some),
-            TxStage::AltFill {
-                info,
-                tx_data,
-                holder: None,
-            } if info.is_empty() => {
-                let chain_id = get_chain_id(&tx_data.envelope)
-                    .context("empty chain id in emulated from_data alt transaction")?;
-                self.dispatch_data_execution_by_version(tx_data, chain_id, Some(info))
-                    .await
-                    .map(Some)
-            }
-            TxStage::AltFill {
-                info,
-                tx_data,
                 holder,
-            } => self.fill_alt(info, tx_data, holder).map(Some),
+            } => self.fill_alt(info, tx_data, holder).await.map(Some),
             TxStage::IterativeExecution {
                 tx_data,
                 holder,
@@ -302,6 +305,68 @@ impl TransactionBuilder {
                 .await
                 .map(Some),
             TxStage::Final { .. } => Ok(None),
+        }
+    }
+}
+
+/// ## ALT helpers
+impl TransactionBuilder {
+    async fn start_from_alt(
+        &self,
+        tx_data: TxData,
+        holder: Option<HolderInfo>,
+    ) -> anyhow::Result<OngoingTransaction> {
+        let acquire = self
+            .alt_mgr
+            .acquire(tx_data.emulate.solana_accounts.iter().map(|acc| acc.pubkey))
+            .await?;
+        match acquire {
+            alt::UpdateProgress::WriteChunk { ix, info } => {
+                tracing::debug!(
+                    tx_hash = %tx_data.envelope.tx_hash(), ?info, ?holder,
+                    "creating new ALT"
+                );
+                Ok(TxStage::alt_fill(info, tx_data, holder).ongoing(&[ix], &self.pubkey()))
+            }
+            alt::UpdateProgress::Ready(alt) => self.proceed_with_alt(tx_data, holder, alt).await,
+        }
+    }
+
+    async fn fill_alt(
+        &self,
+        info: AltUpdateInfo,
+        tx_data: TxData,
+        holder: Option<HolderInfo>,
+    ) -> anyhow::Result<OngoingTransaction> {
+        match self.alt_mgr.update(info) {
+            alt::UpdateProgress::WriteChunk { ix, info } => {
+                tracing::debug!(
+                    tx_hash = %tx_data.envelope.tx_hash(), ?info, ?holder,
+                    "write next ALT chunk"
+                );
+                Ok(TxStage::alt_fill(info, tx_data, holder).ongoing(&[ix], &self.pubkey()))
+            }
+            alt::UpdateProgress::Ready(info) => self.proceed_with_alt(tx_data, holder, info).await,
+        }
+    }
+
+    async fn proceed_with_alt(
+        &self,
+        tx_data: TxData,
+        holder: Option<HolderInfo>,
+        alt: AltInfo,
+    ) -> anyhow::Result<OngoingTransaction> {
+        match holder {
+            Some(holder) => {
+                self.execute_from_holder_emulated(holder, tx_data, Some(alt))
+                    .await
+            }
+            None => {
+                let chain_id = get_chain_id(&tx_data.envelope)
+                    .context("empty chain id in emulated from_data alt transaction")?;
+                self.dispatch_data_execution_by_version(tx_data, chain_id, Some(alt))
+                    .await
+            }
         }
     }
 }
@@ -349,7 +414,7 @@ impl TransactionBuilder {
         // (e.g. 1.0.0-dev < 1.0.0)
         const BREAKPOINT: Version = Version::new(1, 14, u64::MAX);
 
-        if self.version > BREAKPOINT {
+        if self.evm_config.load().version > BREAKPOINT {
             self.empty_holder_for_data(tx_data, chain_id, alt, false)
                 .await
         } else {
@@ -832,7 +897,7 @@ impl TransactionBuilder {
         alt: Option<AltInfo>,
     ) -> anyhow::Result<OngoingTransaction> {
         Ok(match alt {
-            Some(alt) => stage.ongoing_alt(ixs, &self.pubkey(), alt.into_account())?,
+            Some(alt) => stage.ongoing_alt(ixs, &self.pubkey(), alt)?,
             None => stage.ongoing(ixs, &self.pubkey()),
         })
     }

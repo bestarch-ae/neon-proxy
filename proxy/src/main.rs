@@ -24,8 +24,6 @@ use common::neon_lib;
 use common::neon_lib::types::ChDbConfig;
 use common::solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use common::solana_sdk::pubkey::Pubkey;
-use common::solana_sdk::signature::Keypair;
-use common::solana_sdk::signer::EncodableKey;
 use executor::Executor;
 use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
@@ -314,16 +312,13 @@ async fn main() {
     )
     .expect("failed to create gas prices");
 
-    let executor = if let Some(path) = &opts.executor.operator_keypair {
-        let operator = Keypair::read_from_file(path).expect("cannot read operator keypair");
+    let executor = if opts.executor.operator_keypair.is_some() {
         let (executor, executor_task) = Executor::initialize_and_start(
             neon_api.clone(),
             SolanaApi::new(opts.solana_url, false),
             opts.neon_pubkey,
-            operator,
-            opts.executor.operator_address,
-            opts.executor.init_operator_balance,
-            opts.executor.max_holders,
+            opts.executor,
+            Some(pool.clone()),
         )
         .await
         .expect("could not initialize executor");
