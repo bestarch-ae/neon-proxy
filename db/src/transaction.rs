@@ -495,7 +495,7 @@ impl TransactionRepo {
                         AND CASE
                             -- additionally filter by address & logs
                             WHEN $12 THEN
-                                address = ANY($13) OR $13 = '{}' AND
+                                (address = ANY($13) OR $13 = '{}') AND
                                 (log_topic1 = ANY($14) OR $14 = '{}') AND
                                 (log_topic2 = ANY($15) OR $15 = '{}') AND
                                 (log_topic3 = ANY($16) OR $16 = '{}') AND
