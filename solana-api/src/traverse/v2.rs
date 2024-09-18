@@ -390,7 +390,7 @@ impl TraverseLedger {
             return Err(TxDecodeError::MissingTransactions.into());
         };
         let mut txs = Vec::new();
-        for tx in ui_txs.into_iter() {
+        for (idx, tx) in ui_txs.into_iter().enumerate() {
             if only_success
                 && tx
                     .meta
@@ -402,7 +402,8 @@ impl TraverseLedger {
             }
             let decode_transaction_timer =
                 metrics().traverse.decode_ui_transaction_time.start_timer();
-            let tx = decode_ui_transaction(tx, slot)?;
+            let mut tx = decode_ui_transaction(tx, slot)?;
+            tx.tx_idx = idx as u64;
             drop(decode_transaction_timer);
             if tx.has_key(target) {
                 txs.push(tx);
