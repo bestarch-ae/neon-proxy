@@ -443,12 +443,12 @@ impl TransactionRepo {
             r#"SELECT * FROM
                    (WITH tx_block_slot AS
                     (
-                     SELECT block_slot
+                     SELECT neon_sig,block_slot
                      FROM neon_transactions
                      WHERE neon_sig = $1 OR ($2 AND block_slot between $3 AND $4)
                     )
                     SELECT
-                      neon_sig, tx_type, from_addr,
+                      T.neon_sig, tx_type, from_addr,
                       T.sol_sig, sol_ix_idx,
                       sol_ix_inner_idx, T.block_slot,
                       CAST
@@ -470,7 +470,7 @@ impl TransactionRepo {
                       L.log_topic3, L.log_topic4,
                       L.log_topic_cnt, L.log_data
                     FROM neon_transactions T
-                    LEFT JOIN tx_block_slot S on T.block_slot = S.block_slot
+                    LEFT JOIN tx_block_slot S on T.block_slot = S.block_slot AND T.neon_sig = S.neon_sig
                     LEFT JOIN (
                         SELECT * FROM neon_transaction_logs WHERE NOT COALESCE(is_reverted, FALSE)
                         ) L ON L.tx_hash = T.neon_sig AND T.is_canceled = FALSE
