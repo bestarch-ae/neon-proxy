@@ -26,7 +26,7 @@ struct NeonBlock {
     block: SolanaBlock,
     txs: Vec<NeonTxInfo>,
     signatures: Vec<(u32, Signature)>,
-    canceled: Vec<(TxHash, U256)>,
+    canceled: Vec<(TxHash, u32, U256)>,
     holders: Vec<(u32, bool, HolderOperation)>,
 }
 
@@ -103,9 +103,9 @@ impl Indexer {
                 "saved transaction"
             );
         }
-        for (hash, total_gas) in &block.canceled {
+        for (hash, tx_idx, total_gas) in &block.canceled {
             self.tx_repo
-                .set_canceled(hash, *total_gas, slot, &mut txn)
+                .set_canceled(hash, *total_gas, slot, *tx_idx, &mut txn)
                 .await
                 .context("failed to cancel neon transaction")?;
         }
@@ -201,6 +201,8 @@ impl Indexer {
             let tx_idx = tx.tx_idx as u32;
             let slot = tx.slot;
 
+            neon_block.signatures.push((tx_idx, signature));
+
             metrics().transactions_processed.inc();
 
             let _span =
@@ -251,7 +253,7 @@ impl Indexer {
                         neon_block.txs.push(tx);
                     }
                     Action::CancelTransaction { hash, total_gas } => {
-                        neon_block.canceled.push((hash, total_gas));
+                        neon_block.canceled.push((hash, tx_idx, total_gas));
                     }
                     Action::WriteHolder(op) => {
                         tracing::info!(slot = %slot, pubkey = %op.pubkey(), "saving holder");
