@@ -1,10 +1,10 @@
+use neon_api::NeonApiError;
 use pyth_sdk_solana::PythError;
 use reth_primitives::alloy_primitives::{SignatureError, TxNonce};
-use reth_primitives::ChainId;
-use thiserror::Error;
-
+use reth_primitives::{Address, ChainId};
 use solana_api::solana_client::pubsub_client::PubsubClientError;
 use solana_api::solana_rpc_client_api::client_error::Error as SolanaClientError;
+use thiserror::Error;
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Error)]
@@ -39,4 +39,8 @@ pub enum MempoolError {
     NonceTooHigh(TxNonce, TxNonce),
     #[error("unsupported tx type")]
     UnsupportedTxType,
+    #[error("unknown sender: {0}")]
+    UnknownSender(Address),
+    #[error("neon api error: {0}")]
+    NeonApiError(#[from] NeonApiError),
 }

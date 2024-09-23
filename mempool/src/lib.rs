@@ -2,6 +2,7 @@ mod error;
 mod gas_price_calculator;
 mod gas_prices;
 mod mempool;
+mod pools;
 mod pyth_price_collector;
 #[cfg(test)]
 mod tests;

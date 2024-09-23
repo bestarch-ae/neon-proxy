@@ -339,10 +339,8 @@ async fn main() {
             capacity_high_watermark: opts.mp_capacity_high_watermark,
             eviction_timeout_sec: opts.mp_eviction_timeout_sec,
         };
-        let chains = config.chains.iter().map(|c| c.id).collect();
         let mempool = Mempool::<Executor, GasPrices>::new(
             mp_config,
-            chains,
             mp_gas_prices.clone(),
             executor,
             neon_api.clone(),
