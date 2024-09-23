@@ -2723,7 +2723,7 @@ dependencies = [
 [[package]]
 name = "evm-loader"
 version = "1.15.1"
-source = "git+https://github.com/neonlabsorg/neon-evm.git?rev=v1.15.1#d1e27a753bf40b13234204688315b4e91ac2bdea"
+source = "git+https://github.com/00nktk/neon-evm.git?rev=1ab8167#1ab8167ef8a2789989687c13eea6868d0d625bf2"
 dependencies = [
  "allocator-api2",
  "arrayref",
@@ -2753,7 +2753,7 @@ dependencies = [
 [[package]]
 name = "evm-loader-macro"
 version = "1.0.0"
-source = "git+https://github.com/neonlabsorg/neon-evm.git?rev=v1.15.1#d1e27a753bf40b13234204688315b4e91ac2bdea"
+source = "git+https://github.com/00nktk/neon-evm.git?rev=1ab8167#1ab8167ef8a2789989687c13eea6868d0d625bf2"
 dependencies = [
  "bs58 0.5.1",
  "itertools 0.13.0",
@@ -4395,7 +4395,7 @@ dependencies = [
 [[package]]
 name = "neon-lib"
 version = "1.15.1"
-source = "git+https://github.com/neonlabsorg/neon-evm.git?rev=v1.15.1#d1e27a753bf40b13234204688315b4e91ac2bdea"
+source = "git+https://github.com/00nktk/neon-evm.git?rev=1ab8167#1ab8167ef8a2789989687c13eea6868d0d625bf2"
 dependencies = [
  "abi_stable",
  "anyhow",
@@ -4448,7 +4448,7 @@ dependencies = [
 [[package]]
 name = "neon-lib-interface"
 version = "0.1.0"
-source = "git+https://github.com/neonlabsorg/neon-evm.git?rev=v1.15.1#d1e27a753bf40b13234204688315b4e91ac2bdea"
+source = "git+https://github.com/00nktk/neon-evm.git?rev=1ab8167#1ab8167ef8a2789989687c13eea6868d0d625bf2"
 dependencies = [
  "abi_stable",
  "async-ffi",
