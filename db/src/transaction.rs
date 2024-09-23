@@ -209,6 +209,7 @@ impl TransactionRepo {
         hash: &TxHash,
         gas_used: U256,
         slot: u64,
+        tx_idx: u32,
         txn: &mut sqlx::Transaction<'_, Postgres>,
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(
@@ -218,11 +219,13 @@ impl TransactionRepo {
                is_canceled = true,
                is_completed = true,
                block_slot = $1,
-               gas_used = $2,
-               sum_gas_used = $2
-            WHERE neon_sig = $3 AND is_completed = false
+               tx_idx = $2,
+               gas_used = $3,
+               sum_gas_used = $3
+            WHERE neon_sig = $4 AND is_completed = false
             "#,
             slot as i64,
+            tx_idx as i32,
             PgU256::from(gas_used) as PgU256,
             hash.as_slice()
         )
