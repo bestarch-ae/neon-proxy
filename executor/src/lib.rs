@@ -251,6 +251,11 @@ impl Executor {
             for (signature, status) in signatures.drain(..).zip(result) {
                 self.handle_signature_status(signature, status).await;
             }
+
+            #[cfg(test)]
+            if self.check_stop_after() {
+                return Ok(());
+            }
         }
     }
 
@@ -287,14 +292,15 @@ impl Executor {
 
         let (_, tx) = bail_if_absent!(self.pending_transactions.remove(&signature));
         let slot = status.slot;
+
+        #[cfg(test)]
+        self.test_ext.add(signature);
+
         if let Some(err) = status.err {
             self.handle_error(signature, tx, slot, err).await;
         } else {
             self.handle_success(signature, tx, slot).await;
         }
-
-        #[cfg(test)]
-        self.test_ext.add(signature);
     }
 
     async fn handle_expired_transaction(&self, signature: Signature, tx: OngoingTransaction) {
@@ -310,6 +316,11 @@ impl Executor {
         let tx_hash = tx.eth_tx().map(|tx| *tx.tx_hash());
         // TODO: maybe add Instant to ongoing transaction.
         tracing::info!(?tx_hash, %signature, slot, "transaction was confirmed");
+
+        #[cfg(test)]
+        if self.check_stop_after() {
+            return;
+        }
 
         // TODO: follow up transactions
         match self.builder.next_step(tx).await {
@@ -359,10 +370,26 @@ impl Executor {
 
         Ok(Some(signature))
     }
+}
 
-    #[cfg(test)]
+#[cfg(test)]
+impl Executor {
     async fn join_current_transactions(&self) -> Vec<Signature> {
         self.test_ext.take().await
+    }
+
+    async fn stop_after(&self, n: usize) -> Vec<Signature> {
+        self.test_ext.stop_after(n).await
+    }
+
+    fn check_stop_after(&self) -> bool {
+        if let Some(max) = *self.test_ext.stop_after.lock().unwrap() {
+            if self.test_ext.signatures.lock().unwrap().len() >= max {
+                self.test_ext.notify.notify_waiters();
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -376,6 +403,7 @@ mod test_ext {
     pub struct TestExtension {
         pub notify: Notify,
         pub signatures: Mutex<Vec<Signature>>,
+        pub stop_after: Mutex<Option<usize>>,
     }
 
     impl TestExtension {
@@ -383,7 +411,13 @@ mod test_ext {
             Self {
                 notify: Notify::new(),
                 signatures: Mutex::new(Vec::new()),
+                stop_after: Mutex::new(None),
             }
+        }
+
+        pub async fn stop_after(&self, n: usize) -> Vec<Signature> {
+            self.stop_after.lock().unwrap().replace(n);
+            self.take().await
         }
 
         pub fn add(&self, signature: Signature) {

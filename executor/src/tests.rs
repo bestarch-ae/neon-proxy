@@ -20,7 +20,9 @@ use solana_program_test::{find_file, read_file, ProgramTest, ProgramTestContext}
 
 use common::convert::ToReth;
 use common::ethnum::U256 as NeonU256;
-use common::evm_loader::account::{ContractAccount, MainTreasury, Treasury};
+use common::evm_loader::account::{
+    ContractAccount, MainTreasury, Treasury, TAG_HOLDER, TAG_STATE, TAG_STATE_FINALIZED,
+};
 use common::neon_instruction::tag;
 use common::neon_lib::commands::get_balance::GetBalanceResponse;
 use common::neon_lib::commands::get_config::BuildConfigSimulator;
@@ -324,6 +326,8 @@ struct ExecutorTestEnvironment {
     rpc: CloneRpcClient,
     test_kp: Wallet,
     executor: Arc<Executor>,
+    neon_api: NeonApi,
+    solana_api: SolanaApi,
 }
 
 impl ExecutorTestEnvironment {
@@ -376,10 +380,15 @@ impl ExecutorTestEnvironment {
             init_operator_balance: false,
             max_holders: MAX_HOLDERS,
         };
-        let (executor, task) =
-            Executor::initialize_and_start(neon_api.clone(), solana_api, NEON_KEY, config, None)
-                .await
-                .context("failed initializing executor")?;
+        let (executor, task) = Executor::initialize_and_start(
+            neon_api.clone(),
+            solana_api.clone(),
+            NEON_KEY,
+            config,
+            None,
+        )
+        .await
+        .context("failed initializing executor")?;
         tokio::spawn(task);
         executor.init_operator_balance(CHAIN_ID).await?.unwrap();
         executor.join_current_transactions().await;
@@ -392,6 +401,8 @@ impl ExecutorTestEnvironment {
             rpc,
             test_kp: kp,
             executor,
+            neon_api,
+            solana_api,
         };
         Ok(env)
     }
@@ -497,7 +508,6 @@ async fn transfer_no_chain_id() -> Result<()> {
     // HACK: Fixes random AccountInUse error
     let _ = test_ctx.banks_client.get_account(FST_HOLDER_KEY).await?;
     let txs = executor.join_current_transactions().await;
-    println!("txs: {}", txs.len());
     assert!(txs.len() > 1);
 
     let balance = get_balances(&rpc, &[address1, address2]).await?;
@@ -543,6 +553,56 @@ async fn deploy_contract() -> anyhow::Result<()> {
     let _ = env.banks_client.get_account(FST_HOLDER_KEY).await?;
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
+
+    let contract_address = Address::from_create(&kp.address().0.into(), 0);
+    let (contract_pubkey, _) = contract_address.find_solana_address(&NEON_KEY);
+    let account = env
+        .banks_client
+        .get_account(contract_pubkey)
+        .await?
+        .context("missing contract account")?;
+    code.verify(contract_pubkey, account);
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn recover_holder() -> anyhow::Result<()> {
+    let ExecutorTestEnvironment {
+        test_ctx: mut env,
+        test_kp: kp,
+        executor,
+        neon_api,
+        solana_api,
+        ..
+    } = ExecutorTestEnvironment::start().await?;
+
+    let code = Contract::read("tests/fixtures/hello_world")?;
+    let mut tx = code.deploy_tx();
+    let signature = kp.eth.sign_transaction_sync(&mut tx)?;
+    let tx = tx.into_signed(signature);
+    executor.handle_transaction(req(tx)).await?;
+
+    let _ = env.banks_client.get_account(FST_HOLDER_KEY).await?;
+    let txs = executor.stop_after(3 /* Create + 2 Writes */).await;
+    assert_eq!(txs.len(), 3);
+
+    let account = env.banks_client.get_account(FST_HOLDER_KEY).await?.unwrap();
+    assert_eq!(account.data[0], TAG_HOLDER); // We haven't started yet
+
+    let config = super::Config {
+        operator_keypair: Some("tests/keys/operator.json".into()),
+        operator_address: None,
+        init_operator_balance: false,
+        max_holders: MAX_HOLDERS,
+    };
+
+    let (executor, task) =
+        Executor::initialize_and_start(neon_api, solana_api, NEON_KEY, config, None).await?;
+    tokio::spawn(task);
+    let txs = executor.join_current_transactions().await;
+    assert_eq!(txs.len(), 1);
 
     let contract_address = Address::from_create(&kp.address().0.into(), 0);
     let (contract_pubkey, _) = contract_address.find_solana_address(&NEON_KEY);
@@ -608,6 +668,81 @@ async fn iterations() -> anyhow::Result<()> {
     executor.handle_transaction(req(tx)).await?;
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn recover_state() -> anyhow::Result<()> {
+    let ExecutorTestEnvironment {
+        test_ctx: mut env,
+        test_kp: kp,
+        executor,
+        neon_api,
+        solana_api,
+        ..
+    } = ExecutorTestEnvironment::start().await?;
+
+    let code = Contract::read("tests/fixtures/Counter")?;
+    sol!(Counter, "tests/fixtures/Counter.abi");
+    let call = Counter::moreInstructionCall {
+        x: U256::from(0),
+        y: U256::from(1000),
+    }
+    .abi_encode();
+
+    let mut tx = code.deploy_tx();
+    let signature = kp.eth.sign_transaction_sync(&mut tx)?;
+    let tx = tx.into_signed(signature);
+    // HACK: Fixes random AccountInUse error
+    let _ = env.banks_client.get_account(FST_HOLDER_KEY).await?;
+    executor.handle_transaction(req(tx)).await?;
+
+    let txs = executor.join_current_transactions().await;
+    assert!(txs.len() > 1);
+
+    let contract_address = Address::from_create(&kp.address().0.into(), 0);
+    let (contract_pubkey, _) = contract_address.find_solana_address(&NEON_KEY);
+    let account = env
+        .banks_client
+        .get_account(contract_pubkey)
+        .await?
+        .context("missing contract account")?;
+    code.verify(contract_pubkey, account);
+
+    let mut tx = TxLegacy {
+        nonce: 1,
+        gas_price: 2,
+        gas_limit: u64::MAX.into(),
+        to: TxKind::Call(contract_address.0.into()),
+        value: eth_to_wei(0).to_reth(),
+        input: call.into(),
+        chain_id: Some(CHAIN_ID),
+    };
+    let signature = kp.eth.sign_transaction_sync(&mut tx)?;
+    let tx = tx.into_signed(signature);
+
+    executor.handle_transaction(req(tx)).await?;
+    let txs = executor.stop_after(2).await;
+    assert!(txs.len() > 1);
+    let account = env.banks_client.get_account(FST_HOLDER_KEY).await?.unwrap();
+    assert_eq!(account.data[0], TAG_STATE); // We started
+
+    let config = super::Config {
+        operator_keypair: Some("tests/keys/operator.json".into()),
+        operator_address: None,
+        init_operator_balance: false,
+        max_holders: MAX_HOLDERS,
+    };
+
+    let (executor, task) =
+        Executor::initialize_and_start(neon_api, solana_api, NEON_KEY, config, None).await?;
+    tokio::spawn(task);
+    let txs = executor.join_current_transactions().await;
+    assert!(txs.len() > 1);
+    let account = env.banks_client.get_account(FST_HOLDER_KEY).await?.unwrap();
+    assert_eq!(account.data[0], TAG_STATE_FINALIZED); // We finished
 
     Ok(())
 }
