@@ -5,7 +5,7 @@ use priority_queue::DoublePriorityQueue;
 use reth_primitives::alloy_primitives::TxNonce;
 use reth_primitives::{Address, ChainId};
 
-use crate::pools::{QueueRecord, QueuesUpdate, StateUpdate};
+use crate::pools::{QueueRecord, QueueUpdateAdd, QueueUpdateMove, QueuesUpdate, StateUpdate};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum SenderPoolState {
@@ -89,6 +89,7 @@ impl SenderPool {
         None
     }
 
+    // here we assume that we're adding records with nonce >= tx_count;
     pub fn add(&mut self, record: QueueRecord) -> QueuesUpdate {
         let mut result = QueuesUpdate::default();
         let nonce = record.nonce;
@@ -96,17 +97,20 @@ impl SenderPool {
         if let Some((_, &max_nonce)) = self.pending_nonce_queue.peek_max() {
             if max_nonce + 1 == nonce {
                 self.pending_nonce_queue.push(record.clone(), nonce);
-                result.add_to_pending.push(record.clone());
+                result.add_update = Some(QueueUpdateAdd::Pending(record));
                 return result;
             }
-        } else if nonce == self.tx_count {
+        } else if (!matches!(self.state, SenderPoolState::Queued(_)) && nonce == self.tx_count)
+            || (matches!(self.state, SenderPoolState::Queued(_)) && nonce == self.tx_count + 1)
+        {
             self.pending_nonce_queue.push(record.clone(), nonce);
-            result.add_to_pending.push(record.clone());
+            result.add_update = Some(QueueUpdateAdd::Pending(record));
             let mut last_nonce = nonce + 1;
+            let mut move_to = Vec::new();
             while let Some((_, &nonce)) = self.gapped_nonce_queue.peek_min() {
                 if nonce == last_nonce {
                     if let Some((record, _)) = self.gapped_nonce_queue.pop_min() {
-                        result.move_to_pending.push(record.clone());
+                        move_to.push(record.clone());
                         self.pending_nonce_queue.push(record, nonce);
                         last_nonce += 1;
                     }
@@ -114,15 +118,24 @@ impl SenderPool {
                     break;
                 }
             }
+            if !move_to.is_empty() {
+                result.move_update = Some(QueueUpdateMove::Pending(move_to));
+            }
             if self.state == SenderPoolState::Suspended {
                 self.state = SenderPoolState::Idle;
-                result.state_update = StateUpdate::Unsuspended(self.sender);
+                result.state_update = Some(StateUpdate::Unsuspended(self.sender));
             }
             return result;
         }
 
-        result.add_to_gapped.push(record.clone());
+        result.add_update = Some(QueueUpdateAdd::Gapped(record.clone()));
         self.gapped_nonce_queue.push(record, nonce);
+
+        if self.state == SenderPoolState::Idle && self.pending_nonce_queue.is_empty() {
+            self.state = SenderPoolState::Suspended;
+            result.state_update = Some(StateUpdate::Suspended(self.sender));
+        }
+
         result
     }
 
@@ -155,6 +168,9 @@ impl SenderPool {
         for record in &result.remove_nonce_too_small {
             self.nonce_map.remove(&record.nonce);
         }
+
+        let mut move_to_gapped = Vec::new();
+        // check if we need to dequeue a queued tx because it's nonce diverged from the tx count
         if let SenderPoolState::Queued(queued_nonce) = self.state {
             match queued_nonce.cmp(&self.tx_count) {
                 std::cmp::Ordering::Less => {
@@ -163,15 +179,17 @@ impl SenderPool {
                 }
                 std::cmp::Ordering::Greater => {
                     self.state = SenderPoolState::Suspended;
-                    result.state_update = StateUpdate::Suspended(self.sender);
+                    result.remove_queued_nonce_too_small = self.nonce_map.remove(&queued_nonce);
+                    result.state_update = Some(StateUpdate::Suspended(self.sender));
                     if let Some(nonce_record) = self.nonce_map.get(&queued_nonce) {
-                        result.move_to_gapped.push(nonce_record.clone());
+                        move_to_gapped.push(nonce_record.clone());
                     }
                 }
                 std::cmp::Ordering::Equal => {}
             }
         }
 
+        // move pending txs to gapped if the first pending tx has a nonce > tx_count
         if self.tx_count
             < self
                 .pending_nonce_queue
@@ -181,26 +199,26 @@ impl SenderPool {
         {
             while let Some((record, nonce)) = self.pending_nonce_queue.pop_min() {
                 self.gapped_nonce_queue.push(record.clone(), nonce);
-                result.move_to_gapped.push(record);
+                move_to_gapped.push(record);
             }
-            if !matches!(
-                self.state,
-                SenderPoolState::Suspended
-                    | SenderPoolState::Processing(_)
-                    | SenderPoolState::Queued(_)
-            ) {
+            if self.state == SenderPoolState::Idle {
                 self.state = SenderPoolState::Suspended;
-                result.state_update = StateUpdate::Suspended(self.sender);
+                result.state_update = Some(StateUpdate::Suspended(self.sender));
+            }
+            if !move_to_gapped.is_empty() {
+                result.move_update = Some(QueueUpdateMove::Gapped(move_to_gapped));
             }
             return result;
         }
 
+        let mut move_to_pending = Vec::new();
+        // if pending queue is empty there's a chance we can move gapped txs to pending
         if self.pending_nonce_queue.is_empty() {
             let mut last_nonce = self.tx_count;
             while let Some((_, &nonce)) = self.gapped_nonce_queue.peek_min() {
                 if nonce == last_nonce {
                     if let Some((record, _)) = self.gapped_nonce_queue.pop_min() {
-                        result.move_to_pending.push(record.clone());
+                        move_to_pending.push(record.clone());
                         self.pending_nonce_queue.push(record, nonce);
                         last_nonce += 1;
                     }
@@ -209,25 +227,53 @@ impl SenderPool {
                 }
             }
         }
+        if !move_to_pending.is_empty() {
+            result.move_update = Some(QueueUpdateMove::Pending(move_to_pending));
+        }
 
+        // Check if the pool should suspend or unsuspend based on its state and the nonces in the queues
         if !matches!(
             self.state,
             SenderPoolState::Processing(_) | SenderPoolState::Queued(_)
         ) {
-            if let Some(min_nonce) = self.pending_nonce_queue.peek_min().map(|(_, &n)| n) {
-                if min_nonce == self.tx_count {
-                    if self.state == SenderPoolState::Suspended {
-                        result.state_update = StateUpdate::Unsuspended(self.sender);
-                        self.state = SenderPoolState::Idle;
-                    }
-                } else if self.state != SenderPoolState::Suspended {
-                    self.state = SenderPoolState::Suspended;
-                    result.state_update = StateUpdate::Suspended(self.sender);
+            let pending_min_nonce = self.pending_nonce_queue.peek_min().map(|(_, &n)| n);
+            let gapped_queue_is_empty = self.gapped_nonce_queue.is_empty();
+
+            match (
+                self.state,
+                pending_min_nonce,
+                self.tx_count,
+                gapped_queue_is_empty,
+            ) {
+                // Unsuspend if the pending nonce matches tx_count and the pool is currently suspended
+                (SenderPoolState::Suspended, Some(min_nonce), tx_count, _)
+                    if min_nonce == tx_count =>
+                {
+                    self.state = SenderPoolState::Idle;
+                    result.state_update = Some(StateUpdate::Unsuspended(self.sender));
                 }
-            } else if self.state == SenderPoolState::Suspended && self.gapped_nonce_queue.is_empty()
-            {
-                result.state_update = StateUpdate::Unsuspended(self.sender);
-                self.state = SenderPoolState::Idle;
+
+                // Suspend if the pending nonce doesn't match tx_count and the pool is not already suspended
+                (_, Some(min_nonce), tx_count, _)
+                    if min_nonce != tx_count && self.state != SenderPoolState::Suspended =>
+                {
+                    self.state = SenderPoolState::Suspended;
+                    result.state_update = Some(StateUpdate::Suspended(self.sender));
+                }
+
+                // Unsuspend if the gapped queue is empty and the pool is suspended
+                (SenderPoolState::Suspended, None, _, true) => {
+                    self.state = SenderPoolState::Idle;
+                    result.state_update = Some(StateUpdate::Unsuspended(self.sender));
+                }
+
+                // Suspend if the gapped queue is not empty and the pool is idle and the pending queue is empty
+                (SenderPoolState::Idle, None, _, false) => {
+                    self.state = SenderPoolState::Suspended;
+                    result.state_update = Some(StateUpdate::Suspended(self.sender));
+                }
+
+                _ => {}
             }
         }
 
@@ -272,5 +318,435 @@ impl SenderPool {
         self.pending_nonce_queue.clear();
         self.gapped_nonce_queue.clear();
         transactions.into_iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mempool::EthTxHash;
+
+    const CHAIN_ID: ChainId = 1;
+
+    fn create_record(nonce: TxNonce) -> QueueRecord {
+        QueueRecord {
+            sender: Address::random(),
+            tx_hash: EthTxHash::random(),
+            nonce,
+            sorting_gas_price: 100,
+        }
+    }
+
+    fn create_sender_pool() -> SenderPool {
+        SenderPool::new(CHAIN_ID, Address::random())
+    }
+
+    #[test]
+    fn test_is_empty() {
+        let pool = create_sender_pool();
+        assert!(pool.is_empty());
+
+        let mut pool_with_record = create_sender_pool();
+        let record = create_record(0);
+        pool_with_record.nonce_map.insert(0, record);
+        assert!(!pool_with_record.is_empty());
+    }
+
+    #[test]
+    fn test_get_pending_tx_count() {
+        let mut pool = create_sender_pool();
+        pool.tx_count = 1;
+        assert_eq!(pool.get_pending_tx_count(), Some(1));
+
+        pool.pending_nonce_queue.push(create_record(1), 1);
+        pool.pending_nonce_queue.push(create_record(2), 2);
+        assert_eq!(pool.get_pending_tx_count(), Some(2));
+
+        pool.gapped_nonce_queue.push(create_record(3), 3);
+        assert_eq!(pool.get_pending_tx_count(), Some(2));
+
+        pool.state = SenderPoolState::Suspended;
+        assert_eq!(pool.get_pending_tx_count(), None);
+    }
+
+    #[test]
+    fn test_add_to_pending_queue() {
+        let mut pool = create_sender_pool();
+
+        let record0 = create_record(0);
+        let result = pool.add(record0.clone());
+        let expected_result = QueuesUpdate {
+            add_update: Some(QueueUpdateAdd::Pending(record0.clone())),
+            ..Default::default()
+        };
+        assert_eq!(result, expected_result);
+        assert_eq!(pool.pending_nonce_queue.len(), 1);
+        assert_eq!(pool.gapped_nonce_queue.len(), 0);
+        assert!(pool.nonce_map.contains_key(&record0.nonce));
+
+        let record1 = create_record(1);
+        let result = pool.add(record1.clone());
+        let expected_result = QueuesUpdate {
+            add_update: Some(QueueUpdateAdd::Pending(record1.clone())),
+            ..Default::default()
+        };
+        assert_eq!(result, expected_result);
+        assert_eq!(pool.pending_nonce_queue.len(), 2);
+        assert_eq!(pool.gapped_nonce_queue.len(), 0);
+        assert!(pool.nonce_map.contains_key(&record1.nonce));
+
+        let mut pool = create_sender_pool();
+        pool.state = SenderPoolState::Queued(0);
+        let result = pool.add(record1.clone());
+        let expected_result = QueuesUpdate {
+            add_update: Some(QueueUpdateAdd::Pending(record1.clone())),
+            ..Default::default()
+        };
+        assert_eq!(result, expected_result);
+        assert_eq!(pool.pending_nonce_queue.len(), 1);
+        assert_eq!(pool.gapped_nonce_queue.len(), 0);
+        assert_eq!(pool.state, SenderPoolState::Queued(0));
+    }
+
+    #[test]
+    fn test_add_to_gapped_queue() {
+        let mut pool = create_sender_pool();
+        let record2 = create_record(2);
+        let result = pool.add(record2.clone());
+        let expected_result = QueuesUpdate {
+            state_update: Some(StateUpdate::Suspended(pool.sender)),
+            add_update: Some(QueueUpdateAdd::Gapped(record2.clone())),
+            ..Default::default()
+        };
+        assert_eq!(result, expected_result);
+        assert_eq!(pool.gapped_nonce_queue.len(), 1);
+        assert!(pool.nonce_map.contains_key(&record2.nonce));
+        assert_eq!(pool.state, SenderPoolState::Suspended);
+
+        let mut pool = create_sender_pool();
+        pool.add(create_record(0));
+        pool.add(create_record(1));
+        let record3 = create_record(3);
+        let result = pool.add(record3.clone());
+        let expected_result = QueuesUpdate {
+            add_update: Some(QueueUpdateAdd::Gapped(record3.clone())),
+            ..Default::default()
+        };
+        assert_eq!(result, expected_result);
+        assert_eq!(pool.gapped_nonce_queue.len(), 1);
+        assert!(pool.nonce_map.contains_key(&record3.nonce));
+        assert_eq!(pool.state, SenderPoolState::Idle);
+    }
+
+    #[test]
+    fn test_remove_by_nonce() {
+        let mut pool = create_sender_pool();
+
+        let record = create_record(0);
+        pool.add(record.clone());
+        let removed = pool.remove_by_nonce(0);
+        assert_eq!(removed, Some(record.clone()));
+        assert!(!pool.nonce_map.contains_key(&0));
+        assert_eq!(pool.pending_nonce_queue.len(), 0);
+
+        let record = create_record(1);
+        pool.add(record.clone());
+        let removed = pool.remove_by_nonce(1);
+        assert_eq!(removed, Some(record.clone()));
+        assert!(!pool.nonce_map.contains_key(&1));
+        assert_eq!(pool.gapped_nonce_queue.len(), 0);
+    }
+
+    #[test]
+    fn test_drain_pool() {
+        let mut pool = create_sender_pool();
+
+        let record1 = create_record(0);
+        let record2 = create_record(1);
+        let record3 = create_record(3);
+
+        pool.add(record1.clone());
+        pool.add(record2.clone());
+        pool.add(record3.clone());
+
+        let mut drained = pool.drain().collect::<Vec<_>>();
+        drained.sort_by_key(|x| x.nonce);
+        assert_eq!(drained, vec![record1, record2, record3]);
+        assert!(pool.nonce_map.is_empty());
+        assert!(pool.pending_nonce_queue.is_empty());
+        assert!(pool.gapped_nonce_queue.is_empty());
+    }
+
+    #[test]
+    fn test_set_processing() {
+        let mut pool = create_sender_pool();
+        pool.add(create_record(0));
+
+        pool.set_processing(0);
+        assert_eq!(pool.state, SenderPoolState::Processing(0));
+        assert!(!pool.nonce_map.contains_key(&0));
+        assert_eq!(pool.tx_count, 1);
+    }
+
+    #[test]
+    fn test_set_idle() {
+        let mut pool = create_sender_pool();
+
+        pool.state = SenderPoolState::Processing(1);
+        pool.set_idle();
+
+        assert_eq!(pool.state, SenderPoolState::Idle);
+    }
+
+    #[test]
+    fn test_set_tx_count_no_change() {
+        let mut pool = create_sender_pool();
+        pool.tx_count = 5;
+
+        let result = pool.set_tx_count(5);
+
+        let expected_result = QueuesUpdate::default();
+        assert_eq!(result, expected_result);
+        assert_eq!(pool.tx_count, 5);
+    }
+
+    #[test]
+    fn test_set_tx_count_not_suspended() {
+        let mut pool = create_sender_pool();
+
+        let record0 = create_record(0);
+        let record1 = create_record(1);
+        let record2 = create_record(2);
+        let record4 = create_record(4);
+        let record5 = create_record(5);
+        let record6 = create_record(6);
+        let record8 = create_record(8);
+
+        // pending
+        pool.add(record0.clone());
+        pool.add(record1.clone());
+        pool.add(record2.clone());
+        // gapped
+        pool.add(record4.clone());
+        pool.add(record5.clone());
+        pool.add(record6.clone());
+        pool.add(record8.clone());
+
+        let result = pool.set_tx_count(2);
+        let expected_result = QueuesUpdate {
+            remove_nonce_too_small: vec![record0.clone(), record1.clone()],
+            ..Default::default()
+        };
+        assert_eq!(result, expected_result);
+        assert_eq!(pool.tx_count, 2);
+        assert_eq!(pool.state, SenderPoolState::Idle);
+        assert_eq!(
+            pool.pending_nonce_queue,
+            DoublePriorityQueue::<QueueRecord, TxNonce>::from(vec![(record2.clone(), 2)])
+        );
+        assert_eq!(
+            pool.gapped_nonce_queue,
+            DoublePriorityQueue::<QueueRecord, TxNonce>::from(vec![
+                (record4.clone(), 4),
+                (record5.clone(), 5),
+                (record6.clone(), 6),
+                (record8.clone(), 8)
+            ])
+        );
+        assert!(!pool.nonce_map.contains_key(&0));
+        assert!(!pool.nonce_map.contains_key(&1));
+
+        let result = pool.set_tx_count(5);
+        let expected_result = QueuesUpdate {
+            remove_nonce_too_small: vec![record2.clone(), record4.clone()],
+            move_update: Some(QueueUpdateMove::Pending(vec![
+                record5.clone(),
+                record6.clone(),
+            ])),
+            ..Default::default()
+        };
+        assert_eq!(result, expected_result);
+        assert_eq!(pool.tx_count, 5);
+        assert_eq!(pool.state, SenderPoolState::Idle);
+        assert_eq!(
+            pool.pending_nonce_queue,
+            DoublePriorityQueue::<QueueRecord, TxNonce>::from(vec![
+                (record5.clone(), 5),
+                (record6.clone(), 6),
+            ])
+        );
+        assert_eq!(
+            pool.gapped_nonce_queue,
+            DoublePriorityQueue::<QueueRecord, TxNonce>::from(vec![(record8.clone(), 8)])
+        );
+
+        let mut pool = create_sender_pool();
+        pool.tx_count = 2;
+        let record2 = create_record(2);
+        let record3 = create_record(3);
+        pool.add(record2.clone());
+        pool.add(record3.clone());
+
+        let result = pool.set_tx_count(1);
+        let expected_result = QueuesUpdate {
+            move_update: Some(QueueUpdateMove::Gapped(vec![
+                record2.clone(),
+                record3.clone(),
+            ])),
+            state_update: Some(StateUpdate::Suspended(pool.sender)),
+            ..Default::default()
+        };
+        assert_eq!(result, expected_result);
+        assert_eq!(pool.state, SenderPoolState::Suspended);
+        assert_eq!(
+            pool.pending_nonce_queue,
+            DoublePriorityQueue::<QueueRecord, TxNonce>::from(vec![])
+        );
+        assert_eq!(
+            pool.gapped_nonce_queue,
+            DoublePriorityQueue::<QueueRecord, TxNonce>::from(vec![
+                (record2.clone(), 2),
+                (record3.clone(), 3)
+            ])
+        );
+    }
+
+    #[test]
+    fn test_set_tx_count_suspended() {
+        let mut pool = create_sender_pool();
+        pool.tx_count = 1;
+        pool.state = SenderPoolState::Suspended;
+
+        let record2 = create_record(2);
+        let record3 = create_record(3);
+        let record5 = create_record(5);
+
+        pool.add(record2.clone());
+        pool.add(record3.clone());
+        pool.add(record5.clone());
+
+        let result = pool.set_tx_count(2);
+        let expected_result = QueuesUpdate {
+            move_update: Some(QueueUpdateMove::Pending(vec![
+                record2.clone(),
+                record3.clone(),
+            ])),
+            state_update: Some(StateUpdate::Unsuspended(pool.sender)),
+            ..Default::default()
+        };
+        assert_eq!(result, expected_result);
+        assert_eq!(pool.state, SenderPoolState::Idle);
+        assert_eq!(
+            pool.pending_nonce_queue,
+            DoublePriorityQueue::<QueueRecord, TxNonce>::from(vec![
+                (record2.clone(), 2),
+                (record3.clone(), 3),
+            ])
+        );
+        assert_eq!(
+            pool.gapped_nonce_queue,
+            DoublePriorityQueue::<QueueRecord, TxNonce>::from(vec![(record5.clone(), 5)])
+        );
+
+        let mut pool = create_sender_pool();
+
+        pool.add(record2.clone());
+
+        let result = pool.set_tx_count(1);
+        let expected_result = QueuesUpdate::default();
+        assert_eq!(result, expected_result);
+        assert_eq!(pool.state, SenderPoolState::Suspended);
+        assert_eq!(pool.pending_nonce_queue.len(), 0);
+        assert_eq!(pool.gapped_nonce_queue.len(), 1);
+    }
+
+    #[test]
+    fn test_set_tx_count_deque() {
+        let record0 = create_record(0);
+        let record1 = create_record(1);
+        let record2 = create_record(2);
+        let record3 = create_record(3);
+        let record5 = create_record(5);
+
+        let mut pool = create_sender_pool();
+        pool.nonce_map.insert(0, record0.clone());
+        pool.nonce_map.insert(0, record0.clone());
+        pool.state = SenderPoolState::Queued(0);
+        pool.add(record1.clone());
+        let result = pool.set_tx_count(1);
+        let expected_result = QueuesUpdate {
+            remove_queued_nonce_too_small: Some(record0.clone()),
+            ..Default::default()
+        };
+        assert_eq!(result, expected_result);
+        assert_eq!(pool.state, SenderPoolState::Idle);
+        assert_eq!(
+            pool.pending_nonce_queue,
+            DoublePriorityQueue::<QueueRecord, TxNonce>::from(vec![(record1, 1)])
+        );
+        assert!(pool.gapped_nonce_queue.is_empty());
+
+        let mut pool = create_sender_pool();
+        pool.state = SenderPoolState::Queued(0);
+        pool.nonce_map.insert(0, record0.clone());
+        pool.add(record2.clone());
+        let result = pool.set_tx_count(1);
+        let expected_result = QueuesUpdate {
+            remove_queued_nonce_too_small: Some(record0.clone()),
+            state_update: Some(StateUpdate::Suspended(pool.sender)),
+            ..Default::default()
+        };
+        assert_eq!(result, expected_result);
+        assert_eq!(pool.state, SenderPoolState::Suspended);
+        assert!(pool.pending_nonce_queue.is_empty());
+        assert_eq!(
+            pool.gapped_nonce_queue,
+            DoublePriorityQueue::<QueueRecord, TxNonce>::from(vec![(record2.clone(), 2)])
+        );
+
+        let mut pool = create_sender_pool();
+        pool.state = SenderPoolState::Queued(0);
+        pool.nonce_map.insert(0, record0.clone());
+        pool.add(record2.clone());
+        pool.add(record3.clone());
+        pool.add(record5.clone());
+        let result = pool.set_tx_count(2);
+        let expected_result = QueuesUpdate {
+            remove_queued_nonce_too_small: Some(record0.clone()),
+            move_update: Some(QueueUpdateMove::Pending(vec![
+                record2.clone(),
+                record3.clone(),
+            ])),
+            ..Default::default()
+        };
+        assert_eq!(result, expected_result);
+        assert_eq!(pool.state, SenderPoolState::Idle);
+        assert_eq!(
+            pool.pending_nonce_queue,
+            DoublePriorityQueue::<QueueRecord, TxNonce>::from(vec![
+                (record2.clone(), 2),
+                (record3.clone(), 3)
+            ])
+        );
+    }
+
+    #[test]
+    fn test_set_tx_count_processing() {
+        let mut pool = create_sender_pool();
+        pool.state = SenderPoolState::Processing(1);
+        pool.tx_count = 2;
+        let record3 = create_record(3);
+        pool.add(record3.clone());
+        let result = pool.set_tx_count(3);
+        let expected_result = QueuesUpdate {
+            move_update: Some(QueueUpdateMove::Pending(vec![record3.clone()])),
+            ..Default::default()
+        };
+        assert_eq!(result, expected_result);
+        assert_eq!(pool.state, SenderPoolState::Processing(1));
+        assert_eq!(
+            pool.pending_nonce_queue,
+            DoublePriorityQueue::<QueueRecord, TxNonce>::from(vec![(record3, 3)])
+        );
     }
 }

@@ -17,8 +17,8 @@ use neon_api::NeonApi;
 
 use crate::mempool::{Command, EthTxHash, GasPrice, TxRecord};
 use crate::pools::{
-    ExecutionResult, QueueRecord, QueuesUpdate, SenderPool, SenderPoolState, SenderResolverRecord,
-    SendersResolver, SendersResolverCommand, StateUpdate,
+    ExecutionResult, QueueRecord, QueueUpdateAdd, QueueUpdateMove, QueuesUpdate, SenderPool,
+    SenderPoolState, SenderResolverRecord, SendersResolver, SendersResolverCommand, StateUpdate,
 };
 use crate::{GasPricesTrait, MempoolError};
 
@@ -357,35 +357,43 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
             self.tx_price_queue.remove(&record);
             self.txs.remove(&record.tx_hash);
         }
-        for record in update.add_to_pending {
-            let price = record.sorting_gas_price;
-            self.pending_price_reversed_queue
-                .push(record, Reverse(price));
+        match update.add_update {
+            Some(QueueUpdateAdd::Pending(record)) => {
+                let price = record.sorting_gas_price;
+                self.pending_price_reversed_queue
+                    .push(record, Reverse(price));
+            }
+            Some(QueueUpdateAdd::Gapped(record)) => {
+                let price = record.sorting_gas_price;
+                self.gapped_price_reversed_queue
+                    .push(record, Reverse(price));
+            }
+            None => {}
         }
-        for record in update.add_to_gapped {
-            let price = record.sorting_gas_price;
-            self.gapped_price_reversed_queue
-                .push(record, Reverse(price));
+        match update.move_update {
+            Some(QueueUpdateMove::Pending(records)) => {
+                for record in records {
+                    let price = record.sorting_gas_price;
+                    self.pending_price_reversed_queue
+                        .push(record, Reverse(price));
+                }
+            }
+            Some(QueueUpdateMove::Gapped(records)) => {
+                for record in records {
+                    let price = record.sorting_gas_price;
+                    self.gapped_price_reversed_queue
+                        .push(record, Reverse(price));
+                }
+            }
+            None => {}
         }
         for record in update.remove_nonce_too_small {
             self.gapped_price_reversed_queue.remove(&record);
             self.pending_price_reversed_queue.remove(&record);
             self.txs.remove(&record.tx_hash);
         }
-        for record in update.move_to_gapped {
-            self.pending_price_reversed_queue.remove(&record);
-            let price = record.sorting_gas_price;
-            self.gapped_price_reversed_queue
-                .push(record, Reverse(price));
-        }
-        for record in update.move_to_pending {
-            self.gapped_price_reversed_queue.remove(&record);
-            let price = record.sorting_gas_price;
-            self.pending_price_reversed_queue
-                .push(record, Reverse(price));
-        }
         match update.state_update {
-            StateUpdate::Suspended(addr) => self
+            Some(StateUpdate::Suspended(addr)) => self
                 .resolver_tx
                 .send(SendersResolverCommand::Add(SenderResolverRecord {
                     sender: BalanceAddress {
@@ -396,12 +404,12 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
                 }))
                 .await
                 .unwrap(),
-            StateUpdate::Unsuspended(addr) => self
+            Some(StateUpdate::Unsuspended(addr)) => self
                 .resolver_tx
                 .send(SendersResolverCommand::Remove(addr))
                 .await
                 .unwrap(),
-            StateUpdate::None => {}
+            None => {}
         }
     }
 
@@ -595,7 +603,6 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
         tracing::debug!(%sender, "sender pool removed");
     }
 
-    #[inline]
     fn len(&self) -> usize {
         self.pending_price_reversed_queue.len() + self.gapped_price_reversed_queue.len()
     }

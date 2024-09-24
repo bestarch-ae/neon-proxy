@@ -26,21 +26,29 @@ pub struct QueueRecord {
     pub sorting_gas_price: GasPrice,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Default)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum StateUpdate {
-    #[default]
-    None,
     Suspended(Address),
     Unsuspended(Address),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum QueueUpdateAdd {
+    Pending(QueueRecord),
+    Gapped(QueueRecord),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum QueueUpdateMove {
+    Pending(Vec<QueueRecord>),
+    Gapped(Vec<QueueRecord>),
+}
+
+#[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct QueuesUpdate {
-    state_update: StateUpdate,
-    add_to_pending: Vec<QueueRecord>,
-    add_to_gapped: Vec<QueueRecord>,
-    remove_nonce_too_small: Vec<QueueRecord>,
-    move_to_gapped: Vec<QueueRecord>,
-    move_to_pending: Vec<QueueRecord>,
-    remove_queued_nonce_too_small: Option<QueueRecord>,
+    pub state_update: Option<StateUpdate>,
+    pub add_update: Option<QueueUpdateAdd>,
+    pub move_update: Option<QueueUpdateMove>,
+    pub remove_nonce_too_small: Vec<QueueRecord>,
+    pub remove_queued_nonce_too_small: Option<QueueRecord>,
 }
