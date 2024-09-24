@@ -467,7 +467,7 @@ impl TransactionRepo {
                       B.block_hash,
 
                       L.address, L.tx_log_idx,
-                      (row_number() OVER (PARTITION BY T.block_slot ORDER BY L.block_slot,L.tx_idx,L.tx_log_idx))-1 as log_idx,
+                      (row_number() OVER (PARTITION BY T.block_slot ORDER BY T.block_slot,T.tx_idx,L.block_slot,L.tx_idx,L.tx_log_idx))-1 as log_idx,
                       L.event_level, L.event_order,
                       L.log_topic1, L.log_topic2,
                       L.log_topic3, L.log_topic4,

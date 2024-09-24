@@ -248,6 +248,7 @@ async fn main() {
         .get_config()
         .await
         .expect("failed to get EVM config");
+    tracing::info!(?config, "evm config");
     let default_token_name = opts.default_token_name.to_lowercase();
     let default_chain_id = config
         .chains
