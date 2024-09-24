@@ -11,8 +11,8 @@ impl Web3ApiServer for EthApiImpl {
     }
 
     fn sha3(&self, data: Bytes) -> RpcResult<B256> {
-        use common::solana_sdk::keccak::Hash;
-        let Hash(hash) = Hash::new(&data);
+        use common::solana_sdk::keccak::{hash, Hash};
+        let Hash(hash) = hash(&data);
         Ok(B256::from(hash))
     }
 }
