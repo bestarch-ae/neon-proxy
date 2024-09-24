@@ -40,8 +40,8 @@ pub enum QueueUpdateAdd {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum QueueUpdateMove {
-    Pending(Vec<QueueRecord>),
-    Gapped(Vec<QueueRecord>),
+    GappedToPending(Vec<QueueRecord>),
+    PendingToGapped(Vec<QueueRecord>),
 }
 
 #[derive(Debug, Default, Clone, Eq, PartialEq)]

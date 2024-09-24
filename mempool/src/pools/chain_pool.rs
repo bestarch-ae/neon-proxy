@@ -213,7 +213,7 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
         let chain_id = tx.chain_id();
         let sender = tx.sender;
 
-        let sender_pool = self.get_or_create_sender_pool(&sender);
+        let (sender_pool, created) = self.get_or_create_sender_pool(&sender).await;
         // Clone necessary data from sender_pool to avoid mutable borrow later
         let sender_pool_state = sender_pool.state;
         let tx_count = sender_pool.tx_count;
@@ -253,7 +253,6 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
             false
         };
 
-        // todo: think a bit more; if we have a new sender here tx_count is 0 at this moment
         let sender_chain_tx_count = tx_count;
         let chain_pool_len = self.len();
         if chain_pool_len > self.capacity_high_watermark {
@@ -294,7 +293,7 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
         };
         self.txs.insert(tx_hash, tx);
         self.add_record(record).await;
-        self.queue_new_tx(&sender).await?;
+        self.queue_new_tx(&sender, !created).await?;
         tracing::debug!(%tx_hash, "tx added to pool");
         Ok(())
     }
@@ -309,10 +308,12 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
         Some(tx_record.tx_hash)
     }
 
-    async fn queue_new_tx(&mut self, sender: &Address) -> Result<(), MempoolError> {
-        use common::evm_loader::types::Address;
+    async fn queue_new_tx(
+        &mut self,
+        sender: &Address,
+        update_tx_count: bool,
+    ) -> Result<(), MempoolError> {
         tracing::debug!(%sender, "queueing new tx");
-
         let Some(sender_pool) = self.sender_pools.get_mut(sender) else {
             return Err(MempoolError::UnknownSender(*sender));
         };
@@ -324,17 +325,10 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
             return Ok(());
         }
 
-        let balance_addr = BalanceAddress {
-            chain_id: self.chain_id,
-            address: Address::from(<[u8; 20]>::from(sender.0)),
-        };
-        let tx_count = self
-            .neon_api
-            .get_transaction_count(balance_addr, None)
-            .await?;
-
-        let queues_update = sender_pool.set_tx_count(tx_count);
-        self.apply_queues_update(queues_update).await;
+        if update_tx_count {
+            let queues_update = sender_pool.update_tx_count(&self.neon_api).await?;
+            self.apply_queues_update(queues_update).await;
+        }
 
         // reborrow sender pool to make borrow checker happy
         let Some(sender_pool) = self.sender_pools.get_mut(sender) else {
@@ -344,7 +338,7 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
         if let Some(tx) = sender_pool.get_for_queueing() {
             let gas_price = tx.sorting_gas_price;
             self.tx_price_queue.push(tx, gas_price);
-            tracing::debug!(%sender, %tx_count, "tx queued");
+            tracing::debug!(%sender, tx_count = %sender_pool.tx_count, "tx queued");
         }
 
         Ok(())
@@ -371,15 +365,17 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
             None => {}
         }
         match update.move_update {
-            Some(QueueUpdateMove::Pending(records)) => {
+            Some(QueueUpdateMove::GappedToPending(records)) => {
                 for record in records {
+                    self.gapped_price_reversed_queue.remove(&record);
                     let price = record.sorting_gas_price;
                     self.pending_price_reversed_queue
                         .push(record, Reverse(price));
                 }
             }
-            Some(QueueUpdateMove::Gapped(records)) => {
+            Some(QueueUpdateMove::PendingToGapped(records)) => {
                 for record in records {
+                    self.pending_price_reversed_queue.remove(&record);
                     let price = record.sorting_gas_price;
                     self.gapped_price_reversed_queue
                         .push(record, Reverse(price));
@@ -494,7 +490,7 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
             let sender = sender_pool.sender;
             self.remove_sender_pool(&sender).await;
         } else {
-            self.queue_new_tx(&record.sender).await?;
+            self.queue_new_tx(&record.sender, true).await?;
         }
 
         Ok(())
@@ -608,17 +604,20 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
     }
 
     /// Gets or creates a sender pool for the given sender.
-    fn get_or_create_sender_pool(&mut self, sender: &Address) -> &SenderPool {
-        if self.sender_pools.contains_key(sender) {
+    async fn get_or_create_sender_pool(&mut self, sender: &Address) -> (&SenderPool, bool) {
+        let mut created = false;
+        if !self.sender_pools.contains_key(sender) {
             self.sender_heartbeat_queue
                 .push(*sender, Reverse(SystemTime::now()));
+            let mut sender_pool = SenderPool::new(self.chain_id, *sender);
+            // it's an empty sender pool, we don't care about queues update
+            if let Err(err) = sender_pool.update_tx_count(&self.neon_api).await {
+                tracing::error!(?err, "failed to update tx count");
+            }
+            self.sender_pools.insert(*sender, sender_pool);
+            created = true;
         }
 
-        let pool_ref = self
-            .sender_pools
-            .entry(*sender)
-            .or_insert_with(|| SenderPool::new(self.chain_id, *sender));
-
-        pool_ref
+        (self.sender_pools.get(sender).unwrap(), created)
     }
 }

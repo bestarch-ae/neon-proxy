@@ -1,11 +1,13 @@
 use std::cmp::max;
 use std::collections::HashMap;
 
+use crate::pools::{QueueRecord, QueueUpdateAdd, QueueUpdateMove, QueuesUpdate, StateUpdate};
+use crate::MempoolError;
+use common::neon_lib::types::BalanceAddress;
+use neon_api::NeonApi;
 use priority_queue::DoublePriorityQueue;
 use reth_primitives::alloy_primitives::TxNonce;
 use reth_primitives::{Address, ChainId};
-
-use crate::pools::{QueueRecord, QueueUpdateAdd, QueueUpdateMove, QueuesUpdate, StateUpdate};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum SenderPoolState {
@@ -119,7 +121,7 @@ impl SenderPool {
                 }
             }
             if !move_to.is_empty() {
-                result.move_update = Some(QueueUpdateMove::Pending(move_to));
+                result.move_update = Some(QueueUpdateMove::GappedToPending(move_to));
             }
             if self.state == SenderPoolState::Suspended {
                 self.state = SenderPoolState::Idle;
@@ -206,7 +208,7 @@ impl SenderPool {
                 result.state_update = Some(StateUpdate::Suspended(self.sender));
             }
             if !move_to_gapped.is_empty() {
-                result.move_update = Some(QueueUpdateMove::Gapped(move_to_gapped));
+                result.move_update = Some(QueueUpdateMove::PendingToGapped(move_to_gapped));
             }
             return result;
         }
@@ -228,7 +230,7 @@ impl SenderPool {
             }
         }
         if !move_to_pending.is_empty() {
-            result.move_update = Some(QueueUpdateMove::Pending(move_to_pending));
+            result.move_update = Some(QueueUpdateMove::GappedToPending(move_to_pending));
         }
 
         // Check if the pool should suspend or unsuspend based on its state and the nonces in the queues
@@ -318,6 +320,20 @@ impl SenderPool {
         self.pending_nonce_queue.clear();
         self.gapped_nonce_queue.clear();
         transactions.into_iter()
+    }
+
+    pub async fn update_tx_count(
+        &mut self,
+        neon_api: &NeonApi,
+    ) -> Result<QueuesUpdate, MempoolError> {
+        use common::evm_loader::types::Address;
+
+        let balance_addr = BalanceAddress {
+            chain_id: self.chain_id,
+            address: Address::from(<[u8; 20]>::from(self.sender.0)),
+        };
+        let tx_count = neon_api.get_transaction_count(balance_addr, None).await?;
+        Ok(self.set_tx_count(tx_count))
     }
 }
 
@@ -559,7 +575,7 @@ mod tests {
         let result = pool.set_tx_count(5);
         let expected_result = QueuesUpdate {
             remove_nonce_too_small: vec![record2.clone(), record4.clone()],
-            move_update: Some(QueueUpdateMove::Pending(vec![
+            move_update: Some(QueueUpdateMove::GappedToPending(vec![
                 record5.clone(),
                 record6.clone(),
             ])),
@@ -589,7 +605,7 @@ mod tests {
 
         let result = pool.set_tx_count(1);
         let expected_result = QueuesUpdate {
-            move_update: Some(QueueUpdateMove::Gapped(vec![
+            move_update: Some(QueueUpdateMove::PendingToGapped(vec![
                 record2.clone(),
                 record3.clone(),
             ])),
@@ -627,7 +643,7 @@ mod tests {
 
         let result = pool.set_tx_count(2);
         let expected_result = QueuesUpdate {
-            move_update: Some(QueueUpdateMove::Pending(vec![
+            move_update: Some(QueueUpdateMove::GappedToPending(vec![
                 record2.clone(),
                 record3.clone(),
             ])),
@@ -713,7 +729,7 @@ mod tests {
         let result = pool.set_tx_count(2);
         let expected_result = QueuesUpdate {
             remove_queued_nonce_too_small: Some(record0.clone()),
-            move_update: Some(QueueUpdateMove::Pending(vec![
+            move_update: Some(QueueUpdateMove::GappedToPending(vec![
                 record2.clone(),
                 record3.clone(),
             ])),
@@ -739,7 +755,7 @@ mod tests {
         pool.add(record3.clone());
         let result = pool.set_tx_count(3);
         let expected_result = QueuesUpdate {
-            move_update: Some(QueueUpdateMove::Pending(vec![record3.clone()])),
+            move_update: Some(QueueUpdateMove::GappedToPending(vec![record3.clone()])),
             ..Default::default()
         };
         assert_eq!(result, expected_result);
