@@ -242,7 +242,7 @@ impl Executor {
             // TODO: request finalized
             let result = match self.solana_api.get_signature_statuses(&signatures).await {
                 Err(err) => {
-                    tracing::warn!(%err, "could not request signature statuses");
+                    tracing::warn!(?err, "could not request signature statuses");
                     continue;
                 }
                 Ok(res) => res,
@@ -281,7 +281,7 @@ impl Executor {
                 .solana_api
                 .is_blockhash_valid(&hash)
                 .await
-                .inspect_err(|err| tracing::warn!(%err, "could not check blockhash validity"))
+                .inspect_err(|err| tracing::warn!(?err, "could not check blockhash validity"))
                 .unwrap_or(true);
             if !is_valid {
                 let (_, tx) = bail_if_absent!(self.pending_transactions.remove(&signature));
@@ -308,7 +308,7 @@ impl Executor {
         // TODO: retry counter
         tracing::warn!(?tx_hash, %signature, "transaction blockhash expired, retrying");
         if let Err(error) = self.sign_and_send_transaction(tx).await {
-            tracing::error!(?tx_hash, %signature, %error, "failed retrying transaction");
+            tracing::error!(?tx_hash, %signature, ?error, "failed retrying transaction");
         }
     }
 
@@ -325,11 +325,11 @@ impl Executor {
         // TODO: follow up transactions
         match self.builder.next_step(tx).await {
             Err(err) => {
-                tracing::error!(?tx_hash, %signature, %err, "failed executing next transaction step")
+                tracing::error!(?tx_hash, %signature, ?err, "failed executing next transaction step")
             }
             Ok(Some(tx)) => {
                 if let Err(err) = self.sign_and_send_transaction(tx).await {
-                    tracing::error!(%signature, ?tx_hash, %err, "failed sending transaction next step");
+                    tracing::error!(%signature, ?tx_hash, ?err, "failed sending transaction next step");
                 }
             }
             Ok(None) => (),
@@ -344,7 +344,7 @@ impl Executor {
         err: TransactionError,
     ) {
         let tx_hash = tx.eth_tx().map(|tx| *tx.tx_hash());
-        tracing::warn!(?tx_hash, %signature, slot, %err, "transaction was confirmed, but failed");
+        tracing::warn!(?tx_hash, %signature, slot, ?err, "transaction was confirmed, but failed");
 
         // TODO: do we retry?
         // TODO: do we request logs?

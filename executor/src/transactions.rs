@@ -154,7 +154,7 @@ impl TransactionBuilder {
         let chains = config.chains;
         let version: Version = config.version.parse().unwrap_or_else(|error| {
             tracing::error!(
-                %error, version = config.version, default = %EvmConfig::DEFAULT_NEON_EVM_VERSION,
+                ?error, version = config.version, default = %EvmConfig::DEFAULT_NEON_EVM_VERSION,
                 "error parsing version in config, fallback to default"
             );
             EvmConfig::DEFAULT_NEON_EVM_VERSION
