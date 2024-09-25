@@ -460,7 +460,8 @@ impl TransactionRepo {
                         )-1 AS INTEGER) as tx_idx,
                       nonce, gas_price,
                       gas_limit, value, gas_used,
-                      sum_gas_used, to_addr, contract,
+                      cum_gas_used as sum_gas_used,
+                      to_addr, contract,
                       status, is_canceled, is_completed,
                       v, r, s, chain_id,
                       calldata, neon_step_cnt,
@@ -472,7 +473,9 @@ impl TransactionRepo {
                       L.log_topic1, L.log_topic2,
                       L.log_topic3, L.log_topic4,
                       L.log_topic_cnt, L.log_data
-                    FROM neon_transactions T
+                    FROM
+                        (SELECT *,SUM(gas_used) OVER (PARTITION BY block_slot ORDER BY block_slot,tx_idx,sol_ix_idx) as cum_gas_used
+                         FROM neon_transactions) T
                     LEFT JOIN tx_block_slot S on T.block_slot = S.block_slot AND T.neon_sig = S.neon_sig
                     LEFT JOIN (
                         SELECT * FROM neon_transaction_logs WHERE NOT COALESCE(is_reverted, FALSE)
