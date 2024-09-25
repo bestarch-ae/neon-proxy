@@ -1,13 +1,15 @@
 use std::cmp::max;
 use std::collections::HashMap;
 
-use crate::pools::{QueueRecord, QueueUpdateAdd, QueueUpdateMove, QueuesUpdate, StateUpdate};
-use crate::MempoolError;
-use common::neon_lib::types::BalanceAddress;
-use neon_api::NeonApi;
 use priority_queue::DoublePriorityQueue;
 use reth_primitives::alloy_primitives::TxNonce;
 use reth_primitives::{Address, ChainId};
+
+use common::neon_lib::types::BalanceAddress;
+
+use crate::pools::chain_pool::GetTxCountTrait;
+use crate::pools::{QueueRecord, QueueUpdateAdd, QueueUpdateMove, QueuesUpdate, StateUpdate};
+use crate::MempoolError;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum SenderPoolState {
@@ -322,9 +324,9 @@ impl SenderPool {
         transactions.into_iter()
     }
 
-    pub async fn update_tx_count(
+    pub async fn update_tx_count<C: GetTxCountTrait>(
         &mut self,
-        neon_api: &NeonApi,
+        tx_count_api: &C,
     ) -> Result<QueuesUpdate, MempoolError> {
         use common::evm_loader::types::Address;
 
@@ -332,7 +334,9 @@ impl SenderPool {
             chain_id: self.chain_id,
             address: Address::from(<[u8; 20]>::from(self.sender.0)),
         };
-        let tx_count = neon_api.get_transaction_count(balance_addr, None).await?;
+        let tx_count = tx_count_api
+            .get_transaction_count(balance_addr, None)
+            .await?;
         Ok(self.set_tx_count(tx_count))
     }
 }

@@ -1,19 +1,20 @@
 use std::cmp::Reverse;
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::SystemTime;
 
 use dashmap::DashMap;
 use priority_queue::PriorityQueue;
 use reth_primitives::alloy_primitives::TxNonce;
-use reth_primitives::{Address, ChainId};
+use reth_primitives::{Address, BlockNumberOrTag, ChainId};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::{mpsc, oneshot};
 
 use common::neon_lib::types::BalanceAddress;
 use common::solana_sdk::pubkey::Pubkey;
 use executor::ExecutorTrait;
-use neon_api::NeonApi;
+use neon_api::{NeonApi, NeonApiError};
 
 use crate::mempool::{Command, EthTxHash, GasPrice, TxRecord};
 use crate::pools::{
@@ -27,6 +28,27 @@ const EXEC_RESULT_CHANNEL_SIZE: usize = 1024;
 const ONE_BLOCK_MS: u64 = 400;
 const EXEC_INTERVAL_MS: u64 = ONE_BLOCK_MS;
 
+pub trait GetTxCountTrait: Clone + Send + Sync + 'static {
+    fn get_transaction_count(
+        &self,
+        addr: BalanceAddress,
+        tag: Option<BlockNumberOrTag>,
+    ) -> impl Future<Output = Result<u64, NeonApiError>> + Send;
+}
+
+#[derive(Clone)]
+pub struct NeonApiGetTxCount(pub NeonApi);
+
+impl GetTxCountTrait for NeonApiGetTxCount {
+    async fn get_transaction_count(
+        &self,
+        addr: BalanceAddress,
+        tag: Option<BlockNumberOrTag>,
+    ) -> Result<u64, NeonApiError> {
+        self.0.get_transaction_count(addr, tag).await
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
     pub chain_id: ChainId,
@@ -36,7 +58,7 @@ pub struct Config {
     pub eviction_timeout_sec: u64,
 }
 
-pub struct ChainPool<G: GasPricesTrait, E: ExecutorTrait> {
+pub struct ChainPool<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> {
     capacity: usize,
     capacity_high_watermark: usize,
     chain_id: ChainId,
@@ -60,7 +82,7 @@ pub struct ChainPool<G: GasPricesTrait, E: ExecutorTrait> {
     /// Chain token pubkey
     token_pkey: Pubkey,
     gas_prices: G,
-    neon_api: NeonApi,
+    tx_count_api: C,
     /// Transaction executor
     executor: Arc<E>,
     /// Transaction records repository
@@ -70,11 +92,11 @@ pub struct ChainPool<G: GasPricesTrait, E: ExecutorTrait> {
     resolver_tx: Sender<SendersResolverCommand>,
 }
 
-impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
+impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C> {
     pub fn new(
         config: Config,
         gas_prices: G,
-        neon_api: NeonApi,
+        get_tx_api: C,
         executor: Arc<E>,
         txs: Arc<DashMap<EthTxHash, TxRecord>>,
         resolver_tx: Sender<SendersResolverCommand>,
@@ -92,7 +114,7 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
             gapped_price_reversed_queue: PriorityQueue::new(),
             token_pkey: config.token_pkey,
             gas_prices,
-            neon_api,
+            tx_count_api: get_tx_api,
             executor,
             txs,
             eviction_timeout_sec: config.eviction_timeout_sec,
@@ -103,7 +125,7 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
     pub fn create_and_start(
         config: Config,
         gas_prices: G,
-        neon_api: NeonApi,
+        get_tx_api: C,
         executor: Arc<E>,
         txs: Arc<DashMap<EthTxHash, TxRecord>>,
         cmd_tx: Sender<Command>,
@@ -111,7 +133,7 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
     ) {
         let (resolver_tx, resolver_rx) =
             mpsc::channel::<SendersResolverCommand>(RESOLVER_CHANNEL_SIZE);
-        let this = Self::new(config, gas_prices, neon_api, executor, txs, resolver_tx);
+        let this = Self::new(config, gas_prices, get_tx_api, executor, txs, resolver_tx);
         tokio::spawn(this.start(cmd_tx, cmd_rx, resolver_rx));
     }
 
@@ -121,7 +143,7 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
         cmd_rx: Receiver<Command>,
         resolver_rx: Receiver<SendersResolverCommand>,
     ) {
-        let sender_resolver = SendersResolver::new(self.neon_api.clone());
+        let sender_resolver = SendersResolver::new(self.tx_count_api.clone());
         tokio::spawn(sender_resolver.start(resolver_rx, cmd_tx.clone()));
 
         let mut cmd_rx = cmd_rx;
@@ -228,7 +250,7 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
         }
 
         if tx_count > tx.nonce {
-            return Err(MempoolError::NonceTooLow(tx_count, tx.nonce));
+            return Err(MempoolError::NonceTooLow(tx.nonce, tx_count));
         }
 
         if tx.should_set_gas_price() {
@@ -263,7 +285,7 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
                         return Err(MempoolError::Underprice);
                     }
                 } else {
-                    return Err(MempoolError::NonceTooHigh(sender_chain_tx_count, tx.nonce));
+                    return Err(MempoolError::NonceTooHigh(tx.nonce, sender_chain_tx_count));
                 }
             } else if chain_pool_len >= self.capacity && gapped_tx.is_none() {
                 let pending_tx = self.pending_price_reversed_queue.peek();
@@ -326,7 +348,7 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
         }
 
         if update_tx_count {
-            let queues_update = sender_pool.update_tx_count(&self.neon_api).await?;
+            let queues_update = sender_pool.update_tx_count(&self.tx_count_api).await?;
             self.apply_queues_update(queues_update).await;
         }
 
@@ -388,25 +410,26 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
             self.pending_price_reversed_queue.remove(&record);
             self.txs.remove(&record.tx_hash);
         }
-        match update.state_update {
-            Some(StateUpdate::Suspended(addr)) => self
-                .resolver_tx
-                .send(SendersResolverCommand::Add(SenderResolverRecord {
-                    sender: BalanceAddress {
-                        chain_id: self.chain_id,
-                        address: Address::from(<[u8; 20]>::from(addr.0)),
-                    },
-                    nonce: 0,
-                }))
-                .await
-                .unwrap(),
-            Some(StateUpdate::Unsuspended(addr)) => self
-                .resolver_tx
-                .send(SendersResolverCommand::Remove(addr))
-                .await
-                .unwrap(),
-            None => {}
+        let _ = match update.state_update {
+            Some(StateUpdate::Suspended(addr)) => {
+                self.resolver_tx
+                    .send(SendersResolverCommand::Add(SenderResolverRecord {
+                        sender: BalanceAddress {
+                            chain_id: self.chain_id,
+                            address: Address::from(<[u8; 20]>::from(addr.0)),
+                        },
+                        nonce: 0,
+                    }))
+                    .await
+            }
+            Some(StateUpdate::Unsuspended(addr)) => {
+                self.resolver_tx
+                    .send(SendersResolverCommand::Remove(addr))
+                    .await
+            }
+            None => Ok(()),
         }
+        .inspect_err(|err| tracing::error!(?err, "failed to send sender resolver command"));
     }
 
     async fn add_record(&mut self, record: QueueRecord) {
@@ -611,7 +634,7 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
                 .push(*sender, Reverse(SystemTime::now()));
             let mut sender_pool = SenderPool::new(self.chain_id, *sender);
             // it's an empty sender pool, we don't care about queues update
-            if let Err(err) = sender_pool.update_tx_count(&self.neon_api).await {
+            if let Err(err) = sender_pool.update_tx_count(&self.tx_count_api).await {
                 tracing::error!(?err, "failed to update tx count");
             }
             self.sender_pools.insert(*sender, sender_pool);
@@ -619,5 +642,215 @@ impl<G: GasPricesTrait, E: ExecutorTrait> ChainPool<G, E> {
         }
 
         (self.sender_pools.get(sender).unwrap(), created)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use alloy_consensus::{SignableTransaction, TxLegacy};
+    use alloy_network::TxSignerSync;
+    use alloy_signer_wallet::LocalWallet;
+    use reth_primitives::{TxKind, U256};
+
+    use common::solana_sdk::signature::Keypair;
+    use common::solana_sdk::signature::Signature;
+    use executor::{ExecuteRequest, ExecuteResult};
+
+    struct MockExecutor;
+
+    impl ExecutorTrait for MockExecutor {
+        async fn handle_transaction(
+            &self,
+            tx_request: ExecuteRequest,
+            result_sender: Option<oneshot::Sender<ExecuteResult>>,
+        ) -> anyhow::Result<Signature> {
+            tracing::info!(?tx_request, "mock executor: handling tx");
+            if let Some(sender) = result_sender {
+                let _ = sender.send(ExecuteResult::Success);
+            }
+            Ok(Signature::new_unique())
+        }
+    }
+
+    #[derive(Clone)]
+    struct MockGasPrices;
+
+    impl GasPricesTrait for MockGasPrices {
+        fn get_gas_price(&self, _chain_id: Option<u64>) -> u128 {
+            1
+        }
+
+        fn get_gas_for_token_pkey(&self, _token_pkey: &Pubkey) -> Option<u128> {
+            Some(1)
+        }
+    }
+
+    #[derive(Clone)]
+    struct MockGetTxCount;
+
+    impl GetTxCountTrait for MockGetTxCount {
+        async fn get_transaction_count(
+            &self,
+            _addr: BalanceAddress,
+            _tag: Option<BlockNumberOrTag>,
+        ) -> Result<u64, NeonApiError> {
+            Ok(0)
+        }
+    }
+
+    fn create_chain_pool() -> ChainPool<MockExecutor, MockGasPrices, MockGetTxCount> {
+        let config = Config {
+            chain_id: 1,
+            capacity: 10,
+            capacity_high_watermark: 0.8,
+            token_pkey: Pubkey::new_unique(),
+            eviction_timeout_sec: 60,
+        };
+        ChainPool::new(
+            config,
+            MockGasPrices,
+            MockGetTxCount,
+            Arc::new(MockExecutor),
+            Arc::new(DashMap::new()),
+            mpsc::channel(1).0,
+        )
+    }
+
+    fn create_exec_req(nonce: TxNonce) -> ExecuteRequest {
+        let keypair = Keypair::new();
+        let eth = LocalWallet::from_slice(keypair.secret().as_ref()).unwrap();
+        let mut tx = TxLegacy {
+            nonce,
+            gas_price: 2,
+            gas_limit: 2_000_000,
+            to: TxKind::Create,
+            value: U256::ZERO,
+            input: Default::default(),
+            chain_id: Some(1),
+        };
+        let signature = eth.sign_transaction_sync(&mut tx).unwrap();
+        let tx = tx.into_signed(signature);
+        ExecuteRequest::new(tx.into(), 1)
+    }
+
+    fn create_tx_record(
+        gas_price: Option<GasPrice>,
+        sorting_gas_price: GasPrice,
+        nonce: TxNonce,
+        sender: Address,
+    ) -> TxRecord {
+        TxRecord {
+            tx_request: create_exec_req(0),
+            tx_chain_id: Some(1),
+            sender,
+            nonce,
+            gas_price,
+            sorting_gas_price,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_or_create_sender_pool() {
+        let mut chain_pool = create_chain_pool();
+        let sender = Address::default();
+        let (sender_pool, is_created) = chain_pool.get_or_create_sender_pool(&sender).await;
+        assert!(is_created);
+        assert_eq!(sender_pool.sender, sender);
+        assert_eq!(sender_pool.state, SenderPoolState::Idle);
+
+        let (sender_pool, is_created) = chain_pool.get_or_create_sender_pool(&sender).await;
+        assert!(!is_created);
+        assert_eq!(sender_pool.sender, sender);
+        assert_eq!(sender_pool.state, SenderPoolState::Idle);
+    }
+
+    #[tokio::test]
+    async fn test_add_tx_already_known() {
+        let mut chain_pool = create_chain_pool();
+        let sender = Address::default();
+        let tx0 = create_tx_record(None, 1, 0, sender);
+        let result = chain_pool.add_tx(tx0.clone()).await;
+        assert!(matches!(result, Ok(())));
+        let result = chain_pool.add_tx(tx0).await;
+        assert!(matches!(result, Err(MempoolError::AlreadyKnown)));
+    }
+
+    #[tokio::test]
+    async fn test_add_tx_nonce_too_low() {
+        let mut chain_pool = create_chain_pool();
+        let sender = Address::default();
+        let tx0 = create_tx_record(Some(2), 2, 0, sender);
+        let (_sender_pool, _is_created) = chain_pool.get_or_create_sender_pool(&sender).await;
+        let sender_pool = chain_pool.sender_pools.get_mut(&sender).unwrap();
+        sender_pool.tx_count = 1;
+
+        let result = chain_pool.add_tx(tx0.clone()).await;
+        assert!(matches!(result, Err(MempoolError::NonceTooLow(0, 1))));
+    }
+
+    #[tokio::test]
+    async fn test_add_tx_nonce_too_low_processing() {
+        let mut chain_pool = create_chain_pool();
+        let sender = Address::default();
+        let tx0 = create_tx_record(Some(2), 2, 0, sender);
+        let tx1 = create_tx_record(Some(2), 2, 1, sender);
+        let (_sender_pool, _is_created) = chain_pool.get_or_create_sender_pool(&sender).await;
+        let sender_pool = chain_pool.sender_pools.get_mut(&sender).unwrap();
+        sender_pool.tx_count = 1;
+        sender_pool.set_processing(1);
+
+        let result = chain_pool.add_tx(tx0.clone()).await;
+        assert!(matches!(result, Err(MempoolError::NonceTooLow(0, 2))));
+
+        let result = chain_pool.add_tx(tx1.clone()).await;
+        assert!(matches!(result, Err(MempoolError::NonceTooLow(1, 2))));
+    }
+
+    #[tokio::test]
+    async fn test_add_tx_underpriced_existing() {
+        let mut chain_pool = create_chain_pool();
+        let sender = Address::default();
+        let tx0 = create_tx_record(Some(2), 2, 0, sender);
+        let tx1 = create_tx_record(Some(1), 1, 0, sender);
+        let result = chain_pool.add_tx(tx0.clone()).await;
+        assert!(matches!(result, Ok(())));
+
+        let result = chain_pool.add_tx(tx1.clone()).await;
+        assert!(matches!(result, Err(MempoolError::Underprice)));
+    }
+
+    #[tokio::test]
+    async fn test_add_tx_underpriced_watermark() {
+        let mut chain_pool = create_chain_pool();
+        chain_pool.capacity_high_watermark = 0;
+        chain_pool.capacity = 3;
+        let sender = Address::default();
+        let other_sender = Address::random();
+        let tx1 = create_tx_record(Some(2), 2, 1, other_sender);
+        let tx0 = create_tx_record(Some(1), 1, 1, sender);
+        let result = chain_pool.add_tx(tx1.clone()).await;
+        assert!(matches!(result, Ok(())));
+
+        let result = chain_pool.add_tx(tx0.clone()).await;
+        assert!(matches!(result, Err(MempoolError::Underprice)));
+    }
+
+    // todo; test underprice capacity
+
+    #[tokio::test]
+    async fn test_add_tx_nonce_too_high() {
+        let mut chain_pool = create_chain_pool();
+        chain_pool.capacity_high_watermark = 0;
+        chain_pool.capacity = 3;
+        let sender = Address::default();
+        let tx0 = create_tx_record(Some(2), 2, 0, sender);
+        let tx1 = create_tx_record(Some(2), 2, 1, sender);
+        let result = chain_pool.add_tx(tx0.clone()).await;
+        assert!(matches!(result, Ok(())));
+
+        let result = chain_pool.add_tx(tx1.clone()).await;
+        assert!(matches!(result, Err(MempoolError::NonceTooHigh(1, 0))));
     }
 }

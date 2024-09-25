@@ -7,7 +7,7 @@ use reth_primitives::{Address, ChainId};
 
 use crate::mempool::{EthTxHash, GasPrice};
 
-pub use chain_pool::{ChainPool, Config as ChainPoolConfig};
+pub use chain_pool::{ChainPool, Config as ChainPoolConfig, NeonApiGetTxCount};
 pub use sender_pool::{SenderPool, SenderPoolState};
 pub use sender_resolver::{SenderResolverRecord, SendersResolver, SendersResolverCommand};
 

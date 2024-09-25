@@ -4,8 +4,6 @@ mod gas_prices;
 mod mempool;
 mod pools;
 mod pyth_price_collector;
-#[cfg(test)]
-mod tests;
 
 pub use error::MempoolError;
 pub use gas_price_calculator::GasPriceCalculatorConfig;

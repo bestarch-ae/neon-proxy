@@ -15,7 +15,7 @@ use executor::{ExecuteRequest, ExecutorTrait};
 use neon_api::NeonApi;
 
 use crate::error::MempoolError;
-use crate::pools::{ChainPool, ChainPoolConfig};
+use crate::pools::{ChainPool, ChainPoolConfig, NeonApiGetTxCount};
 use crate::GasPricesTrait;
 
 pub type EthTxHash = B256;
@@ -235,7 +235,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait> Mempool<E, G> {
             ChainPool::create_and_start(
                 config,
                 self.gas_prices.clone(),
-                self.neon_api.clone(),
+                NeonApiGetTxCount(self.neon_api.clone()),
                 Arc::clone(&self.executor),
                 Arc::clone(&self.txs),
                 cmd_tx,

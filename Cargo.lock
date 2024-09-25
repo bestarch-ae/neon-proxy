@@ -4242,6 +4242,7 @@ dependencies = [
  "alloy-consensus",
  "alloy-network",
  "alloy-signer-wallet",
+ "anyhow",
  "clap 4.5.4",
  "crossbeam-queue",
  "dashmap 6.0.1",
