@@ -7,7 +7,9 @@ use common::solana_sdk::commitment_config::CommitmentLevel;
 use common::solana_sdk::hash::Hash;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
-use common::types::{utils, HolderOperation, NeonTxInfo, SolanaBlock, SolanaTransaction, TxHash};
+use common::types::{
+    utils, CanceledNeonTxInfo, HolderOperation, NeonTxInfo, SolanaBlock, SolanaTransaction, TxHash,
+};
 use neon_parse::{AccountsDb, Action, TransactionsDb};
 use solana::traverse::v2::LedgerItem;
 
@@ -26,7 +28,7 @@ struct NeonBlock {
     block: SolanaBlock,
     txs: Vec<NeonTxInfo>,
     signatures: Vec<(u32, Signature)>,
-    canceled: Vec<(TxHash, u32, U256)>,
+    canceled: Vec<CanceledNeonTxInfo>,
     holders: Vec<(u32, bool, HolderOperation)>,
 }
 
@@ -103,9 +105,9 @@ impl Indexer {
                 "saved transaction"
             );
         }
-        for (hash, tx_idx, total_gas) in &block.canceled {
+        for tx_info in &block.canceled {
             self.tx_repo
-                .set_canceled(hash, *total_gas, slot, *tx_idx, &mut txn)
+                .set_canceled(tx_info, &mut txn)
                 .await
                 .context("failed to cancel neon transaction")?;
         }
@@ -239,7 +241,6 @@ impl Indexer {
                                 }
                             }
                         }
-
                         tracing::debug!(?tx, "adding transaction");
                         // all transactions increment tx_log_idx
                         for log in &mut tx.events {
@@ -253,7 +254,14 @@ impl Indexer {
                         neon_block.txs.push(tx);
                     }
                     Action::CancelTransaction { hash, total_gas } => {
-                        neon_block.canceled.push((hash, tx_idx, total_gas));
+                        self.block_gas_used += total_gas;
+                        neon_block.canceled.push(CanceledNeonTxInfo {
+                            neon_signature: hash,
+                            gas_used: total_gas,
+                            sum_gas_used: self.block_gas_used,
+                            tx_idx: tx_idx as u64,
+                            sol_slot: slot,
+                        })
                     }
                     Action::WriteHolder(op) => {
                         tracing::info!(slot = %slot, pubkey = %op.pubkey(), "saving holder");

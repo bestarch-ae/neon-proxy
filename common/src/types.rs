@@ -136,6 +136,15 @@ pub struct NeonTxInfo {
     pub is_cancelled: bool,
 }
 
+#[derive(Debug)]
+pub struct CanceledNeonTxInfo {
+    pub neon_signature: TxHash,
+    pub sol_slot: u64,
+    pub tx_idx: u64,
+    pub gas_used: U256,
+    pub sum_gas_used: U256,
+}
+
 /// Event kinds can be logged to solana transaction logs.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 #[repr(u32)]

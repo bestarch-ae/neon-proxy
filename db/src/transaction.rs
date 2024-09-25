@@ -8,7 +8,7 @@ use common::evm_loader::types::vector::{VectorVecExt, VectorVecSlowExt};
 use common::evm_loader::types::{AccessListTx, Address, LegacyTx, Transaction, TransactionPayload};
 use common::solana_sdk::hash::Hash;
 use common::solana_sdk::signature::Signature;
-use common::types::{EventKind, EventLog, NeonTxInfo, TxHash};
+use common::types::{CanceledNeonTxInfo, EventKind, EventLog, NeonTxInfo, TxHash};
 
 use crate::PgSolanaBlockHash;
 
@@ -206,10 +206,7 @@ impl TransactionRepo {
 
     pub async fn set_canceled(
         &self,
-        hash: &TxHash,
-        gas_used: U256,
-        slot: u64,
-        tx_idx: u32,
+        info: &CanceledNeonTxInfo,
         txn: &mut sqlx::Transaction<'_, Postgres>,
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(
@@ -221,13 +218,14 @@ impl TransactionRepo {
                block_slot = $1,
                tx_idx = $2,
                gas_used = $3,
-               sum_gas_used = $3
-            WHERE neon_sig = $4 AND is_completed = false
+               sum_gas_used = $4
+            WHERE neon_sig = $5 AND is_completed = false
             "#,
-            slot as i64,
-            tx_idx as i32,
-            PgU256::from(gas_used) as PgU256,
-            hash.as_slice()
+            info.sol_slot as i64,
+            info.tx_idx as i32,
+            PgU256::from(info.gas_used) as PgU256,
+            PgU256::from(info.sum_gas_used) as PgU256,
+            info.neon_signature.as_slice()
         )
         .execute(&mut **txn)
         .await?;
