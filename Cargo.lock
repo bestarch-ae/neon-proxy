@@ -1482,9 +1482,9 @@ dependencies = [
 
 [[package]]
 name = "bytemuck"
-version = "1.16.0"
+version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78834c15cb5d5efe3452d58b1e8ba890dd62d21907f867f383358198e56ebca5"
+checksum = "94bbb0ad554ad961ddc5da507a12a29b14e4ae5bda06b19f575a3e6079d2e2ae"
 dependencies = [
  "bytemuck_derive",
 ]
@@ -2723,7 +2723,7 @@ dependencies = [
 [[package]]
 name = "evm-loader"
 version = "1.15.1"
-source = "git+https://github.com/neonlabsorg/neon-evm.git?rev=v1.15.1#d1e27a753bf40b13234204688315b4e91ac2bdea"
+source = "git+https://github.com/00nktk/neon-evm.git?rev=1ab8167#1ab8167ef8a2789989687c13eea6868d0d625bf2"
 dependencies = [
  "allocator-api2",
  "arrayref",
@@ -2753,7 +2753,7 @@ dependencies = [
 [[package]]
 name = "evm-loader-macro"
 version = "1.0.0"
-source = "git+https://github.com/neonlabsorg/neon-evm.git?rev=v1.15.1#d1e27a753bf40b13234204688315b4e91ac2bdea"
+source = "git+https://github.com/00nktk/neon-evm.git?rev=1ab8167#1ab8167ef8a2789989687c13eea6868d0d625bf2"
 dependencies = [
  "bs58 0.5.1",
  "itertools 0.13.0",
@@ -2782,6 +2782,7 @@ dependencies = [
  "base64 0.21.7",
  "bincode",
  "bs58 0.5.1",
+ "bytemuck",
  "clap 4.5.4",
  "dashmap 6.0.1",
  "db",
@@ -4394,7 +4395,7 @@ dependencies = [
 [[package]]
 name = "neon-lib"
 version = "1.15.1"
-source = "git+https://github.com/neonlabsorg/neon-evm.git?rev=v1.15.1#d1e27a753bf40b13234204688315b4e91ac2bdea"
+source = "git+https://github.com/00nktk/neon-evm.git?rev=1ab8167#1ab8167ef8a2789989687c13eea6868d0d625bf2"
 dependencies = [
  "abi_stable",
  "anyhow",
@@ -4447,7 +4448,7 @@ dependencies = [
 [[package]]
 name = "neon-lib-interface"
 version = "0.1.0"
-source = "git+https://github.com/neonlabsorg/neon-evm.git?rev=v1.15.1#d1e27a753bf40b13234204688315b4e91ac2bdea"
+source = "git+https://github.com/00nktk/neon-evm.git?rev=1ab8167#1ab8167ef8a2789989687c13eea6868d0d625bf2"
 dependencies = [
  "abi_stable",
  "async-ffi",

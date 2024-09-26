@@ -189,7 +189,7 @@ impl AltManager {
         let (ix, pubkey) = self.create_alt_ix().await?;
         let alt = Alt::new(pubkey, HashSet::new());
         if let Err(err) = self.save_account(pubkey).await {
-            warn!(%pubkey, %err, "could not save ALT to db");
+            warn!(%pubkey, ?err, "could not save ALT to db");
         }
         let _guard = alt.write_lock.clone().acquire_owned().await.unwrap();
         self.alts.insert(pubkey, alt);
@@ -234,12 +234,12 @@ impl AltManager {
             let alts_stream = repo.fetch();
             tokio::pin!(alts_stream);
             while let Some(item) = alts_stream.next().await {
-                let Ok(key) = item.inspect_err(|err| warn!(%err, "invalid ALT address")) else {
+                let Ok(key) = item.inspect_err(|err| warn!(?err, "invalid ALT address")) else {
                     continue;
                 };
 
                 if let Err(err) = self.load_account(key).await {
-                    warn!(%key, %err, "could not load account");
+                    warn!(%key, ?err, "could not load account");
                 }
             }
         }

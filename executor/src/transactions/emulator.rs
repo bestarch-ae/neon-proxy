@@ -35,6 +35,15 @@ impl IterInfo {
         }
     }
 
+    pub fn max(step_count: u32) -> Self {
+        Self {
+            step_count,
+            iterations: u32::MAX,
+            unique_idx: 0,
+            cu_limit: MAX_COMPUTE_UNITS,
+        }
+    }
+
     pub fn next_idx(&mut self) -> u32 {
         let out = self.unique_idx;
         self.unique_idx += 1;
@@ -203,6 +212,10 @@ impl Emulator {
 
     pub(super) fn set_evm_steps_min(&self, evm_steps_min: u64) {
         self.evm_steps_min.store(evm_steps_min, Relaxed);
+    }
+
+    pub fn evm_steps_min(&self) -> u64 {
+        self.evm_steps_min.load(Relaxed)
     }
 
     fn calculate_resize_iter_cnt(&self, emulate: &EmulateResponse) -> u64 {
