@@ -213,6 +213,7 @@ impl TransactionBuilder {
                         tx_hash = %holder.state.tx_hash(),
                         "cannot determine chain id for recovered holder"
                     );
+                    // TODO: Cancel
                     continue;
                 }
             };

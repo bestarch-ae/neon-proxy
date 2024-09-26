@@ -193,12 +193,18 @@ impl HolderManager {
         let mut output = Vec::new();
         let mut idx = self.counter.fetch_add(1, SeqCst);
         while idx < self.max_holders {
-            match self.try_recover_holder(idx).await? {
+            match self
+                .try_recover_holder(idx)
+                .await
+                .inspect_err(|error| tracing::error!(idx, ?error, "could not recover holder"))?
+            {
                 None => {
+                    tracing::debug!(idx, "stopping holder recovery");
                     self.counter.store(idx, SeqCst);
                     break;
                 }
                 Some(recovered_holder) => {
+                    tracing::debug!(?recovered_holder, "discovered holder");
                     let info = self.attach_info(recovered_holder.meta, None);
                     match recovered_holder.state.recoverable() {
                         None => drop(info),
