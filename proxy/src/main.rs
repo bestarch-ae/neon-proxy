@@ -25,6 +25,7 @@ use common::neon_lib::types::ChDbConfig;
 use common::solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use common::solana_sdk::pubkey::Pubkey;
 use executor::Executor;
+use mempool::{GasPriceCalculatorConfig, GasPricesConfig};
 use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
 use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
@@ -145,6 +146,9 @@ struct Args {
     #[group(flatten)]
     executor: executor::Config,
 
+    #[group(flatten)]
+    gas_prices_calculator_config: GasPriceCalculatorConfig,
+
     #[arg(long, env, default_value = "SOL")]
     /// Chain token name
     chain_token_name: String,
@@ -152,18 +156,6 @@ struct Args {
     #[arg(long, env, default_value = "NEON")]
     /// Default token name
     default_token_name: String,
-
-    #[arg(long, env, default_value = "1")]
-    /// Minimal gas price
-    minimal_gas_price: u128,
-
-    #[arg(long, env)]
-    /// Constant gas price
-    const_gas_price: Option<u128>,
-
-    #[arg(long, env, default_value = "10000")]
-    /// Operator fee
-    operator_fee: u128,
 
     #[arg(long, env)]
     symbology_path: Option<PathBuf>,
@@ -288,15 +280,11 @@ async fn main() {
     } else {
         HashMap::new()
     };
-    let mp_gas_calculator_config = mempool::GasPriceCalculatorConfig {
-        operator_fee: opts.operator_fee,
-        min_gas_price: opts.minimal_gas_price,
-        const_gas_price: opts.const_gas_price,
-    };
-    let gas_prices_config = mempool::GasPricesConfig {
+    let gas_prices_config = GasPricesConfig {
         ws_url: opts.solana_ws_url.to_owned(),
         base_token: opts.chain_token_name.to_owned(),
         default_token: opts.default_token_name.to_owned(),
+        default_chain_id,
     };
     let chain_token_map = config
         .chains
@@ -308,7 +296,7 @@ async fn main() {
         neon_api.clone(),
         rpc_client,
         pyth_symbology,
-        mp_gas_calculator_config,
+        opts.gas_prices_calculator_config,
         chain_token_map,
     )
     .expect("failed to create gas prices");

@@ -9,17 +9,17 @@ use rpc_api_types::{Filter, Log, Transaction};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
 
+use crate::convert::neon_to_eth;
+use crate::convert::NeonTransactionReceipt;
+use crate::rpc::EthApiImpl;
+use crate::Error;
 use common::convert::{ToNeon, ToReth};
 use common::neon_lib::commands::emulate::{EmulateResponse, SolanaAccount};
 use common::neon_lib::commands::get_balance::BalanceStatus;
 use common::neon_lib::types::{BalanceAddress, SerializedAccount, TxParams};
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
-
-use crate::convert::neon_to_eth;
-use crate::convert::NeonTransactionReceipt;
-use crate::rpc::EthApiImpl;
-use crate::Error;
+use mempool::GasPriceModel;
 
 use super::unimplemented;
 
@@ -231,6 +231,9 @@ trait NeonCustomApi {
 
     #[method(name = "getNativeTokenList")]
     async fn native_token_list(&self) -> RpcResult<Vec<Token>>;
+
+    #[method(name = "gasPrice")]
+    async fn gas_price(&self) -> RpcResult<GasPriceModel>;
 }
 
 #[async_trait]
@@ -451,5 +454,15 @@ impl NeonCustomApiServer for EthApiImpl {
                 token_chain_id: U64::from(chain.id),
             })
             .collect())
+    }
+
+    async fn gas_price(&self) -> RpcResult<GasPriceModel> {
+        self.mp_gas_prices
+            .get_gas_price_model(Some(self.chain_id))
+            .ok_or(ErrorObjectOwned::owned(
+                ErrorCode::InternalError.code(),
+                "Gas price model not found".to_string(),
+                None::<()>,
+            ))
     }
 }
