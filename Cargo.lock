@@ -4239,11 +4239,14 @@ dependencies = [
 name = "mempool"
 version = "0.1.0"
 dependencies = [
+ "clap 4.5.4",
  "dashmap 6.0.1",
  "futures-util",
  "neon-api",
  "neon-proxy-common",
  "pyth-sdk-solana",
+ "reth-primitives",
+ "serde",
  "solana-api",
  "thiserror",
  "tokio",
