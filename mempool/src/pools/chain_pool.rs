@@ -150,7 +150,6 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
             tokio::select! {
                  _ = exec_interval.tick() => {
                     self.execute_tx(exec_result_tx.clone());
-                    exec_interval.reset();
                 }
                 Some(cmd) = cmd_rx.recv() => {
                     if !self.process_command(cmd, &exec_result_tx, &mut exec_interval).await {
@@ -367,7 +366,6 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
         };
 
         None
-        // Some(tx_record.tx_hash)
     }
 
     async fn queue_new_tx(
