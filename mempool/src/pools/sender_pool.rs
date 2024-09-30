@@ -256,7 +256,12 @@ impl SenderPool {
 
     pub fn drain(&mut self) -> impl Iterator<Item = QueueRecord> {
         self.state = SenderPoolState::Idle;
-        let transactions: Vec<QueueRecord> = self.nonce_map.values().cloned().collect();
+        // let transactions: Vec<QueueRecord> = self.nonce_map.values().cloned().collect();
+        let transactions = self
+            .nonce_map
+            .drain()
+            .map(|(_, value)| value)
+            .collect::<Vec<_>>();
         self.nonce_map.clear();
         self.pending_nonce_queue.clear();
         self.gapped_nonce_queue.clear();
@@ -323,7 +328,7 @@ mod tests {
 
         pool.gapped_nonce_queue.push(create_record(3), 3);
         assert_eq!(pool.get_pending_tx_count(), Some(2));
-
+        pool.pending_nonce_queue.clear();
         assert_eq!(pool.get_pending_tx_count(), None);
     }
 
