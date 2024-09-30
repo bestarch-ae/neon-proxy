@@ -481,7 +481,7 @@ impl TransactionRepo {
                       L.log_topic3, L.log_topic4,
                       L.log_topic_cnt, L.log_data
                     FROM neon_transactions T
-                    INNER JOIN tx_block_slot S on T.block_slot = S.block_slot AND T.neon_sig = S.neon_sig
+                    LEFT JOIN tx_block_slot S on T.block_slot = S.block_slot AND T.neon_sig = S.neon_sig
                     LEFT JOIN (
                         SELECT * FROM neon_transaction_logs WHERE NOT COALESCE(is_reverted, FALSE)
                         ) L ON L.tx_hash = T.neon_sig AND T.is_canceled = FALSE
