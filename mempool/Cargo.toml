@@ -23,6 +23,7 @@ pyth-sdk-solana = "0.9.0"
 reth-primitives.workspace = true
 serde = { version = "1.0.208", features = ["derive"] }
 tokio.workspace = true
+tokio-util = { version = "0.7.12", features = ["time"] }
 tracing.workspace = true
 thiserror.workspace = true
 futures-util.workspace = true

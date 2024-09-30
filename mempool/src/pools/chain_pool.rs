@@ -2,14 +2,17 @@ use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::Duration;
 
 use dashmap::DashMap;
+use futures_util::StreamExt;
 use priority_queue::PriorityQueue;
 use reth_primitives::alloy_primitives::TxNonce;
 use reth_primitives::{Address, BlockNumberOrTag, ChainId};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::{mpsc, oneshot};
+use tokio_util::time::delay_queue::Key as DelayQueueKey;
+use tokio_util::time::DelayQueue;
 
 use common::neon_lib::types::BalanceAddress;
 use common::solana_sdk::pubkey::Pubkey;
@@ -19,11 +22,10 @@ use neon_api::{NeonApi, NeonApiError};
 use crate::mempool::{Command, EthTxHash, GasPrice, TxRecord};
 use crate::pools::{
     ExecutionResult, QueueRecord, QueueUpdateAdd, QueueUpdateMove, QueuesUpdate, SenderPool,
-    SenderPoolState, SenderResolverRecord, SendersResolver, SendersResolverCommand, StateUpdate,
+    SenderPoolState,
 };
 use crate::{GasPricesTrait, MempoolError};
 
-const RESOLVER_CHANNEL_SIZE: usize = 1024;
 const EXEC_RESULT_CHANNEL_SIZE: usize = 1024;
 const ONE_BLOCK_MS: u64 = 400;
 const EXEC_INTERVAL_MS: u64 = ONE_BLOCK_MS;
@@ -58,17 +60,23 @@ pub struct Config {
     pub eviction_timeout_sec: u64,
 }
 
+struct HeartBeatTask {
+    pub sender_address: Address,
+    pub kind: HeartBeatTaskKind,
+}
+
+enum HeartBeatTaskKind {
+    Suspended,
+    Evict,
+}
+
 pub struct ChainPool<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> {
     capacity: usize,
     capacity_high_watermark: usize,
     chain_id: ChainId,
     sender_pools: HashMap<Address, SenderPool>,
-    /// Priority queue of sender pools sorted by the last update time. The sender pool with the
-    /// oldest update time is the first in the queue. This queue is used for cleaning up the mempool
-    /// from sender pools that are not used for a long time.
-    /// Sender pools are added to this queue when they are created and updated when a new
-    /// transaction is added to the pool.
-    sender_heartbeat_queue: PriorityQueue<Address, Reverse<SystemTime>>,
+    heartbeat_queue: DelayQueue<HeartBeatTask>,
+    heartbeat_map: HashMap<Address, DelayQueueKey>,
     /// Priority queue for transactions sorted by gas price and ready for execution. Each sender
     /// can have only one transaction in this queue at a time. This way we can ensure that we don't
     /// execute transactions from one sender in parallel.
@@ -89,7 +97,6 @@ pub struct ChainPool<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> {
     txs: Arc<DashMap<EthTxHash, TxRecord>>,
     /// Timeout for evicting sender pools from the mempool
     eviction_timeout_sec: u64,
-    resolver_tx: Sender<SendersResolverCommand>,
 }
 
 impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C> {
@@ -99,7 +106,6 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
         get_tx_api: C,
         executor: Arc<E>,
         txs: Arc<DashMap<EthTxHash, TxRecord>>,
-        resolver_tx: Sender<SendersResolverCommand>,
     ) -> Self {
         let capacity_high_watermark =
             (config.capacity as f64 * config.capacity_high_watermark) as usize;
@@ -108,7 +114,8 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
             capacity_high_watermark,
             chain_id: config.chain_id,
             sender_pools: HashMap::new(),
-            sender_heartbeat_queue: PriorityQueue::new(),
+            heartbeat_queue: DelayQueue::new(),
+            heartbeat_map: HashMap::new(),
             tx_price_queue: PriorityQueue::new(),
             pending_price_reversed_queue: PriorityQueue::new(),
             gapped_price_reversed_queue: PriorityQueue::new(),
@@ -118,7 +125,6 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
             executor,
             txs,
             eviction_timeout_sec: config.eviction_timeout_sec,
-            resolver_tx,
         }
     }
 
@@ -131,30 +137,15 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
         cmd_tx: Sender<Command>,
         cmd_rx: Receiver<Command>,
     ) {
-        let (resolver_tx, resolver_rx) =
-            mpsc::channel::<SendersResolverCommand>(RESOLVER_CHANNEL_SIZE);
-        let this = Self::new(config, gas_prices, get_tx_api, executor, txs, resolver_tx);
-        tokio::spawn(this.start(cmd_tx, cmd_rx, resolver_rx));
+        let this = Self::new(config, gas_prices, get_tx_api, executor, txs);
+        tokio::spawn(this.start(cmd_tx, cmd_rx));
     }
 
-    pub async fn start(
-        mut self,
-        cmd_tx: Sender<Command>,
-        cmd_rx: Receiver<Command>,
-        resolver_rx: Receiver<SendersResolverCommand>,
-    ) {
-        let sender_resolver = SendersResolver::new(self.tx_count_api.clone());
-        tokio::spawn(sender_resolver.start(resolver_rx, cmd_tx.clone()));
-
+    pub async fn start(mut self, cmd_tx: Sender<Command>, cmd_rx: Receiver<Command>) {
         let mut cmd_rx = cmd_rx;
         let (exec_result_tx, mut exec_result_rx) =
             mpsc::channel::<ExecutionResult>(EXEC_RESULT_CHANNEL_SIZE);
-        let mut exec_interval =
-            tokio::time::interval(tokio::time::Duration::from_millis(EXEC_INTERVAL_MS));
-        let mut heartbeat_interval = tokio::time::interval(tokio::time::Duration::from_secs(
-            self.eviction_timeout_sec / 10,
-        ));
-        let eviction_timeout_sec = std::time::Duration::from_secs(self.eviction_timeout_sec);
+        let mut exec_interval = tokio::time::interval(Duration::from_millis(EXEC_INTERVAL_MS));
         loop {
             tokio::select! {
                  _ = exec_interval.tick() => {
@@ -164,10 +155,6 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
                 Some(cmd) = cmd_rx.recv() => {
                     match cmd {
                         Command::Shutdown => {
-                            self.resolver_tx
-                                .send(SendersResolverCommand::Shutdown)
-                                .await
-                                .unwrap();
                             tracing::info!("shutting down mempool");
                             return;
                         }
@@ -178,12 +165,6 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
                         Command::ExecuteTx => {
                             self.execute_tx(exec_result_tx.clone());
                             exec_interval.reset();
-                        }
-                        Command::SetTxCount(addr, tx_count) => {
-                            if let Some(sender_pool) = self.sender_pools.get_mut(&addr) {
-                                let queues_update = sender_pool.set_tx_count(tx_count);
-                                self.apply_queues_update(queues_update).await;
-                            }
                         }
                         Command::GetPendingTxCount(addr, result_tx) => {
                             if let Some(sender_pool) = self.sender_pools.get(&addr) {
@@ -211,19 +192,56 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
                     }
                     cmd_tx.send(Command::ExecuteTx).await.unwrap();
                 }
-                _ = heartbeat_interval.tick() => {
-                    tracing::debug!(chain_id = %self.chain_id, "sender heartbeat");
-                    let now = SystemTime::now();
-                    let threshold = now - eviction_timeout_sec;
-                    while let Some((sender, Reverse(updated_at))) = self.sender_heartbeat_queue.pop() {
-                        // todo: unwrap
-                        let sender_pool = self.sender_pools.get_mut(&sender).unwrap();
-                        if matches!(sender_pool.state, SenderPoolState::Processing(_)) && updated_at >= threshold {
-                            self.sender_heartbeat_queue.push(sender, Reverse(updated_at));
-                            break;
+                Some(task) = self.heartbeat_queue.next() => {
+                    use common::evm_loader::types::Address;
+
+                    let task = task.into_inner();
+                    let sender_addr = task.sender_address;
+                    let Some(sender_pool) = self.sender_pools.get_mut(&sender_addr) else {
+                        continue;
+                    };
+                    match task.kind {
+                        HeartBeatTaskKind::Suspended => {
+                            if !sender_pool.is_suspended() {
+                                continue;
+                            }
+                            let sender_balance_addr = BalanceAddress {
+                                chain_id: self.chain_id,
+                                address: Address::from(<[u8; 20]>::from(sender_addr.0)),
+                            };
+                            let tx_count = match self.tx_count_api.get_transaction_count(sender_balance_addr, None).await {
+                                Ok(tx_count) => tx_count,
+                                Err(err) => {
+                                    tracing::error!(?err, "failed to get tx count");
+                                    self.heartbeat_queue.insert(task, Duration::from_millis(3 * ONE_BLOCK_MS));
+                                    continue;
+                                }
+                            };
+                            if tx_count == sender_pool.tx_count {
+                                 self.heartbeat_queue.insert(task, Duration::from_millis(3 * ONE_BLOCK_MS));
+                                continue;
+                            }
+                            let queue_update = sender_pool.set_tx_count(tx_count);
+                            if sender_pool.is_suspended() {
+                                 self.heartbeat_queue.insert(task, Duration::from_millis(3 * ONE_BLOCK_MS));
+                            } else {
+                                match self.queue_new_tx(&sender_addr, false).await {
+                                    Ok(()) => {}
+                                    Err(err) => {
+                                        tracing::error!(?err, "heartbeat: failed to queue new tx");
+                                    }
+                                }
+                            }
+                            self.apply_queues_update(queue_update);
                         }
-                        tracing::debug!("dropping sender pool");
-                        self.remove_sender_pool(&sender).await;
+                        HeartBeatTaskKind::Evict => {
+                            if matches!(sender_pool.state, SenderPoolState::Processing(_)) {
+                                let key = self.heartbeat_queue.insert(task, Duration::from_secs(self.eviction_timeout_sec));
+                                self.heartbeat_map.insert(sender_addr, key);
+                                continue;
+                            }
+                            self.remove_sender_pool(&sender_addr);
+                        }
                     }
                 }
             }
@@ -340,16 +358,15 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
             return Err(MempoolError::UnknownSender(*sender));
         };
 
-        if matches!(
-            sender_pool.state,
-            SenderPoolState::Processing(_) | SenderPoolState::Queued(_)
-        ) {
+        if sender_pool.state != SenderPoolState::Idle {
             return Ok(());
         }
 
+        let was_suspended = sender_pool.is_suspended();
+
         if update_tx_count {
             let queues_update = sender_pool.update_tx_count(&self.tx_count_api).await?;
-            self.apply_queues_update(queues_update).await;
+            self.apply_queues_update(queues_update);
         }
 
         // reborrow sender pool to make borrow checker happy
@@ -361,14 +378,20 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
             let gas_price = tx.sorting_gas_price;
             self.tx_price_queue.push(tx, gas_price);
             tracing::debug!(%sender, tx_count = %sender_pool.tx_count, "tx queued");
+        } else if !was_suspended && sender_pool.is_suspended() {
+            self.heartbeat_queue.insert(
+                HeartBeatTask {
+                    sender_address: *sender,
+                    kind: HeartBeatTaskKind::Suspended,
+                },
+                Duration::from_millis(3 * ONE_BLOCK_MS),
+            );
         }
 
         Ok(())
     }
 
-    async fn apply_queues_update(&mut self, update: QueuesUpdate) {
-        use common::evm_loader::types::Address;
-
+    fn apply_queues_update(&mut self, update: QueuesUpdate) {
         if let Some(record) = update.remove_queued_nonce_too_small {
             self.tx_price_queue.remove(&record);
             self.txs.remove(&record.tx_hash);
@@ -410,26 +433,6 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
             self.pending_price_reversed_queue.remove(&record);
             self.txs.remove(&record.tx_hash);
         }
-        let _ = match update.state_update {
-            Some(StateUpdate::Suspended(addr)) => {
-                self.resolver_tx
-                    .send(SendersResolverCommand::Add(SenderResolverRecord {
-                        sender: BalanceAddress {
-                            chain_id: self.chain_id,
-                            address: Address::from(<[u8; 20]>::from(addr.0)),
-                        },
-                        nonce: 0,
-                    }))
-                    .await
-            }
-            Some(StateUpdate::Unsuspended(addr)) => {
-                self.resolver_tx
-                    .send(SendersResolverCommand::Remove(addr))
-                    .await
-            }
-            None => Ok(()),
-        }
-        .inspect_err(|err| tracing::error!(?err, "failed to send sender resolver command"));
     }
 
     async fn add_record(&mut self, record: QueueRecord) {
@@ -439,11 +442,23 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
 
         tracing::debug!(tx_hash = %record.tx_hash, nonce = %record.nonce, sender_state = ?sender_pool.state, "adding tx to pool");
 
-        self.sender_heartbeat_queue
-            .change_priority(&record.sender, Reverse(SystemTime::now()));
+        if let Some(key) = self.heartbeat_map.get(&record.sender) {
+            self.heartbeat_queue
+                .reset(key, Duration::from_secs(self.eviction_timeout_sec));
+        }
 
+        let was_suspended = sender_pool.is_suspended();
         let queues_update = sender_pool.add(record.clone());
-        self.apply_queues_update(queues_update).await;
+        let is_suspended = sender_pool.is_suspended();
+        self.apply_queues_update(queues_update);
+        if !was_suspended && is_suspended {
+            let task = HeartBeatTask {
+                sender_address: record.sender,
+                kind: HeartBeatTaskKind::Suspended,
+            };
+            self.heartbeat_queue
+                .insert(task, Duration::from_millis(3 * ONE_BLOCK_MS));
+        }
     }
 
     fn execute_tx(&mut self, exec_result_tx: Sender<ExecutionResult>) {
@@ -511,7 +526,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
 
         if sender_pool.is_empty() {
             let sender = sender_pool.sender;
-            self.remove_sender_pool(&sender).await;
+            self.remove_sender_pool(&sender);
         } else {
             self.queue_new_tx(&record.sender, true).await?;
         }
@@ -584,7 +599,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
         }
     }
 
-    async fn remove_sender_pool(&mut self, sender: &Address) {
+    fn remove_sender_pool(&mut self, sender: &Address) {
         tracing::debug!(%sender, "removing sender pool");
         let Some(mut sender_pool) = self.sender_pools.remove(sender) else {
             tracing::error!(%sender, "sender pool not found");
@@ -607,13 +622,6 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
             }
         }
 
-        if sender_pool.state == SenderPoolState::Suspended {
-            self.resolver_tx
-                .send(SendersResolverCommand::Remove(*sender))
-                .await
-                .unwrap();
-        }
-
         for record in sender_pool.drain() {
             self.pending_price_reversed_queue.remove(&record);
             self.gapped_price_reversed_queue.remove(&record);
@@ -630,8 +638,14 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
     async fn get_or_create_sender_pool(&mut self, sender: &Address) -> (&SenderPool, bool) {
         let mut created = false;
         if !self.sender_pools.contains_key(sender) {
-            self.sender_heartbeat_queue
-                .push(*sender, Reverse(SystemTime::now()));
+            let key = self.heartbeat_queue.insert(
+                HeartBeatTask {
+                    sender_address: *sender,
+                    kind: HeartBeatTaskKind::Evict,
+                },
+                Duration::from_secs(self.eviction_timeout_sec),
+            );
+            self.heartbeat_map.insert(*sender, key);
             let mut sender_pool = SenderPool::new(self.chain_id, *sender);
             // it's an empty sender pool, we don't care about queues update
             if let Err(err) = sender_pool.update_tx_count(&self.tx_count_api).await {
@@ -714,7 +728,7 @@ mod tests {
             MockGetTxCount,
             Arc::new(MockExecutor),
             Arc::new(DashMap::new()),
-            mpsc::channel(1).0,
+            // mpsc::channel(1).0,
         )
     }
 
@@ -837,7 +851,7 @@ mod tests {
         assert!(matches!(result, Err(MempoolError::Underprice)));
     }
 
-    // todo; test underprice capacity
+    // todo: test underprice capacity
 
     #[tokio::test]
     async fn test_add_tx_nonce_too_high() {

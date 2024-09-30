@@ -3192,7 +3192,7 @@ dependencies = [
  "indexmap 2.4.0",
  "slab",
  "tokio",
- "tokio-util 0.7.10",
+ "tokio-util 0.7.12",
  "tracing",
 ]
 
@@ -3881,7 +3881,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-stream",
- "tokio-util 0.7.10",
+ "tokio-util 0.7.12",
  "tower",
  "tracing",
 ]
@@ -4257,6 +4257,7 @@ dependencies = [
  "solana-api",
  "thiserror",
  "tokio",
+ "tokio-util 0.7.12",
  "tracing",
 ]
 
@@ -5813,7 +5814,7 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "tokio-rustls",
- "tokio-util 0.7.10",
+ "tokio-util 0.7.12",
  "tower-service",
  "url",
  "wasm-bindgen",
@@ -9263,7 +9264,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
- "tokio-util 0.7.10",
+ "tokio-util 0.7.12",
 ]
 
 [[package]]
@@ -9298,17 +9299,17 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.7.10"
+version = "0.7.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5419f34732d9eb6ee4c3578b7989078579b7f039cbbb9ca2c4da015749371e15"
+checksum = "61e7c3654c13bcd040d4a03abee2c75b1d14a37b423cf5a813ceae1cc903ec6a"
 dependencies = [
  "bytes",
  "futures-core",
  "futures-io",
  "futures-sink",
  "pin-project-lite",
+ "slab",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -9863,7 +9864,7 @@ dependencies = [
  "tiny-keccak",
  "tokio",
  "tokio-stream",
- "tokio-util 0.7.10",
+ "tokio-util 0.7.12",
  "url",
  "web3-async-native-tls",
 ]

@@ -124,7 +124,6 @@ pub enum Command {
     ScheduleTx(TxRecord, oneshot::Sender<Result<(), MempoolError>>),
     Shutdown,
     ExecuteTx,
-    SetTxCount(Address, TxNonce),
     GetPendingTxCount(Address, oneshot::Sender<Option<u64>>),
     GetTxHash(Address, TxNonce, oneshot::Sender<Option<EthTxHash>>),
 }
