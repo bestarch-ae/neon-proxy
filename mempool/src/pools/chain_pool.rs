@@ -152,98 +152,115 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
                     self.execute_tx(exec_result_tx.clone());
                     exec_interval.reset();
                 }
-                Some(cmd) = cmd_rx.recv() => {
-                    match cmd {
-                        Command::Shutdown => {
-                            tracing::info!("shutting down mempool");
-                            return;
-                        }
-                        Command::ScheduleTx(tx, tx_result) => {
-                            let result = self.add_tx(tx).await;
-                            tx_result.send(result).unwrap();
-                        }
-                        Command::ExecuteTx => {
-                            self.execute_tx(exec_result_tx.clone());
-                            exec_interval.reset();
-                        }
-                        Command::GetPendingTxCount(addr, result_tx) => {
-                            if let Some(sender_pool) = self.sender_pools.get(&addr) {
-                                result_tx.send(sender_pool.get_pending_tx_count()).unwrap();
-                            } else {
-                                result_tx.send(None).unwrap();
-                            }
-                        }
-                        Command::GetTxHash(addr, nonce, result_tx) => {
-                            if let Some(sender_pool) = self.sender_pools.get(&addr) {
-                                if let Some(record) = sender_pool.get_by_nonce(nonce) {
-                                    result_tx.send(Some(record.tx_hash)).unwrap();
-                                } else {
-                                    result_tx.send(None).unwrap();
-                                }
-                            } else {
-                                result_tx.send(None).unwrap();
-                            }
-                        }
-                    }
-                }
+                Some(cmd) = cmd_rx.recv() => self.process_command(cmd, &exec_result_tx, &mut exec_interval).await,
                 Some(execution_result) = exec_result_rx.recv() => {
                     if let Err(err) = self.process_execution_result(execution_result).await {
                         tracing::error!(?err, "failed to process execution result");
                     }
                     cmd_tx.send(Command::ExecuteTx).await.unwrap();
                 }
-                Some(task) = self.heartbeat_queue.next() => {
-                    use common::evm_loader::types::Address;
+                Some(task) = self.heartbeat_queue.next() => self.heartbeat_check(task.into_inner()).await
+            }
+        }
+    }
 
-                    let task = task.into_inner();
-                    let sender_addr = task.sender_address;
-                    let Some(sender_pool) = self.sender_pools.get_mut(&sender_addr) else {
-                        continue;
-                    };
-                    match task.kind {
-                        HeartBeatTaskKind::Suspended => {
-                            if !sender_pool.is_suspended() {
-                                continue;
-                            }
-                            let sender_balance_addr = BalanceAddress {
-                                chain_id: self.chain_id,
-                                address: Address::from(<[u8; 20]>::from(sender_addr.0)),
-                            };
-                            let tx_count = match self.tx_count_api.get_transaction_count(sender_balance_addr, None).await {
-                                Ok(tx_count) => tx_count,
-                                Err(err) => {
-                                    tracing::error!(?err, "failed to get tx count");
-                                    self.heartbeat_queue.insert(task, Duration::from_millis(3 * ONE_BLOCK_MS));
-                                    continue;
-                                }
-                            };
-                            if tx_count == sender_pool.tx_count {
-                                 self.heartbeat_queue.insert(task, Duration::from_millis(3 * ONE_BLOCK_MS));
-                                continue;
-                            }
-                            let queue_update = sender_pool.set_tx_count(tx_count);
-                            if sender_pool.is_suspended() {
-                                 self.heartbeat_queue.insert(task, Duration::from_millis(3 * ONE_BLOCK_MS));
-                            } else {
-                                match self.queue_new_tx(&sender_addr, false).await {
-                                    Ok(()) => {}
-                                    Err(err) => {
-                                        tracing::error!(?err, "heartbeat: failed to queue new tx");
-                                    }
-                                }
-                            }
-                            self.apply_queues_update(queue_update);
-                        }
-                        HeartBeatTaskKind::Evict => {
-                            if matches!(sender_pool.state, SenderPoolState::Processing(_)) {
-                                let key = self.heartbeat_queue.insert(task, Duration::from_secs(self.eviction_timeout_sec));
-                                self.heartbeat_map.insert(sender_addr, key);
-                                continue;
-                            }
-                            self.remove_sender_pool(&sender_addr);
+    async fn process_command(
+        &mut self,
+        cmd: Command,
+        exec_result_tx: &Sender<ExecutionResult>,
+        exec_interval: &mut tokio::time::Interval,
+    ) {
+        match cmd {
+            Command::Shutdown => {
+                tracing::info!("shutting down mempool");
+                return;
+            }
+            Command::ScheduleTx(tx, tx_result) => {
+                let result = self.add_tx(tx).await;
+                tx_result.send(result).unwrap();
+            }
+            Command::ExecuteTx => {
+                self.execute_tx(exec_result_tx.clone());
+                exec_interval.reset();
+            }
+            Command::GetPendingTxCount(addr, result_tx) => {
+                if let Some(sender_pool) = self.sender_pools.get(&addr) {
+                    result_tx.send(sender_pool.get_pending_tx_count()).unwrap();
+                } else {
+                    result_tx.send(None).unwrap();
+                }
+            }
+            Command::GetTxHash(addr, nonce, result_tx) => {
+                if let Some(sender_pool) = self.sender_pools.get(&addr) {
+                    if let Some(record) = sender_pool.get_by_nonce(nonce) {
+                        result_tx.send(Some(record.tx_hash)).unwrap();
+                    } else {
+                        result_tx.send(None).unwrap();
+                    }
+                } else {
+                    result_tx.send(None).unwrap();
+                }
+            }
+        }
+    }
+
+    async fn heartbeat_check(&mut self, task: HeartBeatTask) {
+        use common::evm_loader::types::Address;
+
+        let sender_addr = task.sender_address;
+        let Some(sender_pool) = self.sender_pools.get_mut(&sender_addr) else {
+            return;
+        };
+        match task.kind {
+            HeartBeatTaskKind::Suspended => {
+                if !sender_pool.is_suspended() {
+                    return;
+                }
+                let sender_balance_addr = BalanceAddress {
+                    chain_id: self.chain_id,
+                    address: Address::from(<[u8; 20]>::from(sender_addr.0)),
+                };
+                let tx_count = match self
+                    .tx_count_api
+                    .get_transaction_count(sender_balance_addr, None)
+                    .await
+                {
+                    Ok(tx_count) => tx_count,
+                    Err(err) => {
+                        tracing::error!(?err, "failed to get tx count");
+                        self.heartbeat_queue
+                            .insert(task, Duration::from_millis(3 * ONE_BLOCK_MS));
+                        return;
+                    }
+                };
+                if tx_count == sender_pool.tx_count {
+                    self.heartbeat_queue
+                        .insert(task, Duration::from_millis(3 * ONE_BLOCK_MS));
+                    return;
+                }
+                let queue_update = sender_pool.set_tx_count(tx_count);
+                if sender_pool.is_suspended() {
+                    self.heartbeat_queue
+                        .insert(task, Duration::from_millis(3 * ONE_BLOCK_MS));
+                } else {
+                    match self.queue_new_tx(&sender_addr, false).await {
+                        Ok(()) => {}
+                        Err(err) => {
+                            tracing::error!(?err, "heartbeat: failed to queue new tx");
                         }
                     }
                 }
+                self.apply_queues_update(queue_update);
+            }
+            HeartBeatTaskKind::Evict => {
+                if matches!(sender_pool.state, SenderPoolState::Processing(_)) {
+                    let key = self
+                        .heartbeat_queue
+                        .insert(task, Duration::from_secs(self.eviction_timeout_sec));
+                    self.heartbeat_map.insert(sender_addr, key);
+                    return;
+                }
+                self.remove_sender_pool(&sender_addr);
             }
         }
     }
