@@ -16,7 +16,7 @@ The mempool implementation includes the following queues and structures:
 2. For each chain ID, there is a pool of transaction (`chain pool`) that is sorted by gas price and holds transactions
    ready for execution. Each sender can only have one transaction in this queue, ensuring that no two transactions from
    the same sender are executed simultaneously.
-3. Each sender has its own set of pools for each sender (`sender pool`) with queues for managing transactions scheduled
+3. Each sender has its own pool of transactions (`sender pool`) with queues for managing transactions scheduled
    for execution. These are divided into two categories:
     - **Pending queue**: Contains transactions starting with the one whose nonce equals the sender's current transaction
       count. Subsequent transactions must have consecutive nonces.
@@ -29,35 +29,15 @@ transaction is ready for execution and there's an available spot in the `chain p
 
 ## Sender Pool States
 
-1. **Idle**: No transaction from this pool is currently scheduled in the `chain pool`, but if there are transactions
-   in this pool, one can be scheduled.
+1. **Idle**: No transaction from this pool is currently scheduled in the `chain pool`.
 2. **Queued(nonce)**: A transaction from this `sender pool` with the specified `nonce` is waiting in the `chain pool`
    for execution. No new transactions can be added from this pool.
 3. **Processing(nonce)**: A transaction from this pool is currently being executed. The mempool is waiting for
    the result, and no new transactions can be added to the `chain pool` until the current one completes.
-4. **Suspended**: There are no transactions that can be executed because the minimum nonce in this pool is higher
-   than the sender’s current transaction count for the given chain ID. No transactions can be queued for execution.
-5. **Unresolved** (Initial state): The mempool is uncertain whether the current transaction count for the sender is
-   up-to-date. The pool cannot distinguish which transactions belong in the pending queue and which belong in the gapped
-   queue. No transactions can be scheduled from this pool.
 
 When a transaction is selected from the `chain pool` for execution, the corresponding `sender pool` transitions to the
 `Processing` state. If the transaction completes successfully, the pool returns to the `Idle` state and tries
-to schedule the next transaction. If successful, it moves to `Queued`; otherwise, if there are transactions left,
-the pool becomes `Suspended`. If the execution fails, the pool transitions to `Unresolved` and goes through
-the resolution process again.
-
-Periodically, the mempool checks all `Suspended` sender pools, updates their transaction count, and tries to schedule
-a transaction. Additionally, if a new transaction is added to a suspended pool and does not create a gap, it is
-immediately scheduled in the `chain pool`.
-
-## Mempool Internal State Maintenance
-
-The mempool maintains its internal state using several internal loops:
-
-1. **Unresolved sender pool resolution loop**: Resolves the state of sender pools in the `Unresolved` state.
-2. **Suspended sender pool resolution loop**: Attempts to resolve sender pools in the `Suspended` state.
-3. **Sender pool cleanup loop (heartbeat loop)**: Removes old or inactive `sender pools`.
+to schedule the next transaction. If successful, it moves to `Queued`.
 
 ## Rules for Adding a Transaction to the Mempool
 
