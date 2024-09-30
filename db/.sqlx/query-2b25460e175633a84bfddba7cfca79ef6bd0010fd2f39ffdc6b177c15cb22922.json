@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE\n                 neon_transaction_logs L\n                SET\n                 is_reverted = TRUE\n                WHERE L.tx_hash IN (\n                    SELECT neon_sig\n                    FROM neon_transactions\n                    WHERE\n                      neon_sig = $1 AND\n                      (\n                          (neon_step_cnt > $2 OR (neon_step_cnt = $2 AND sum_gas_used > $3))\n                          OR $4\n                      )\n\n                )\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Int8",
+        "Numeric",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2b25460e175633a84bfddba7cfca79ef6bd0010fd2f39ffdc6b177c15cb22922"
+}

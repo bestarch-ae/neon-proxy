@@ -249,6 +249,7 @@ impl TransactionRepo {
         let sol_inner_idx = tx.sol_ix_inner_idx as i32;
         let neon_step_cnt = tx.neon_steps as i64;
         let total_gas_used = tx.sum_gas_used;
+        let has_step_reset = tx.events.iter().any(|ev| ev.event_type.is_reset());
 
         let v = match &tx.transaction.transaction {
             TransactionPayload::Legacy(legacy) => legacy.v,
@@ -256,6 +257,15 @@ impl TransactionRepo {
         };
         let chain_id = tx.transaction.chain_id();
 
+        // Logs are reverted in 2 cases:
+        //
+        // 1. if previous step_cnt is higher than current step_cnt (because step_cnt should always
+        //     increase)
+        // 2. if RESET event happened
+        //
+        // NOTE: we can't remove step_cnt comparison because in older versions of neon contract
+        // RESET event was not present
+        // TODO: it's unclear why sum_gas_used here and if this condition is ever executed
         sqlx::query!(
             r#"
                 UPDATE
@@ -267,12 +277,17 @@ impl TransactionRepo {
                     FROM neon_transactions
                     WHERE
                       neon_sig = $1 AND
-                      (neon_step_cnt > $2 OR (neon_step_cnt = $2 AND sum_gas_used > $3))
+                      (
+                          (neon_step_cnt > $2 OR (neon_step_cnt = $2 AND sum_gas_used > $3))
+                          OR $4
+                      )
+
                 )
             "#,
             tx_hash.as_slice(),
             neon_step_cnt,
             PgU256::from(total_gas_used) as PgU256,
+            has_step_reset
         )
         .execute(&mut **txn)
         .await?;
