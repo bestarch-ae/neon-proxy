@@ -255,6 +255,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
                 self.apply_queues_update(queue_update);
             }
             HeartBeatTaskKind::Evict => {
+                // consider to remove the task from the pool when changing state to processing
                 if matches!(sender_pool.state, SenderPoolState::Processing(_)) {
                     let key = self
                         .heartbeat_queue
