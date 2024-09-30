@@ -151,6 +151,9 @@ pub struct CanceledNeonTxInfo {
 pub enum EventKind {
     Log = 1,
 
+    StepReset = 50,
+    InvalidRevision = 51,
+
     EnterCall = 101,
     EnterCallCode = 102,
     EnterStaticCall = 103,
@@ -173,6 +176,10 @@ pub enum EventKind {
 }
 
 impl EventKind {
+    pub fn is_reset(&self) -> bool {
+        matches!(self, EventKind::StepReset)
+    }
+
     pub fn is_exit(&self) -> bool {
         matches!(
             self,

@@ -446,7 +446,19 @@ pub fn parse(
                 .ok_or(Error::InvalidLog);
             match mnemonic {
                 Mnemonic::Reset => {
-                    tracing::warn!("reset mnemonic not supported");
+                    let event = NeonLogTxEvent {
+                        event_type: EventKind::StepReset,
+                        is_hidden: true,
+                        is_reverted: false,
+                        address: None,
+                        topic_list: Vec::new(),
+                        data: Vec::new(),
+                        tx_log_idx: 0,
+                        blk_log_idx: 0,
+                        level: 0,
+                        order: 0,
+                    };
+                    event_list.push(event);
                 }
                 Mnemonic::Hash => {
                     if neon_tx_sig.is_some() {
