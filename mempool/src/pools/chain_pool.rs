@@ -18,7 +18,7 @@ use common::neon_lib::types::BalanceAddress;
 use executor::ExecutorTrait;
 use neon_api::{NeonApi, NeonApiError};
 
-use crate::mempool::{Command, EthTxHash, GasPrice, TxRecord};
+use crate::mempool::{ChainPoolContent, Command, EthTxHash, GasPrice, TxRecord};
 use crate::pools::{
     ExecutionResult, QueueRecord, QueueUpdateAdd, QueueUpdateMove, QueuesUpdate, SenderPool,
     SenderPoolState,
@@ -160,6 +160,40 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
         }
     }
 
+    fn get_content(&self) -> ChainPoolContent {
+        let mut content = ChainPoolContent::default();
+
+        let mut pending = self.pending_price_reversed_queue.clone().into_vec();
+        pending.sort_by_key(|r| (r.sender, r.nonce));
+        content.pending_list = pending
+            .into_iter()
+            .filter_map(|r| match self.txs.get(&r.tx_hash) {
+                Some(tx) => Some(tx.tx().clone()),
+                None => {
+                    tracing::error!(tx_hash = %r.tx_hash, "get content: pending transaction not found in txs");
+                    None
+                }
+            })
+            .collect();
+
+        let mut gapped = self.gapped_price_reversed_queue.clone().into_vec();
+        gapped.sort_by_key(|r| (r.sender, r.nonce));
+        content.queued_list = gapped
+            .into_iter()
+            .filter_map(|r| {
+                match self.txs.get(&r.tx_hash) {
+                    Some(tx) => Some(tx.tx().clone()),
+                    None => {
+                        tracing::error!(tx_hash = %r.tx_hash, "get content: gapped transaction not found in txs");
+                        None
+                    }
+                }
+            })
+            .collect();
+
+        content
+    }
+
     /// Processes a command received from the command channel.
     /// Returns false if we should shut down the mempool.
     async fn process_command(&mut self, cmd: Command) -> bool {
@@ -189,6 +223,10 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
                 } else {
                     result_tx.send(None).unwrap();
                 }
+            }
+            Command::GetContent(result_tx) => {
+                let content = self.get_content();
+                result_tx.send(content).unwrap();
             }
         }
         true
