@@ -123,7 +123,6 @@ fn tx_chain_id(tx: &TxEnvelope) -> Result<Option<ChainId>, MempoolError> {
 pub enum Command {
     ScheduleTx(TxRecord, oneshot::Sender<Result<(), MempoolError>>),
     Shutdown,
-    ExecuteTx,
     GetPendingTxCount(Address, oneshot::Sender<Option<u64>>),
     GetTxHash(Address, TxNonce, oneshot::Sender<Option<EthTxHash>>),
 }
@@ -221,7 +220,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait> Mempool<E, G> {
             let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(CMD_CHANNEL_SIZE);
             let chain_id = chain_info.id;
 
-            self.chain_pool_txs.insert(chain_id, cmd_tx.clone());
+            self.chain_pool_txs.insert(chain_id, cmd_tx);
 
             let config = ChainPoolConfig {
                 chain_id,
@@ -235,7 +234,6 @@ impl<E: ExecutorTrait, G: GasPricesTrait> Mempool<E, G> {
                 NeonApiGetTxCount(self.neon_api.clone()),
                 Arc::clone(&self.executor),
                 Arc::clone(&self.txs),
-                cmd_tx,
                 cmd_rx,
             );
         }

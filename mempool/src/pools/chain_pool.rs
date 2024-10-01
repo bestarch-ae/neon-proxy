@@ -129,14 +129,13 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
         get_tx_api: C,
         executor: Arc<E>,
         txs: Arc<DashMap<EthTxHash, TxRecord>>,
-        cmd_tx: Sender<Command>,
         cmd_rx: Receiver<Command>,
     ) {
         let this = Self::new(config, gas_prices, get_tx_api, executor, txs);
-        tokio::spawn(this.start(cmd_tx, cmd_rx));
+        tokio::spawn(this.start(cmd_rx));
     }
 
-    pub async fn start(mut self, cmd_tx: Sender<Command>, cmd_rx: Receiver<Command>) {
+    pub async fn start(mut self, cmd_rx: Receiver<Command>) {
         let mut cmd_rx = cmd_rx;
         let (exec_result_tx, mut exec_result_rx) =
             mpsc::channel::<ExecutionResult>(EXEC_RESULT_CHANNEL_SIZE);
@@ -147,7 +146,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
                     self.execute_tx(exec_result_tx.clone());
                 }
                 Some(cmd) = cmd_rx.recv() => {
-                    if !self.process_command(cmd, &exec_result_tx, &mut exec_interval).await {
+                    if !self.process_command(cmd).await {
                         break;
                     }
                 }
@@ -155,7 +154,6 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
                     if let Err(err) = self.process_execution_result(execution_result).await {
                         tracing::error!(?err, "failed to process execution result");
                     }
-                    cmd_tx.send(Command::ExecuteTx).await.unwrap();
                 }
                 Some(task) = self.heartbeat_queue.next() => self.heartbeat_check(task.into_inner()).await
             }
@@ -164,12 +162,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
 
     /// Processes a command received from the command channel.
     /// Returns false if we should shut down the mempool.
-    async fn process_command(
-        &mut self,
-        cmd: Command,
-        exec_result_tx: &Sender<ExecutionResult>,
-        exec_interval: &mut tokio::time::Interval,
-    ) -> bool {
+    async fn process_command(&mut self, cmd: Command) -> bool {
         match cmd {
             Command::Shutdown => {
                 tracing::info!("shutting down mempool");
@@ -178,10 +171,6 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
             Command::ScheduleTx(tx, tx_result) => {
                 let result = self.add_tx(tx).await;
                 tx_result.send(result).unwrap();
-            }
-            Command::ExecuteTx => {
-                self.execute_tx(exec_result_tx.clone());
-                exec_interval.reset();
             }
             Command::GetPendingTxCount(addr, result_tx) => {
                 if let Some(sender_pool) = self.sender_pools.get(&addr) {
