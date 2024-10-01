@@ -220,7 +220,6 @@ impl<E: ExecutorTrait, G: GasPricesTrait> Mempool<E, G> {
         for chain_info in config.chains {
             let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(CMD_CHANNEL_SIZE);
             let chain_id = chain_info.id;
-            let token_pkey = chain_info.token;
 
             self.chain_pool_txs.insert(chain_id, cmd_tx.clone());
 
@@ -228,7 +227,6 @@ impl<E: ExecutorTrait, G: GasPricesTrait> Mempool<E, G> {
                 chain_id,
                 capacity: self.config.capacity,
                 capacity_high_watermark: self.config.capacity_high_watermark,
-                token_pkey,
                 eviction_timeout_sec: self.config.eviction_timeout_sec,
             };
             ChainPool::create_and_start(

@@ -15,7 +15,6 @@ use tokio_util::time::delay_queue::Key as DelayQueueKey;
 use tokio_util::time::DelayQueue;
 
 use common::neon_lib::types::BalanceAddress;
-use common::solana_sdk::pubkey::Pubkey;
 use executor::ExecutorTrait;
 use neon_api::{NeonApi, NeonApiError};
 
@@ -56,7 +55,6 @@ pub struct Config {
     pub chain_id: ChainId,
     pub capacity: usize,
     pub capacity_high_watermark: f64,
-    pub token_pkey: Pubkey,
     pub eviction_timeout_sec: u64,
 }
 
@@ -87,8 +85,6 @@ pub struct ChainPool<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> {
     /// Priority queue if all gapped transactions from all sender pools sorted by gas price in
     /// reverse order. This queue is used for cleaning up the mempool when it reaches its capacity.
     gapped_price_reversed_queue: PriorityQueue<QueueRecord, Reverse<GasPrice>>,
-    /// Chain token pubkey
-    token_pkey: Pubkey,
     gas_prices: G,
     tx_count_api: C,
     /// Transaction executor
@@ -119,7 +115,6 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
             tx_price_queue: PriorityQueue::new(),
             pending_price_reversed_queue: PriorityQueue::new(),
             gapped_price_reversed_queue: PriorityQueue::new(),
-            token_pkey: config.token_pkey,
             gas_prices,
             tx_count_api: get_tx_api,
             executor,
@@ -291,7 +286,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
         }
 
         if tx.should_set_gas_price() {
-            let Some(gas_price) = self.gas_prices.get_gas_for_token_pkey(&self.token_pkey) else {
+            let Some(gas_price) = self.gas_prices.get_gas_price_for_chain(chain_id) else {
                 return Err(MempoolError::UnknownChainID(chain_id));
             };
             tx.sorting_gas_price = gas_price * 2;
@@ -719,7 +714,7 @@ mod tests {
             1
         }
 
-        fn get_gas_for_token_pkey(&self, _token_pkey: &Pubkey) -> Option<u128> {
+        fn get_gas_price_for_chain(&self, _chain_id: u64) -> Option<u128> {
             Some(1)
         }
     }
@@ -742,7 +737,6 @@ mod tests {
             chain_id: 1,
             capacity: 10,
             capacity_high_watermark: 0.8,
-            token_pkey: Pubkey::new_unique(),
             eviction_timeout_sec: 60,
         };
         ChainPool::new(
@@ -751,7 +745,6 @@ mod tests {
             MockGetTxCount,
             Arc::new(MockExecutor),
             Arc::new(DashMap::new()),
-            // mpsc::channel(1).0,
         )
     }
 

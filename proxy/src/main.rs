@@ -26,7 +26,7 @@ use common::neon_lib::types::ChDbConfig;
 use common::solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use common::solana_sdk::pubkey::Pubkey;
 use executor::Executor;
-use mempool::{GasPriceCalculatorConfig, GasPricesConfig};
+use mempool::{GasPriceCalculatorConfig, GasPrices, GasPricesConfig, Mempool, MempoolConfig};
 use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
 use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;

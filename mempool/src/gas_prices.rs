@@ -58,6 +58,7 @@ pub struct GasPriceModel {
 
 pub trait GasPricesTrait: Clone + Send + Sync + 'static {
     fn get_gas_price(&self, chain_id: Option<u64>) -> u128;
+    fn get_gas_price_for_chain(&self, chain_id: u64) -> Option<u128>;
 }
 
 /// Gas prices for EVM transactions
@@ -153,10 +154,13 @@ impl GasPricesTrait for GasPrices {
     /// price is not available. Precision is 18 decimal places.
     fn get_gas_price(&self, chain_id: Option<u64>) -> u128 {
         let chain_id = chain_id.unwrap_or(self.default_chain_id);
+        self.get_gas_price_for_chain(chain_id).unwrap_or(0)
+    }
+
+    fn get_gas_price_for_chain(&self, chain_id: u64) -> Option<u128> {
         self.gas_price_models
             .get(&chain_id)
             .map(|r| r.value().suggested_gas_price.try_into().unwrap())
-            .unwrap_or(0)
     }
 }
 
