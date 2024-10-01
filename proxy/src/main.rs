@@ -339,12 +339,13 @@ async fn main() {
             capacity_high_watermark: opts.mp_capacity_high_watermark,
             eviction_timeout_sec: opts.mp_eviction_timeout_sec,
         };
-        let mempool = Mempool::<Executor, GasPrices>::new(
+        let mut mempool = Mempool::<Executor, GasPrices>::new(
             mp_config,
             mp_gas_prices.clone(),
             executor,
             neon_api.clone(),
         );
+        mempool.start().await.expect("failed to start mempool");
         Some(Arc::new(mempool))
     } else {
         None

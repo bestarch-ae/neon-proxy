@@ -254,18 +254,11 @@ impl SenderPool {
         self.state = SenderPoolState::Idle;
     }
 
-    pub fn drain(&mut self) -> impl Iterator<Item = QueueRecord> {
+    pub fn drain(&mut self) -> impl Iterator<Item = QueueRecord> + '_ {
         self.state = SenderPoolState::Idle;
-        // let transactions: Vec<QueueRecord> = self.nonce_map.values().cloned().collect();
-        let transactions = self
-            .nonce_map
-            .drain()
-            .map(|(_, value)| value)
-            .collect::<Vec<_>>();
-        self.nonce_map.clear();
         self.pending_nonce_queue.clear();
         self.gapped_nonce_queue.clear();
-        transactions.into_iter()
+        self.nonce_map.drain().map(|(_, value)| value)
     }
 
     pub async fn update_tx_count<C: GetTxCountTrait>(
