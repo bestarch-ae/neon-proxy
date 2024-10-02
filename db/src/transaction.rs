@@ -430,13 +430,22 @@ impl TransactionRepo {
         &self,
         by: TransactionBy,
     ) -> impl Stream<Item = Result<WithBlockhash<NeonTxInfo>, Error>> + '_ {
-        self.fetch_with_events_inner(by, None)
+        self.fetch_with_events_inner(by, None, true)
+    }
+
+    /// Do not filters out incomplete transactions
+    pub fn fetch_with_events_maybe_incomplete(
+        &self,
+        by: TransactionBy,
+    ) -> impl Stream<Item = Result<WithBlockhash<NeonTxInfo>, Error>> + '_ {
+        self.fetch_with_events_inner(by, None, false)
     }
 
     fn fetch_with_events_inner(
         &self,
         by: TransactionBy,
         filter: Option<EventFilter<'_>>,
+        only_complete: bool,
     ) -> impl Stream<Item = Result<WithBlockhash<NeonTxInfo>, Error>> + '_ {
         let case = by.id();
         tracing::info!(?by, %case, ?filter, "fetching transactions with events");
@@ -511,7 +520,7 @@ impl TransactionRepo {
                         )
                     ) TL
                     WHERE
-                        (TL.is_completed OR TL.is_canceled) AND
+                        (TL.is_completed OR TL.is_canceled OR $18) AND
                         CASE
                             -- signature match
                             WHEN $5 = 1 THEN TL.neon_sig = $1
@@ -556,6 +565,7 @@ impl TransactionRepo {
         .bind(topic_vec(1)) // 15
         .bind(topic_vec(2)) // 16
         .bind(topic_vec(3)) // 17
+        .bind(!only_complete) // 18
         .fetch(&self.pool)
         .map(move |row| row.map(|row: NeonTransactionRowWithLogs| row.with_logs()))
         .map(move |res| Ok(res??))
@@ -614,7 +624,7 @@ impl TransactionRepo {
             RichLogBy::Hash(hash) => TransactionBy::BlockHashAndIndex(hash.into(), None),
             RichLogBy::SlotRange { from, to } => TransactionBy::SlotRange { from, to },
         };
-        self.fetch_with_events_inner(by, Some(filter))
+        self.fetch_with_events_inner(by, Some(filter), true)
             .map(|tx| {
                 tx.map(|tx| {
                     let block_hash = tx.blockhash.unwrap_or_default();

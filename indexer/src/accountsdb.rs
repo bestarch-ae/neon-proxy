@@ -185,7 +185,7 @@ impl DummyTdb {
 
 impl TransactionsDb for DummyTdb {
     fn get_by_hash(&self, tx_hash: TxHash) -> Option<Transaction> {
-        tracing::debug!(%tx_hash, "getting transaction");
+        tracing::debug!(%tx_hash, "getting transaction from cache");
         let db = self.db.clone();
 
         if let Some(tx) = self
@@ -203,14 +203,22 @@ impl TransactionsDb for DummyTdb {
         // we were interrupted (process killed) in between steps
         // of the transaction.
         if let Some(tx) = tokio::task::block_in_place(move || {
+            tracing::debug!(%tx_hash, "cache miss, fetching from db");
             let res = Handle::current().block_on(async move {
-                let mut stream = db.fetch_with_events(db::TransactionBy::Hash(tx_hash));
+                let mut stream =
+                    db.fetch_with_events_maybe_incomplete(db::TransactionBy::Hash(tx_hash));
                 stream.next().await
             });
             match res {
                 Some(Ok(tx)) => Some(tx.inner.transaction),
-                Some(Err(_)) => None,
-                None => None,
+                Some(Err(error)) => {
+                    tracing::warn!(%tx_hash, ?error, "could not fetch transaction from db");
+                    None
+                }
+                None => {
+                    tracing::warn!(%tx_hash, "missing cached transaction from db");
+                    None
+                }
             }
         }) {
             self.map
