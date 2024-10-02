@@ -445,6 +445,13 @@ impl TransactionRepo {
             .as_ref()
             .map(|f| f.address.iter().map(|addr| addr.0.to_vec()).collect())
             .unwrap_or_default();
+        let topic_vec = |idx| -> Vec<Vec<u8>> {
+            filter
+                .as_ref()
+                .map(|f| f.topics[idx] as &[Vec<_>])
+                .unwrap_or_default()
+                .to_vec()
+        };
         let TransactionByParams {
             from_slot,
             to_slot,
@@ -545,34 +552,10 @@ impl TransactionRepo {
         .bind(chain_id.unwrap_or(0)) // 11
         .bind(filter.is_some()) // 12
         .bind(address_ref) // 13
-        .bind(
-            filter
-                .as_ref()
-                .map(|f| f.topics[0])
-                .unwrap_or_default()
-                .to_vec(),
-        ) // 14
-        .bind(
-            filter
-                .as_ref()
-                .map(|f| f.topics[1])
-                .unwrap_or_default()
-                .to_vec(),
-        ) // 15
-        .bind(
-            filter
-                .as_ref()
-                .map(|f| f.topics[2])
-                .unwrap_or_default()
-                .to_vec(),
-        ) // 16
-        .bind(
-            filter
-                .as_ref()
-                .map(|f| f.topics[3])
-                .unwrap_or_default()
-                .to_vec(),
-        ) // 17
+        .bind(topic_vec(0)) // 14
+        .bind(topic_vec(1)) // 15
+        .bind(topic_vec(2)) // 16
+        .bind(topic_vec(3)) // 17
         .fetch(&self.pool)
         .map(move |row| row.map(|row: NeonTransactionRowWithLogs| row.with_logs()))
         .map(move |res| Ok(res??))
