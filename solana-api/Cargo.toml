@@ -12,7 +12,7 @@ thiserror.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
 
-async-trait = "0.1.80"
+async-trait.workspace = true
 stream_generator = "0.1"
 serde_json = "1.0.113"
 futures-util.workspace = true

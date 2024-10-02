@@ -11,6 +11,7 @@ members = [
     "neon-api",
     "executor",
     "mempool",
+    "operator",
 ]
 
 [workspace.dependencies]

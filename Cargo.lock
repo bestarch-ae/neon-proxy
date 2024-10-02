@@ -4867,6 +4867,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "operator"
+version = "0.1.0"
+dependencies = [
+ "alloy-consensus",
+ "alloy-network",
+ "alloy-signer",
+ "alloy-signer-wallet",
+ "anyhow",
+ "async-trait",
+ "reth-primitives",
+ "solana-sdk",
+]
+
+[[package]]
 name = "os_str_bytes"
 version = "6.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
