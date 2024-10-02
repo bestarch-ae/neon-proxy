@@ -150,7 +150,6 @@ fn parse_transactions(
                 }));
             }
             ParseResult::TransactionStep(None) => {
-                tracing::info!(?neon_sig, "using cached transaction");
                 let neon_tx = neon_sig
                     .and_then(|sig| txsdb.get_by_hash(sig))
                     .ok_or(Error::InvalidStep)?;
