@@ -445,6 +445,13 @@ impl TransactionRepo {
             .as_ref()
             .map(|f| f.address.iter().map(|addr| addr.0.to_vec()).collect())
             .unwrap_or_default();
+        let topic_vec = |idx| -> Vec<Vec<u8>> {
+            filter
+                .as_ref()
+                .map(|f| f.topics[idx] as &[Vec<_>])
+                .unwrap_or_default()
+                .to_vec()
+        };
         let TransactionByParams {
             from_slot,
             to_slot,
@@ -457,12 +464,7 @@ impl TransactionRepo {
         } = by.params();
         sqlx::query_as::<_, NeonTransactionRowWithLogs>(
             r#"SELECT * FROM
-                   (WITH tx_block_slot AS
-                    (
-                     SELECT neon_sig,block_slot
-                     FROM neon_transactions
-                     WHERE neon_sig = $1 OR ($2 AND block_slot between $3 AND $4)
-                    )
+                   (
                     SELECT
                       T.neon_sig, tx_type, from_addr,
                       T.sol_sig, sol_ix_idx,
@@ -495,14 +497,19 @@ impl TransactionRepo {
                       L.log_topic1, L.log_topic2,
                       L.log_topic3, L.log_topic4,
                       L.log_topic_cnt, L.log_data
-                    FROM neon_transactions T
-                    LEFT JOIN tx_block_slot S on T.block_slot = S.block_slot AND T.neon_sig = S.neon_sig
-                    INNER JOIN tx_block_slot BS ON T.block_slot = BS.block_slot
-                    LEFT JOIN (
-                        SELECT * FROM neon_transaction_logs WHERE NOT COALESCE(is_reverted, FALSE)
+                     FROM neon_transactions T
+                     LEFT JOIN (
+                        SELECT * FROM neon_transaction_logs
+                        WHERE NOT COALESCE(is_reverted, FALSE)
                         ) L ON L.tx_hash = T.neon_sig AND T.is_canceled = FALSE
-                    LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
-                    WHERE NOT COALESCE(L.is_reverted, FALSE)) TL
+                     LEFT JOIN solana_blocks B ON B.block_slot = T.block_slot
+                     WHERE
+                        -- select whole block
+                        T.block_slot in (
+                            SELECT block_slot FROM neon_transactions
+                            WHERE neon_sig = $1 OR ($2 AND block_slot between $3 AND $4)
+                        )
+                    ) TL
                     WHERE
                         (TL.is_completed OR TL.is_canceled) AND
                         CASE
@@ -545,10 +552,10 @@ impl TransactionRepo {
         .bind(chain_id.unwrap_or(0)) // 11
         .bind(filter.is_some()) // 12
         .bind(address_ref) // 13
-        .bind(filter.as_ref().map(|f| f.topics[0]).unwrap_or_default().to_vec()) // 14
-        .bind(filter.as_ref().map(|f| f.topics[1]).unwrap_or_default().to_vec()) // 15
-        .bind(filter.as_ref().map(|f| f.topics[2]).unwrap_or_default().to_vec()) // 16
-        .bind(filter.as_ref().map(|f| f.topics[3]).unwrap_or_default().to_vec()) // 17
+        .bind(topic_vec(0)) // 14
+        .bind(topic_vec(1)) // 15
+        .bind(topic_vec(2)) // 16
+        .bind(topic_vec(3)) // 17
         .fetch(&self.pool)
         .map(move |row| row.map(|row: NeonTransactionRowWithLogs| row.with_logs()))
         .map(move |res| Ok(res??))
