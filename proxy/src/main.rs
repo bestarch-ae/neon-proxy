@@ -4,6 +4,7 @@ use std::io::IsTerminal;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::Context;
 use clap::{ArgGroup, Parser};
@@ -25,7 +26,7 @@ use common::neon_lib::types::ChDbConfig;
 use common::solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use common::solana_sdk::pubkey::Pubkey;
 use executor::Executor;
-use mempool::{GasPriceCalculatorConfig, GasPricesConfig};
+use mempool::{GasPriceCalculatorConfig, GasPrices, GasPricesConfig, Mempool, MempoolConfig};
 use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
 use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
@@ -170,6 +171,18 @@ struct Args {
     #[arg(long)]
     /// Log format, either json or plain
     log_format: Option<LogFormat>,
+
+    // todo: pick a default value
+    #[arg(long, env, default_value = "100")]
+    mp_capacity: usize,
+
+    // todo: pick a default value
+    #[arg(long, env, default_value = "0.9")]
+    mp_capacity_high_watermark: f64,
+
+    // todo: pick a default value
+    #[arg(long, env, default_value = "3600")]
+    mp_eviction_timeout_sec: u64,
 }
 
 fn get_lib_version() -> Option<String> {
@@ -316,11 +329,33 @@ async fn main() {
     } else {
         None
     };
+
+    let mempool = if let Some(executor) = &executor {
+        // todo: we should have a single executor; and we shouldn't allow direct access to it
+        //  bypassing mempool
+        let executor = executor.clone();
+        let mp_config = MempoolConfig {
+            capacity: opts.mp_capacity,
+            capacity_high_watermark: opts.mp_capacity_high_watermark,
+            eviction_timeout_sec: opts.mp_eviction_timeout_sec,
+        };
+        let mut mempool = Mempool::<Executor, GasPrices>::new(
+            mp_config,
+            mp_gas_prices.clone(),
+            executor,
+            neon_api.clone(),
+        );
+        mempool.start().await.expect("failed to start mempool");
+        Some(Arc::new(mempool))
+    } else {
+        None
+    };
+
     let eth = EthApiImpl::new(
         pool.clone(),
         neon_api.clone(),
         default_chain_id,
-        executor.clone(),
+        mempool,
         mp_gas_prices.clone(),
         neon_lib_version.unwrap_or("UNKNOWN".to_string()),
     );

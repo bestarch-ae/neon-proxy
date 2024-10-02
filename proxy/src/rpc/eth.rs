@@ -17,6 +17,7 @@ use rpc_api_types::{Log, PendingTransactionFilterKind, SyncInfo};
 use common::convert::{ToNeon, ToReth};
 use common::neon_lib::types::{BalanceAddress, TxParams};
 use executor::ExecuteRequest;
+use mempool::GasPricesTrait;
 
 use crate::convert::convert_filters;
 use crate::convert::{neon_to_eth, neon_to_eth_receipt};
@@ -538,16 +539,19 @@ impl EthApiServer for EthApiImpl {
 
     /// Sends signed transaction, returning its hash.
     async fn send_raw_transaction(&self, bytes: Bytes) -> RpcResult<B256> {
-        if let Some(executor) = self.executor.as_ref() {
-            let envelope = ExecuteRequest::from_bytes(&bytes, self.chain_id)
+        if let Some(mempool) = self.mempool.as_ref() {
+            let execute_request = ExecuteRequest::from_bytes(&bytes, self.chain_id)
                 .inspect_err(|error| tracing::warn!(%bytes, %error, "could not decode transaction"))
                 .map_err(|_| ErrorObjectOwned::from(ErrorCode::InvalidParams))?;
-            let hash = *envelope.tx_hash();
-            tracing::info!(tx_hash = %hash, %bytes, ?envelope, "sendRawTransaction");
-            executor
-                .handle_transaction(envelope)
+            let hash = *execute_request.tx_hash();
+            tracing::info!(tx_hash = %hash, %bytes, "sendRawTransaction");
+            // todo: proper error
+            mempool
+                .schedule_tx(execute_request)
                 .await
-                .inspect_err(|error| tracing::warn!(%hash, %error, "could not handle transaction"))
+                .inspect_err(
+                    |error| tracing::warn!(%bytes, %error, "could not schedule transaction"),
+                )
                 .map_err(|err| {
                     ErrorObjectOwned::owned(
                         ErrorCode::InternalError.code(),
@@ -559,7 +563,7 @@ impl EthApiServer for EthApiImpl {
             tracing::info!(tx_hash = %hash, "sendRawTransaction done");
             Ok(hash)
         } else {
-            tracing::debug!(%bytes, "skip sendRawTransaction, executor disabled");
+            tracing::debug!(%bytes, "skip sendRawTransaction, mempool disabled");
             unimplemented()
         }
     }
