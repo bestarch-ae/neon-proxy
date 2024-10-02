@@ -25,7 +25,7 @@ solana-rpc-client-api.workspace = true
 
 [dev-dependencies]
 anyhow = "1.0.82"
-clap = { version = "4.5.4", features = ["derive"] }
+clap.workspace = true
 dashmap.workspace = true
 rand = { version = "0.8.5", features = ["std"] }
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }

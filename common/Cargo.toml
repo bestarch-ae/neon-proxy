@@ -9,8 +9,8 @@ reth = ["rpc-api-types", "reth-primitives"]
 
 [dependencies]
 hex.workspace = true
+ethnum.workspace = true
 
-ethnum = "1.5.0"
 build-info = { version = "0.0.31", features = ["serde"] }
 
 solana-sdk.workspace = true
@@ -20,18 +20,5 @@ solana-transaction-status.workspace = true
 rpc-api-types = { workspace = true, optional = true }
 reth-primitives = { workspace = true, optional = true }
 
-[dependencies.evm-loader]
-# git = "https://github.com/neonlabsorg/neon-evm.git"
-git = "https://github.com/00nktk/neon-evm.git"
-# path = "../../neon-evm/evm_loader/program"
-# rev = "v1.15.1"
-rev = "1ab8167"
-default-features = false
-features = ["async-trait", "no-entrypoint", "log"]
-
-[dependencies.neon-lib]
-# git = "https://github.com/neonlabsorg/neon-evm.git"
-git = "https://github.com/00nktk/neon-evm.git"
-# path = "../../neon-evm/evm_loader/lib"
-# rev = "v1.15.1"
-rev = "1ab8167"
+evm-loader.workspace = true
+neon-lib.workspace = true

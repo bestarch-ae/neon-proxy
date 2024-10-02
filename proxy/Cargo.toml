@@ -18,6 +18,7 @@ rpc-api-types.workspace = true
 reth-primitives.workspace = true
 
 anyhow.workspace = true
+clap.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -38,7 +39,6 @@ serde = { version = "1", features = ["derive"] }
 serde_with = "3.9"
 tower = "0.4.13"
 tracing-log = "0.2"
-clap = { version = "4.5.4", features = ["derive", "env"] }
 hex-literal = "0.4.1"
 hyper = "0.14.30"
 futures-util.workspace = true
