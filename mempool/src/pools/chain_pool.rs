@@ -143,14 +143,17 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
         loop {
             tokio::select! {
                  _ = exec_interval.tick() => {
+                    tracing::info!("attempt to execute tx");
                     self.execute_tx(exec_result_tx.clone());
                 }
                 Some(cmd) = cmd_rx.recv() => {
+                    tracing::info!(?cmd, "received command");
                     if !self.process_command(cmd).await {
                         break;
                     }
                 }
                 Some(execution_result) = exec_result_rx.recv() => {
+                    tracing::info!(?execution_result, "received execution result");
                     if let Err(err) = self.process_execution_result(execution_result).await {
                         tracing::error!(?err, "failed to process execution result");
                     }
@@ -252,7 +255,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
     }
 
     async fn add_tx(&mut self, mut tx: TxRecord) -> Result<(), MempoolError> {
-        tracing::debug!(tx_hash = %tx.tx_hash(), "schedule tx command");
+        tracing::info!(tx_hash = %tx.tx_hash(), "schedule tx command");
         let chain_id = tx.chain_id();
         let sender = tx.sender;
 
@@ -324,7 +327,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
 
         self.purge_over_capacity_txs();
 
-        tracing::debug!(%tx_hash, "adding tx to pool");
+        tracing::info!(%tx_hash, "adding tx to pool");
         let record = QueueRecord {
             sender,
             tx_hash,
@@ -334,7 +337,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
         self.txs.insert(tx_hash, tx);
         self.add_record(record).await;
         self.queue_new_tx(&sender, !created).await?;
-        tracing::debug!(%tx_hash, "tx added to pool");
+        tracing::info!(%tx_hash, "tx added to pool");
         Ok(())
     }
 
@@ -357,7 +360,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
         sender: &Address,
         update_tx_count: bool,
     ) -> Result<(), MempoolError> {
-        tracing::debug!(%sender, "queueing new tx");
+        tracing::info!(%sender, "queueing new tx");
         let Some(sender_pool) = self.sender_pools.get_mut(sender) else {
             return Err(MempoolError::UnknownSender(*sender));
         };
@@ -381,7 +384,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
         if let Some(tx) = sender_pool.get_for_queueing() {
             let gas_price = tx.sorting_gas_price;
             self.tx_price_queue.push(tx, gas_price);
-            tracing::debug!(%sender, tx_count = %sender_pool.tx_count, "tx queued");
+            tracing::info!(%sender, tx_count = %sender_pool.tx_count, "tx queued");
         } else if !was_suspended && sender_pool.is_suspended() {
             self.heartbeat_queue.insert(
                 HeartBeatTask {
@@ -451,7 +454,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
             return;
         };
 
-        tracing::debug!(tx_hash = %record.tx_hash, nonce = %record.nonce, sender_state = ?sender_pool.state, "adding tx to pool");
+        tracing::info!(tx_hash = %record.tx_hash, nonce = %record.nonce, sender_state = ?sender_pool.state, "adding tx to pool");
 
         if let Some(key) = self.heartbeat_map.get(&record.sender) {
             self.heartbeat_queue
@@ -482,10 +485,10 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
         let tx_eth_hash = *tx.tx_hash();
         let chain_id = self.chain_id;
 
-        tracing::debug!(%tx_eth_hash, %chain_id, "scheduling tx for execution");
+        tracing::info!(%tx_eth_hash, %chain_id, "scheduling tx for execution");
 
         tokio::spawn(async move {
-            tracing::debug!(%tx_eth_hash, %chain_id, "executing tx");
+            tracing::info!(%tx_eth_hash, %chain_id, "executing tx");
             let (result_tx, result_rx) = oneshot::channel();
             if let Err(err) = tx_executor
                 .handle_transaction(tx_request, Some(result_tx))
@@ -502,8 +505,9 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
                     .unwrap();
                 return;
             }
-            tracing::info!(%tx_eth_hash, %chain_id, "successfully executed tx");
+            tracing::info!(%tx_eth_hash, %chain_id, "hande transaction executed, awaiting result");
             let result = result_rx.await.unwrap();
+            tracing::info!(%tx_eth_hash, %chain_id, ?result, "tx executed");
             exec_result_tx
                 .send(ExecutionResult {
                     tx_hash: tx_eth_hash,
@@ -545,7 +549,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
         let mut to_remove = Vec::new();
         let len = self.len();
         if len <= self.capacity {
-            tracing::debug!(
+            tracing::info!(
                 len,
                 capacity = self.capacity,
                 "purge_over_capacity_txs: nothing to remove"
@@ -553,7 +557,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
             return;
         }
         let to_remove_cnt = len - self.capacity;
-        tracing::debug!(
+        tracing::info!(
             len,
             capacity = self.capacity,
             to_remove_cnt,
@@ -561,7 +565,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
         );
         let mut removed = 0;
         if to_remove_cnt > 0 {
-            tracing::debug!(tx_to_remove = %to_remove_cnt, chain_id = %self.chain_id, "clearing gapped txs from mempool");
+            tracing::info!(tx_to_remove = %to_remove_cnt, chain_id = %self.chain_id, "clearing gapped txs from mempool");
             for _ in 0..to_remove_cnt {
                 if let Some((record, _)) = self.gapped_price_reversed_queue.pop() {
                     to_remove.push(record);
@@ -573,7 +577,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
         }
         let to_remove_cnt = to_remove_cnt - removed;
         if to_remove_cnt > 0 {
-            tracing::debug!(tx_to_remove = %to_remove_cnt, chain_id = %self.chain_id, "clearing pending txs from mempool");
+            tracing::info!(tx_to_remove = %to_remove_cnt, chain_id = %self.chain_id, "clearing pending txs from mempool");
             for _ in 0..to_remove_cnt {
                 if let Some((record, _)) = self.pending_price_reversed_queue.pop() {
                     to_remove.push(record);
@@ -606,7 +610,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
     }
 
     fn remove_sender_pool(&mut self, sender: &Address) {
-        tracing::debug!(%sender, "removing sender pool");
+        tracing::info!(%sender, "removing sender pool");
         let Some(mut sender_pool) = self.sender_pools.remove(sender) else {
             tracing::error!(%sender, "sender pool not found");
             return;
@@ -634,7 +638,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
             self.gapped_price_reversed_queue.remove(&record);
             self.txs.remove(&record.tx_hash);
         }
-        tracing::debug!(%sender, "sender pool removed");
+        tracing::info!(%sender, "sender pool removed");
     }
 
     fn len(&self) -> usize {
