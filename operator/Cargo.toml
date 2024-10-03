@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
+clap.workspace = true
+tracing.workspace = true
 
 solana-sdk.workspace = true
 

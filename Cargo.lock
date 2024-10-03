@@ -4876,8 +4876,10 @@ dependencies = [
  "alloy-signer-wallet",
  "anyhow",
  "async-trait",
+ "clap 4.5.4",
  "reth-primitives",
  "solana-sdk",
+ "tracing",
 ]
 
 [[package]]
