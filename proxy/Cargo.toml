@@ -12,6 +12,7 @@ solana-api = { path = '../solana-api' }
 neon-api = { path = '../neon-api', features = ["jsonrpsee"] }
 executor = { path = "../executor" }
 mempool = { path = "../mempool" }
+operator = { path = "../operator" }
 
 rpc-api.workspace = true
 rpc-api-types.workspace = true

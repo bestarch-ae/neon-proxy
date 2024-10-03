@@ -22,9 +22,9 @@ pub struct Config {
     pub operator_keypair_prefix: Option<OsString>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Operators {
-    map: HashMap<Address, Arc<Operator>>,
+    map: Arc<HashMap<Address, Arc<Operator>>>,
 }
 
 impl Operators {
@@ -73,10 +73,14 @@ impl Operators {
             }
         }
 
-        Ok(Self { map })
+        Ok(Self { map: Arc::new(map) })
     }
 
     pub fn get(&self, address: &Address) -> Option<Arc<Operator>> {
         self.map.get(address).cloned()
+    }
+
+    pub fn addresses(&self) -> impl Iterator<Item = &'_ Address> + '_ {
+        self.map.keys()
     }
 }

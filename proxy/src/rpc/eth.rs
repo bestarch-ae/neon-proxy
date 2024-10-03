@@ -1,6 +1,7 @@
 use anyhow::Context;
 use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::proc_macros::rpc;
+use jsonrpsee::types::error::CALL_EXECUTION_FAILED_CODE;
 use jsonrpsee::types::{ErrorCode, ErrorObjectOwned};
 use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, TxKind, B256, B64, U256, U64};
 use rpc_api::servers::EthApiServer;
@@ -67,7 +68,7 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns a list of addresses owned by client.
     fn accounts(&self) -> RpcResult<Vec<Address>> {
-        unimplemented()
+        Ok(self.operators.addresses().copied().collect())
     }
 
     /// Returns the number of most recent block.
@@ -582,8 +583,28 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns an Ethereum specific signature with: sign(keccak256("\x19Ethereum Signed Message:\n"
     /// + len(message) + message))).
-    async fn sign(&self, _address: Address, _message: Bytes) -> RpcResult<Bytes> {
-        unimplemented()
+    async fn sign(&self, address: Address, message: Bytes) -> RpcResult<Bytes> {
+        tracing::info!(%address, ?message, "sign");
+        let Some(operator) = self.operators.get(&address) else {
+            // Error format taken from neon-proxy.py
+            return Err(ErrorObjectOwned::owned::<()>(
+                CALL_EXECUTION_FAILED_CODE,
+                format!("Unknown sender {address}"),
+                None,
+            ));
+        };
+        match operator.sign_message(&message) {
+            Ok(signature) => Ok(signature.as_bytes().into()),
+            Err(error) => {
+                tracing::warn!(%address, ?message, ?error, "failed signing message");
+                // Error format taken from neon-proxy.py
+                Err(ErrorObjectOwned::owned::<()>(
+                    CALL_EXECUTION_FAILED_CODE,
+                    "Error signing message",
+                    None,
+                ))
+            }
+        }
     }
 
     /// Signs a transaction that can be submitted to the network at a later time using with

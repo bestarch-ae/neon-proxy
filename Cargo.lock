@@ -5391,6 +5391,7 @@ dependencies = [
  "mempool",
  "neon-api",
  "neon-proxy-common",
+ "operator",
  "reth-primitives",
  "reth-rpc-api",
  "reth-rpc-types",
