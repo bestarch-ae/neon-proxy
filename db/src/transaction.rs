@@ -652,7 +652,7 @@ impl TransactionRepo {
         let mut transactions: Vec<WithBlockhash<NeonTxInfo>> = Vec::new();
         let mut stream = self.fetch_with_events(by);
         while let Some(tx) = stream.try_next().await? {
-            tracing::debug!(?tx, "found transaction");
+            tracing::info!(?tx, "found transaction");
             if let Some(current_tx) = transactions.last_mut() {
                 if current_tx.inner.neon_signature == tx.inner.neon_signature {
                     current_tx.inner.events.extend(tx.inner.events);
