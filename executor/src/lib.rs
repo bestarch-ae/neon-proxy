@@ -359,7 +359,8 @@ impl Executor {
                 }
             }
             Ok(Some(tx)) => {
-                if let Err(err) = self.sign_and_send_transaction(tx, None).await {
+                let sender = self.result_senders.remove(&signature).map(|(_, s)| s);
+                if let Err(err) = self.sign_and_send_transaction(tx, sender).await {
                     tracing::error!(%signature, ?tx_hash, ?err, "failed sending transaction next step");
                     if let Some((_, sender)) = self.result_senders.remove(&signature) {
                         let _ = sender.send(ExecuteResult::Error(err));
