@@ -314,16 +314,28 @@ impl EthApiServer for EthApiImpl {
             None
         };
 
+        let mut mpl_tx_cnt = 0;
+        if let Some(mempool) = &self.mempool {
+            if matches!(slot, Some(BlockNumberOrTag::Pending)) {
+                mpl_tx_cnt = mempool
+                    .get_pending_tx_cnt(&address, self.chain_id)
+                    .await
+                    .unwrap_or(0)
+            }
+        }
+
         let balance_address = BalanceAddress {
             address: Address::from(<[u8; 20]>::from(address.0)),
             chain_id: self.chain_id,
         };
-        let balance = self
+        let chain_tx_cnt = self
             .neon_api
             .get_transaction_count(balance_address, slot)
             .await?;
 
-        Ok(U256::from(balance))
+        let cnt = std::cmp::max(mpl_tx_cnt, chain_tx_cnt);
+
+        Ok(U256::from(cnt))
     }
 
     /// Returns code at a given address at given block number.
