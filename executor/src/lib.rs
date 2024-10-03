@@ -367,7 +367,10 @@ impl Executor {
                 }
             }
             Ok(None) => {
+                tracing::info!(%signature, "transaction completed");
+                tracing::info!(senders = ?self.result_senders);
                 if let Some((_, sender)) = self.result_senders.remove(&signature) {
+                    tracing::info!(%signature, "sending success result");
                     let _ = sender.send(ExecuteResult::Success);
                 }
             }
