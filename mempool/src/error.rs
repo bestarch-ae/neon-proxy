@@ -1,10 +1,11 @@
-use neon_api::NeonApiError;
 use pyth_sdk_solana::PythError;
-use reth_primitives::alloy_primitives::{SignatureError, TxNonce};
+use reth_primitives::alloy_primitives::SignatureError;
 use reth_primitives::{Address, ChainId};
+use thiserror::Error;
+
+use neon_api::NeonApiError;
 use solana_api::solana_client::pubsub_client::PubsubClientError;
 use solana_api::solana_rpc_client_api::client_error::Error as SolanaClientError;
-use thiserror::Error;
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Error)]
@@ -33,10 +34,10 @@ pub enum MempoolError {
     Underprice,
     #[error("cannot recover signer from tx: {0}")]
     SignaturesError(#[from] SignatureError),
-    #[error("nonce is too low: {0} <= {1}")]
-    NonceTooLow(TxNonce, TxNonce),
-    #[error("nonce is too high: {0} > {1}")]
-    NonceTooHigh(TxNonce, TxNonce),
+    #[error("nonce is too low")]
+    NonceTooLow,
+    #[error("nonce is too high")]
+    NonceTooHigh,
     #[error("unsupported tx type")]
     UnsupportedTxType,
     #[error("unknown sender: {0}")]
