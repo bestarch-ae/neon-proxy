@@ -241,11 +241,13 @@ async fn update_price_models_loop(
     base_token_pkey: Pubkey,
     chain_token_map: HashMap<u64, (Pubkey, String)>,
 ) {
+    info!(?chain_token_map, "starting update_price_models_loop");
     let mut price_calculator = GasPriceCalculator::new(calculator_config);
     let refresh_rate = Duration::from_millis(PRICES_REFRESH_RATE_MS);
     let mut interval = tokio::time::interval(refresh_rate);
 
     loop {
+        info!("update_price_models_loop tick");
         let Some(prices) = prices.upgrade() else {
             info!("prices map dropped, exiting");
             break;
