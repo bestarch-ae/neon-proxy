@@ -266,12 +266,23 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
 
         if let SenderPoolState::Processing(nonce) = sender_pool_state {
             if nonce == tx.nonce {
-                return Err(MempoolError::NonceTooLow(nonce, nonce + 1));
+                tracing::debug!(
+                    tx_hash = %tx.tx_hash(),
+                    nonce,
+                    "tx with the same nonce is already processing"
+                );
+                return Err(MempoolError::NonceTooLow);
             }
         }
 
         if tx_count > tx.nonce {
-            return Err(MempoolError::NonceTooLow(tx.nonce, tx_count));
+            tracing::debug!(
+                tx_hash = %tx.tx_hash(),
+                tx_nonce = tx.nonce,
+                tx_count,
+                "tx nonce is too low"
+            );
+            return Err(MempoolError::NonceTooLow);
         }
 
         if tx.should_set_gas_price() {
@@ -306,7 +317,7 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
                         return Err(MempoolError::Underprice);
                     }
                 } else {
-                    return Err(MempoolError::NonceTooHigh(tx.nonce, sender_chain_tx_count));
+                    return Err(MempoolError::NonceTooHigh);
                 }
             } else if chain_pool_len >= self.capacity && gapped_tx.is_none() {
                 let pending_tx = self.pending_price_reversed_queue.peek();
@@ -806,7 +817,7 @@ mod tests {
         sender_pool.tx_count = 1;
 
         let result = chain_pool.add_tx(tx0.clone()).await;
-        assert!(matches!(result, Err(MempoolError::NonceTooLow(0, 1))));
+        assert!(matches!(result, Err(MempoolError::NonceTooLow)));
     }
 
     #[tokio::test]
@@ -821,10 +832,10 @@ mod tests {
         sender_pool.set_processing(1);
 
         let result = chain_pool.add_tx(tx0.clone()).await;
-        assert!(matches!(result, Err(MempoolError::NonceTooLow(0, 2))));
+        assert!(matches!(result, Err(MempoolError::NonceTooLow)));
 
         let result = chain_pool.add_tx(tx1.clone()).await;
-        assert!(matches!(result, Err(MempoolError::NonceTooLow(1, 2))));
+        assert!(matches!(result, Err(MempoolError::NonceTooLow)));
     }
 
     #[tokio::test]
@@ -870,6 +881,6 @@ mod tests {
         assert!(matches!(result, Ok(())));
 
         let result = chain_pool.add_tx(tx1.clone()).await;
-        assert!(matches!(result, Err(MempoolError::NonceTooHigh(1, 0))));
+        assert!(matches!(result, Err(MempoolError::NonceTooHigh)));
     }
 }
