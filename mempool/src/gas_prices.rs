@@ -102,7 +102,9 @@ impl GasPrices {
             .filter_map(|(&chain_id, token)| {
                 let token_pkey = symbology.get(token).copied();
                 if is_const_gas_price {
-                    token_pkey.map(|tk| Ok((chain_id, (tk, token.clone()))))
+                    // for const gas price we don't care about the token pkey;
+                    let tk = token_pkey.unwrap_or_default();
+                    Some(Ok((chain_id, (tk, token.clone()))))
                 } else {
                     match token_pkey {
                         Some(tk) => Some(Ok((chain_id, (tk, token.clone())))),
