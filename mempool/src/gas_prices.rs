@@ -35,7 +35,7 @@ pub struct GasPricesConfig {
     pub default_chain_id: u64,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct GasPriceModel {
     pub token_name: String,
