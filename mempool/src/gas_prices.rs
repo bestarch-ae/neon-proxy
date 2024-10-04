@@ -269,6 +269,7 @@ async fn update_price_models_loop(
                 base_price_usd,
                 token_price_usd,
             ) {
+                info!(?gas_model, "built gas price model");
                 gas_price_models.insert(chain_id, gas_model);
             } else {
                 warn!(
