@@ -478,6 +478,7 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns the current price per gas in wei.
     async fn gas_price(&self) -> RpcResult<U256> {
+        tracing::info!("gas_price");
         let price = self.mp_gas_prices.get_gas_price(Some(self.chain_id));
         Ok(U256::from(price))
     }
