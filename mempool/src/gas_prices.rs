@@ -254,23 +254,15 @@ async fn update_price_models_loop(
             info!("gas_price_models dropped, exiting");
             break;
         };
-        let Some(base_price_usd) = prices.get(&base_token_pkey) else {
-            continue;
-        };
-        let base_price_usd = adjust_scale(
-            base_price_usd.price as u128,
-            base_price_usd.expo,
-            TARGET_PREC,
-        );
+        let base_price_usd = prices
+            .get(&base_token_pkey)
+            .map(|p| adjust_scale(p.price as u128, p.expo, TARGET_PREC))
+            .unwrap_or(0);
         for (&chain_id, (token_pkey, token_name)) in chain_token_map.iter() {
-            let Some(token_price_usd) = prices.get(token_pkey) else {
-                continue;
-            };
-            let token_price_usd = adjust_scale(
-                token_price_usd.price as u128,
-                token_price_usd.expo,
-                TARGET_PREC,
-            );
+            let token_price_usd = prices
+                .get(token_pkey)
+                .map(|p| adjust_scale(p.price as u128, p.expo, TARGET_PREC))
+                .unwrap_or(0);
             if let Some(gas_model) = price_calculator.build_gas_price_model(
                 chain_id,
                 token_name.clone(),
