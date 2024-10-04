@@ -153,7 +153,7 @@ impl GasPricesTrait for GasPrices {
     /// Get the gas price for the given chain_id token (or default if not present), or 0 if the
     /// price is not available. Precision is 18 decimal places.
     fn get_gas_price(&self, chain_id: Option<u64>) -> u128 {
-        info!(chain_id = %chain_id, "get gas price");
+        info!(chain_id = ?chain_id, "get gas price");
         let chain_id = chain_id.unwrap_or(self.default_chain_id);
         self.get_gas_price_for_chain(chain_id).unwrap_or(0)
     }
