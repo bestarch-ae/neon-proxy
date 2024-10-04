@@ -292,6 +292,13 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
             }
             let existing_record = self.txs.get(&existing_record_tx_hash).unwrap();
             if existing_record.value().sorting_gas_price >= tx.sorting_gas_price {
+                tracing::error!(
+                    %tx_hash,
+                    existing_gas_price = existing_record.value().sorting_gas_price,
+                    tx_gas_price = tx.sorting_gas_price,
+                    cause = "existing record",
+                    "tx underpriced"
+                );
                 return Err(MempoolError::Underprice);
             }
             true
@@ -306,6 +313,14 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
             if tx.nonce > sender_chain_tx_count {
                 if let Some((gapped_tx, _)) = gapped_tx {
                     if tx.sorting_gas_price < gapped_tx.sorting_gas_price {
+                        tracing::error!(
+                            %tx_hash,
+                            len = chain_pool_len,
+                            existing_gas_price = gapped_tx.sorting_gas_price,
+                            tx_gas_price = tx.sorting_gas_price,
+                            cause = "capacity high watermark",
+                            "tx underpriced"
+                        );
                         return Err(MempoolError::Underprice);
                     }
                 } else {
@@ -315,6 +330,14 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
                 let pending_tx = self.pending_price_reversed_queue.peek();
                 if let Some((pending_tx, _)) = pending_tx {
                     if tx.sorting_gas_price < pending_tx.sorting_gas_price {
+                        tracing::error!(
+                            %tx_hash,
+                            len = chain_pool_len,
+                            existing_gas_price = pending_tx.sorting_gas_price,
+                            tx_gas_price = tx.sorting_gas_price,
+                            cause = "capacity",
+                            "tx underpriced"
+                        );
                         return Err(MempoolError::Underprice);
                     }
                 }
