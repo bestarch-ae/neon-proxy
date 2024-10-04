@@ -390,7 +390,9 @@ impl Executor {
 
         // TODO: do we retry?
         // TODO: do we request logs?
+        tracing::info!(%signature, result_senders = ?self.result_senders, "transaction failed");
         if let Some((_, sender)) = self.result_senders.remove(&signature) {
+            tracing::error!(%signature, "sending error result");
             let _ = sender.send(ExecuteResult::TransactionError(err));
         }
     }
