@@ -26,7 +26,7 @@ pub enum MempoolError {
     DefaultTokenNotFound(String),
     #[error("token not found in pyth symbology: {0}")]
     TokenNotFound(String),
-    #[error("tx is already known")]
+    #[error("already known")]
     AlreadyKnown,
     #[error("unknown chain id: {0}")]
     UnknownChainID(ChainId),
@@ -34,9 +34,9 @@ pub enum MempoolError {
     Underprice,
     #[error("cannot recover signer from tx: {0}")]
     SignaturesError(#[from] SignatureError),
-    #[error("nonce is too low")]
+    #[error("nonce too low")]
     NonceTooLow,
-    #[error("nonce is too high")]
+    #[error("nonce too high")]
     NonceTooHigh,
     #[error("unsupported tx type")]
     UnsupportedTxType,
