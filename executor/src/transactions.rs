@@ -299,18 +299,8 @@ impl TransactionBuilder {
 /// ## Transaction flow.
 impl TransactionBuilder {
     pub async fn start_execution(&self, tx: ExecuteRequest) -> anyhow::Result<OngoingTransaction> {
-        // 1. holder
-        // 2. payer
-        // 3. treasury-pool-address,
-        // 4. payer-token-address
-        // 5. SolSysProg.ID
-        // +6: NeonProg.ID
-        // +7: CbProg.ID
-        const BASE_ACCOUNT_COUNT: usize = 7;
-
         let chain_id = get_chain_id(&tx);
-        let fits_in_solana_tx =
-            tx.length() < PACKET_DATA_SIZE - BASE_ACCOUNT_COUNT * mem::size_of::<Pubkey>();
+        let fits_in_solana_tx = Self::from_data_tx_len(tx.length(), 0) < PACKET_DATA_SIZE;
 
         tracing::debug!(
             ?tx,
@@ -458,13 +448,24 @@ impl TransactionBuilder {
             tx_data.envelope.length(),
             tx_data.emulate.solana_accounts.len(),
         );
+        let alt_length_estimate = Self::from_data_alt_tx_len(
+            tx_data.envelope.length(),
+            tx_data.emulate.solana_accounts.len(),
+        );
         tracing::debug!(
             tx_hash = %tx_data.envelope.tx_hash(),
             emulate = ?tx_data.emulate,
             length_estimate,
+            alt_length_estimate,
             "start data execution"
         );
-        if length_estimate > PACKET_DATA_SIZE {
+        if alt_length_estimate >= PACKET_DATA_SIZE {
+            tracing::warn!(
+            tx_hash = %tx_data.envelope.tx_hash(),
+                "transaction estimate is too big, fallback to holder execution"
+            );
+            self.start_holder_execution(tx_data.envelope).await
+        } else if length_estimate > PACKET_DATA_SIZE {
             self.start_from_alt(tx_data, None).await
         } else {
             self.dispatch_data_execution_by_version(tx_data, chain_id, None)
@@ -629,6 +630,10 @@ impl TransactionBuilder {
 
     fn from_data_tx_len(tx_len: usize, add_accounts_len: usize) -> usize {
         Self::tx_len_estimate(tx_len, add_accounts_len)
+    }
+
+    fn from_data_alt_tx_len(tx_len: usize, add_accounts_len: usize) -> usize {
+        Self::alt_tx_len_estimate(tx_len, add_accounts_len)
     }
 }
 
@@ -993,26 +998,44 @@ impl TransactionBuilder {
         Ok((accounts, data))
     }
 
-    fn tx_len_estimate(tx_len: usize, add_accounts_len: usize) -> usize {
-        // Holder
-        // Operator
-        // Treasury Pool
-        // Operator Balance
-        // System Program
-        // NEON EVM Program
-        // Compute Budget Program
-        const BASE_ACCOUNTS: usize = 7;
-        // Use STEP_END for a more conservative estimate that remains valid
-        // for both single and iterative execution models
-        const BASE_DATA: usize = TransactionBuilder::STEP_END_IDX;
+    // Holder
+    // Operator
+    // Treasury Pool
+    // Operator Balance
+    // System Program
+    // NEON EVM Program
+    // Compute Budget Program
+    const ESTIMATE_BASE_ACCOUNTS: usize = 7;
+    // Use STEP_END for a more conservative estimate that remains valid
+    // for both single and iterative execution models
+    const ESTIMATE_BASE_DATA: usize = TransactionBuilder::STEP_END_IDX;
 
+    fn tx_len_estimate(tx_len: usize, add_accounts_len: usize) -> usize {
         serialized_tx_length(
             [
                 CU_IX_SIZE,
                 CU_IX_SIZE,
-                compiled_ix_size(BASE_ACCOUNTS, BASE_DATA + tx_len),
+                compiled_ix_size(
+                    Self::ESTIMATE_BASE_ACCOUNTS,
+                    Self::ESTIMATE_BASE_DATA + tx_len,
+                ),
             ],
-            BASE_ACCOUNTS + add_accounts_len,
+            Self::ESTIMATE_BASE_ACCOUNTS + add_accounts_len,
+        )
+    }
+
+    fn alt_tx_len_estimate(tx_len: usize, add_accounts_len: usize) -> usize {
+        serialized_alt_tx_length(
+            [
+                CU_IX_SIZE,
+                CU_IX_SIZE,
+                compiled_ix_size(
+                    Self::ESTIMATE_BASE_ACCOUNTS,
+                    Self::ESTIMATE_BASE_DATA + tx_len,
+                ),
+            ],
+            Self::ESTIMATE_BASE_ACCOUNTS,
+            add_accounts_len,
         )
     }
 
@@ -1046,6 +1069,14 @@ const fn compact_u16_len(value: u16) -> usize {
 }
 
 const fn serialized_tx_length<const N: usize>(ixs_lens: [usize; N], accounts_len: usize) -> usize {
+    serialized_alt_tx_length(ixs_lens, accounts_len, 0)
+}
+
+const fn serialized_alt_tx_length<const N: usize>(
+    ixs_lens: [usize; N],
+    accounts_len: usize,
+    num_accounts_in_alt: usize,
+) -> usize {
     let mut ix_sum = 0;
     let mut idx = 0;
     while idx < N {
@@ -1053,21 +1084,50 @@ const fn serialized_tx_length<const N: usize>(ixs_lens: [usize; N], accounts_len
         idx += 1;
     }
 
+    // We currently use only 1 ALT per transaction
+    let (alt_array_len, alt_payload, message_tag_len) = if num_accounts_in_alt == 0 {
+        (0, 0, 0)
+    } else {
+        (
+            compact_u16_len(1),
+            alt_descriptor_size(num_accounts_in_alt),
+            1,
+        )
+    };
+
+    // v0 transaction layout is actually identical to legacy transaction layout except for:
+    //   1. having a tag in the beginning of the payload,
+    //   2. having a ALT array in the end.
+    // See [`solana_sdk::message::VersionedMessage`].
     1 // Sig array size is always `1` that is serialized as single byte (See compact U16) 
-        + SIGNATURE_BYTES                      // We always have only one solana signature
-        + MESSAGE_HEADER_LENGTH                // Message header
-        + compact_u16_len(accounts_len as u16) // Account array length (See compact U16)
-        + accounts_len * PUBKEY_BYTES          // Account keys
-        + HASH_BYTES                           // Recent Blockhash
-        + compact_u16_len(N as u16)            // Ixs array length
-        + ix_sum // Sum instruction data size
+        + SIGNATURE_BYTES                            // We always have only one solana signature
+        + message_tag_len                            // Message Tag: empty if legacy, 1 if v0
+        + MESSAGE_HEADER_LENGTH                      // Message header
+        + short_vec_size(accounts_len, PUBKEY_BYTES) // Accounts array
+        + HASH_BYTES                                 // Recent Blockhash
+        + compact_u16_len(N as u16)                  // Ixs array length
+        + ix_sum                                     // Sum instruction data size
+        + alt_array_len
+        + alt_payload
 }
 
-#[allow(clippy::identity_op)]
+const fn short_vec_size(len: usize, type_size: usize) -> usize {
+    compact_u16_len(len as u16) + type_size * len
+}
+
 const fn compiled_ix_size(accounts_len: usize, data_len: usize) -> usize {
     1 // Program Id index
-    + compact_u16_len(accounts_len as u16) // Account Info array len
-    + accounts_len * 1                     // Account Info indice
-    + compact_u16_len(data_len as u16)     // Data array len
-    + data_len // Data
+        // + compact_u16_len(accounts_len as u16) // Account Info array len
+        // + accounts_len * 1                     // Account Info indice
+        + short_vec_size(accounts_len, mem::size_of::<u8>()) // Account Info indice array
+        // + compact_u16_len(data_len as u16)     // Data array len
+        // + data_len                             // Data 
+        + short_vec_size(data_len, mem::size_of::<u8>()) // Data array
+}
+
+/// See [`solana_sdk::message::v0::MessageAddressTableLookup`]
+const fn alt_descriptor_size(len: usize) -> usize {
+    PUBKEY_BYTES // Pubkey
+        + short_vec_size(len, mem::size_of::<u8>()) // Writable
+        + short_vec_size(0, mem::size_of::<u8>()) // Readable
 }
