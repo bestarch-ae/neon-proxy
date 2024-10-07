@@ -2,20 +2,31 @@ mod operator;
 
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::bail;
 use clap::Args;
 use reth_primitives::Address;
+use solana_cli_config::CONFIG_FILE;
 
 pub use operator::Operator;
 
+fn default_kp_path() -> OsString {
+    let config = solana_cli_config::Config::default();
+    let path: &Path = config.keypair_path.as_ref();
+    path.parent()
+        .unwrap_or_else(|| panic!("invalid config path: {:?}", &*CONFIG_FILE))
+        .as_os_str()
+        .to_owned()
+}
+
 #[derive(Args)]
+#[group(id = "OperatorConfig")]
 pub struct Config {
-    #[arg(long)]
+    #[arg(long, default_value_os_t = default_kp_path())]
     /// Path to directory containing operator keypairs
-    pub operator_keypair_path: PathBuf,
+    pub operator_keypair_path: OsString,
 
     #[arg(long)]
     /// Prefix filter for operator keys
@@ -53,6 +64,7 @@ impl Operators {
             }
         }
 
+        tracing::info!(?path, "loading keys");
         let mut map = HashMap::new();
         // TODO: tokio read_dir??
         for entry in path.read_dir()? {
@@ -69,6 +81,7 @@ impl Operators {
                 && fits_prefix
             {
                 let operator = ok!(Operator::read_from_file(entry.path()));
+                tracing::info!(sol = %operator.pubkey(), eth = %operator.address(), "loaded key");
                 map.insert(operator.address(), Arc::new(operator));
             }
         }

@@ -17,3 +17,4 @@ alloy-consensus.workspace = true
 alloy-signer.workspace = true
 alloy-signer-wallet.workspace = true
 alloy-network.workspace = true
+solana-cli-config = "1.18"
