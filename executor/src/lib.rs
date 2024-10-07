@@ -335,7 +335,8 @@ impl Executor {
         let tx_hash = tx.eth_tx().map(|tx| *tx.tx_hash());
         // TODO: retry counter
         tracing::warn!(?tx_hash, %signature, "transaction blockhash expired, retrying");
-        if let Err(error) = self.sign_and_send_transaction(tx, None).await {
+        let result_sender = self.result_senders.remove(&signature).map(|(_, s)| s);
+        if let Err(error) = self.sign_and_send_transaction(tx, result_sender).await {
             tracing::error!(?tx_hash, %signature, ?error, "failed retrying transaction");
         }
     }
@@ -359,7 +360,8 @@ impl Executor {
                 }
             }
             Ok(Some(tx)) => {
-                if let Err(err) = self.sign_and_send_transaction(tx, None).await {
+                let sender = self.result_senders.remove(&signature).map(|(_, s)| s);
+                if let Err(err) = self.sign_and_send_transaction(tx, sender).await {
                     tracing::error!(%signature, ?tx_hash, ?err, "failed sending transaction next step");
                     if let Some((_, sender)) = self.result_senders.remove(&signature) {
                         let _ = sender.send(ExecuteResult::Error(err));
