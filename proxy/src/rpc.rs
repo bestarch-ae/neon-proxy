@@ -15,6 +15,7 @@ use db::WithBlockhash;
 use executor::Executor;
 use mempool::{GasPrices, Mempool};
 use neon_api::NeonApi;
+use operator::Operators;
 
 use crate::convert::build_block;
 use crate::convert::{convert_rich_log, LogFilters};
@@ -35,6 +36,7 @@ pub struct EthApiImpl {
     chain_id: u64,
     mempool: Option<Arc<Mempool<Executor, GasPrices>>>,
     mp_gas_prices: GasPrices,
+    operators: Operators,
     lib_version: String,
 }
 
@@ -45,6 +47,7 @@ impl EthApiImpl {
         chain_id: u64,
         mempool: Option<Arc<Mempool<Executor, GasPrices>>>,
         mp_gas_prices: GasPrices,
+        operators: Operators,
         lib_version: String,
     ) -> Self {
         let transactions = ::db::TransactionRepo::new(pool.clone());
@@ -57,6 +60,7 @@ impl EthApiImpl {
             mempool,
             chain_id,
             mp_gas_prices,
+            operators,
             lib_version,
         }
     }

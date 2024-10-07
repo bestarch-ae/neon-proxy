@@ -11,10 +11,14 @@ members = [
     "neon-api",
     "executor",
     "mempool",
+    "operator",
 ]
 
 [workspace.dependencies]
 anyhow = "1.0.86"
+async-trait = "0.1.81"
+clap = { version = "4.5.4", features = ["derive", "env"] }
+ethnum = "1.5.0"
 dashmap = "6.0"
 futures-util = "0.3.30"
 hex = "0.4.3"
@@ -49,6 +53,23 @@ alloy-signer-wallet = { git = "https://github.com/alloy-rs/alloy", rev = "dd7a99
 alloy-sol-types = { version = "0.7.7", features = ["json"] }
 
 alloy-rlp = "0.3.4"
+
+# Neon EVM deps
+[workspace.dependencies.evm-loader]
+# git = "https://github.com/neonlabsorg/neon-evm.git"
+git = "https://github.com/00nktk/neon-evm.git"
+# path = "../../neon-evm/evm_loader/program"
+# rev = "v1.15.1"
+rev = "1ab8167"
+default-features = false
+features = ["async-trait", "no-entrypoint", "log"]
+
+[workspace.dependencies.neon-lib]
+# git = "https://github.com/neonlabsorg/neon-evm.git"
+git = "https://github.com/00nktk/neon-evm.git"
+# path = "../../neon-evm/evm_loader/lib"
+# rev = "v1.15.1"
+rev = "1ab8167"
 
 [patch.crates-io]
 # Hack to resolve `zeroize` version conflict between solana-* and reth. 

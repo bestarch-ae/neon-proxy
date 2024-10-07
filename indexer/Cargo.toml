@@ -12,13 +12,13 @@ solana = { path = "../solana-api", package = "solana-api" }
 db = { path = "../db" }
 
 anyhow.workspace = true
+clap.workspace = true
 hex.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
 tokio-stream = "0.1"
-clap = { version = "4.5.4", features = ["derive"] }
 lru = "0.12"
 backoff = { version = "0.4", features = ["tokio"] }
 

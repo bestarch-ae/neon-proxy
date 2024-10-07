@@ -1,0 +1,20 @@
+[package]
+name = "operator"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+clap.workspace = true
+tracing.workspace = true
+
+solana-sdk.workspace = true
+
+reth-primitives.workspace = true
+
+alloy-consensus.workspace = true
+alloy-signer.workspace = true
+alloy-signer-wallet.workspace = true
+alloy-network.workspace = true
+solana-cli-config = "1.18"
