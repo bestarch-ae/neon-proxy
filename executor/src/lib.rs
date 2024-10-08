@@ -113,11 +113,22 @@ pub trait ExecutorTrait: Send + Sync + 'static {
 #[derive(Debug)]
 enum TxErrorKind {
     CuMeterExceeded,
-    // TxSizeExceeded,
+    TxSizeExceeded,
 }
 
 impl TxErrorKind {
     fn from_error(err: &ClientError) -> Option<Self> {
+        match err.kind {
+            ClientErrorKind::RpcError(request::RpcError::RpcResponseError {
+                code: -32602,
+                ref message,
+                ..
+            }) if message.contains("Transaction too large:") => {
+                return Some(TxErrorKind::TxSizeExceeded)
+            }
+            _ => (),
+        };
+
         let logs = match err.kind {
             ClientErrorKind::RpcError(request::RpcError::RpcResponseError {
                 data:
@@ -129,7 +140,6 @@ impl TxErrorKind {
                     ),
                 ..
             }) => Some(logs),
-            // ClientErrorKind::TransactionError(tx_err) => Some(tx_err.clone()),
             _ => None,
         };
         if logs
