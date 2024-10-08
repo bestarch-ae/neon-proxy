@@ -18,6 +18,7 @@ alloy-consensus.workspace = true
 crossbeam-queue = "0.3.11"
 clap.workspace = true
 dashmap.workspace = true
+jsonrpsee = { version = "0.22", features = ["server"] }
 priority-queue = "2.1.0"
 pyth-sdk-solana = "0.9.0"
 reth-primitives.workspace = true

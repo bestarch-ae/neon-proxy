@@ -45,3 +45,19 @@ pub enum MempoolError {
     #[error("neon api error: {0}")]
     NeonApiError(#[from] NeonApiError),
 }
+
+impl MempoolError {
+    pub const fn error_code(&self) -> i32 {
+        match self {
+            Self::Underprice => -32000,
+            _ => jsonrpsee::types::ErrorCode::InternalError.code(),
+        }
+    }
+}
+
+impl From<MempoolError> for jsonrpsee::types::ErrorObjectOwned {
+    fn from(value: MempoolError) -> Self {
+        let error_code = value.error_code();
+        Self::owned(error_code, value.to_string(), None::<String>)
+    }
+}

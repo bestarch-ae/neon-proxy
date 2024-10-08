@@ -4249,6 +4249,7 @@ dependencies = [
  "dashmap 6.0.1",
  "executor",
  "futures-util",
+ "jsonrpsee",
  "neon-api",
  "neon-proxy-common",
  "priority-queue",
