@@ -1,6 +1,6 @@
 use pyth_sdk_solana::PythError;
 use reth_primitives::alloy_primitives::SignatureError;
-use reth_primitives::{Address, ChainId};
+use reth_primitives::Address;
 use thiserror::Error;
 
 use neon_api::NeonApiError;
@@ -28,8 +28,8 @@ pub enum MempoolError {
     TokenNotFound(String),
     #[error("already known")]
     AlreadyKnown,
-    #[error("unknown chain id: {0}")]
-    UnknownChainID(ChainId),
+    #[error("wrong chain id")]
+    UnknownChainID,
     #[error("tx is underpriced")]
     Underprice,
     #[error("cannot recover signer from tx: {0}")]

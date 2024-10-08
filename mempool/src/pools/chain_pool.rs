@@ -287,7 +287,8 @@ impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C>
 
         if tx.should_set_gas_price() {
             let Some(gas_price) = self.gas_prices.get_gas_price_for_chain(chain_id) else {
-                return Err(MempoolError::UnknownChainID(chain_id));
+                tracing::debug!(chain_id, "unknown chain id");
+                return Err(MempoolError::UnknownChainID);
             };
             tx.sorting_gas_price = gas_price * 2;
         }
