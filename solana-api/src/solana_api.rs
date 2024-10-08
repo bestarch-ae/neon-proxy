@@ -15,7 +15,7 @@ use common::solana_transaction_status::{
     EncodedConfirmedTransactionWithStatusMeta, TransactionDetails, UiConfirmedBlock,
 };
 use common::solana_transaction_status::{TransactionStatus, UiTransactionEncoding};
-use solana_client::client_error::Result as ClientResult;
+pub use solana_client::client_error::{ClientError, ClientErrorKind, Result as ClientResult};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_client::rpc_client::{GetConfirmedSignaturesForAddress2Config, RpcClientConfig};
 use solana_client::rpc_config::{RpcBlockConfig, RpcSendTransactionConfig, RpcTransactionConfig};

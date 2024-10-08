@@ -8,7 +8,7 @@ use std::mem;
 use alloy_consensus::TxEnvelope;
 use alloy_eips::eip2718::Encodable2718;
 use alloy_rlp::Encodable;
-use anyhow::{bail, Context};
+use anyhow::{bail, Context, Result};
 use arc_swap::access::Access;
 use arc_swap::ArcSwap;
 use reth_primitives::B256;
@@ -34,7 +34,7 @@ use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
 
 use crate::transactions::holder::AcquireHolder;
-use crate::ExecuteRequest;
+use crate::{ExecuteRequest, TxErrorKind};
 
 use self::alt::{AltInfo, AltManager, AltUpdateInfo};
 use self::emulator::{get_chain_id, Emulator, IterInfo};
@@ -364,6 +364,81 @@ impl TransactionBuilder {
             }
             TxStage::Final { .. } => Ok(None),
         }
+    }
+
+    pub async fn retry(
+        &self,
+        tx: OngoingTransaction,
+        err: TxErrorKind,
+    ) -> Result<OngoingTransaction> {
+        tracing::debug!(?tx, ?err, "retry tx");
+        let tx_hash = tx.eth_tx().map(|tx| tx.tx_hash()).copied();
+        let tx = match err {
+            TxErrorKind::CuMeterExceeded
+                if tx.heap_frame().map_or(false, |n| n == MAX_HEAP_SIZE)
+                    && tx.cu_limit().map_or(false, |n| n == MAX_COMPUTE_UNITS) =>
+            {
+                bail!("CU Meter exceeded for transaction with maximum budget")
+            }
+            TxErrorKind::CuMeterExceeded => {
+                let mut tx = tx;
+                if tx.heap_frame().map_or(true, |n| n != MAX_HEAP_SIZE) {
+                    tracing::warn!(?tx_hash, "retry with max heap");
+                    tx = tx
+                        .with_heap_frame(MAX_HEAP_SIZE)
+                        .context("cannot set heap frame")?;
+                }
+
+                if tx.cu_limit().map_or(true, |n| n != MAX_COMPUTE_UNITS) {
+                    tracing::warn!(?tx_hash, "retry with max CU");
+                    tx = tx
+                        .with_cu_limit(MAX_HEAP_SIZE)
+                        .context("cannot set compute units")?;
+                }
+                tx
+            }
+            TxErrorKind::TxSizeExceeded => match tx.disassemble() {
+                TxStage::Final {
+                    tx_data: Some(tx_data),
+                    holder: Some(holder),
+                }
+                | TxStage::DataExecution {
+                    tx_data,
+                    holder,
+                    alt: None,
+                    ..
+                }
+                | TxStage::IterativeExecution {
+                    tx_data,
+                    holder,
+                    alt: None,
+                    ..
+                } => {
+                    tracing::warn!(?tx_hash, "tx retry with ALT");
+                    self.start_from_alt(tx_data, Some(holder)).await?
+                }
+                TxStage::DataExecution {
+                    tx_data,
+                    alt: Some(_),
+                    ..
+                }
+                | TxStage::IterativeExecution {
+                    tx_data,
+                    alt: Some(_),
+                    ..
+                }
+                | TxStage::Final {
+                    tx_data: Some(tx_data),
+                    holder: None,
+                } => {
+                    tracing::warn!(?tx_hash, "Data tx retry from Holder");
+                    self.start_holder_execution(tx_data.envelope).await?
+                }
+                stage => bail!("unretriable transaction: {stage:?}"),
+            },
+        };
+
+        Ok(tx)
     }
 }
 

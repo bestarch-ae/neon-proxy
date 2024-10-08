@@ -128,9 +128,10 @@ impl Emulator {
                 TransactionError::InstructionError(
                     _,
                     InstructionError::ProgramFailedToComplete,
-                ) if res.logs.last().map_or(false, |log| {
-                    log.ends_with("exceeded CUs meter at BPF instruction")
-                }) =>
+                ) if res
+                    .logs
+                    .iter()
+                    .any(|log| log.ends_with("exceeded CUs meter at BPF instruction")) =>
                 {
                     Ok(false)
                 }
