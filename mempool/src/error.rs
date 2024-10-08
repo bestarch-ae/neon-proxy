@@ -50,6 +50,7 @@ impl MempoolError {
     pub const fn error_code(&self) -> i32 {
         match self {
             Self::Underprice => -32000,
+            Self::NonceTooLow => -32002,
             _ => jsonrpsee::types::ErrorCode::InternalError.code(),
         }
     }
