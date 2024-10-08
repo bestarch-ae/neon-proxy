@@ -571,14 +571,7 @@ impl EthApiServer for EthApiImpl {
                 .await
                 .inspect_err(
                     |error| tracing::warn!(%bytes, %error, "could not schedule transaction"),
-                )
-                .map_err(|err| {
-                    ErrorObjectOwned::owned(
-                        ErrorCode::InternalError.code(),
-                        err.to_string(),
-                        None::<()>,
-                    )
-                })?;
+                )?;
 
             tracing::info!(tx_hash = %hash, "sendRawTransaction done");
             Ok(hash)

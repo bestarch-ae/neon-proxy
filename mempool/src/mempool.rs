@@ -203,7 +203,8 @@ impl<E: ExecutorTrait, G: GasPricesTrait> Mempool<E, G> {
                 .unwrap();
             cmd_rx.await.unwrap()
         } else {
-            Err(MempoolError::UnknownChainID(chain_id))
+            tracing::debug!(chain_id, "unknown chain id");
+            Err(MempoolError::UnknownChainID)
         }
     }
 

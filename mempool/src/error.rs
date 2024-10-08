@@ -1,6 +1,6 @@
 use pyth_sdk_solana::PythError;
 use reth_primitives::alloy_primitives::SignatureError;
-use reth_primitives::{Address, ChainId};
+use reth_primitives::Address;
 use thiserror::Error;
 
 use neon_api::NeonApiError;
@@ -28,9 +28,9 @@ pub enum MempoolError {
     TokenNotFound(String),
     #[error("already known")]
     AlreadyKnown,
-    #[error("unknown chain id: {0}")]
-    UnknownChainID(ChainId),
-    #[error("tx is underpriced")]
+    #[error("wrong chain id")]
+    UnknownChainID,
+    #[error("replacement transaction underpriced")]
     Underprice,
     #[error("cannot recover signer from tx: {0}")]
     SignaturesError(#[from] SignatureError),
@@ -44,4 +44,21 @@ pub enum MempoolError {
     UnknownSender(Address),
     #[error("neon api error: {0}")]
     NeonApiError(#[from] NeonApiError),
+}
+
+impl MempoolError {
+    pub const fn error_code(&self) -> i32 {
+        match self {
+            Self::Underprice => -32000,
+            Self::NonceTooLow => -32002,
+            _ => jsonrpsee::types::ErrorCode::InternalError.code(),
+        }
+    }
+}
+
+impl From<MempoolError> for jsonrpsee::types::ErrorObjectOwned {
+    fn from(value: MempoolError) -> Self {
+        let error_code = value.error_code();
+        Self::owned(error_code, value.to_string(), None::<String>)
+    }
 }
