@@ -1,15 +1,17 @@
 use alloy_consensus::TxEnvelope;
 use anyhow::Context;
+use borsh::BorshDeserialize;
+use reth_primitives::B256;
 
 use common::neon_lib::commands::emulate::{EmulateResponse, SolanaAccount};
 use common::solana_sdk::address_lookup_table::AddressLookupTableAccount;
+use common::solana_sdk::compute_budget::{self, ComputeBudgetInstruction};
 use common::solana_sdk::hash::Hash;
 use common::solana_sdk::instruction::Instruction;
-use common::solana_sdk::message::{self, VersionedMessage};
+use common::solana_sdk::message::{self, legacy, v0, VersionedMessage};
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Keypair;
 use common::solana_sdk::transaction::VersionedTransaction;
-use reth_primitives::B256;
 
 use crate::ExecuteRequest;
 
@@ -71,6 +73,10 @@ pub(super) enum TxStage {
 impl TxStage {
     pub fn ongoing(self, ixs: &[Instruction], payer: &Pubkey) -> OngoingTransaction {
         OngoingTransaction {
+            payer: *payer,
+            // TODO: by value
+            instructions: ixs.to_vec(),
+            alt: None,
             stage: self,
             message: VersionedMessage::Legacy(message::legacy::Message::new(ixs, Some(payer))),
         }
@@ -83,6 +89,9 @@ impl TxStage {
         alt: AddressLookupTableAccount,
     ) -> anyhow::Result<OngoingTransaction> {
         Ok(OngoingTransaction {
+            payer: *payer,
+            instructions: ixs.to_vec(),
+            alt: Some(alt.clone()),
             stage: self,
             message: VersionedMessage::V0(message::v0::Message::try_compile(
                 payer,
@@ -184,11 +193,68 @@ impl TxStage {
 
 #[derive(Debug)]
 pub struct OngoingTransaction {
+    payer: Pubkey,
+    instructions: Vec<Instruction>,
+    alt: Option<AddressLookupTableAccount>,
     stage: TxStage,
     message: VersionedMessage,
 }
 
 impl OngoingTransaction {
+    pub fn cu_limit(&self) -> Option<u32> {
+        find_compute_budget(&self.instructions).cu_limit
+    }
+
+    pub fn heap_frame(&self) -> Option<u32> {
+        find_compute_budget(&self.instructions).heap_frame
+    }
+
+    pub fn with_cu_limit(self, limit: u32) -> anyhow::Result<Self> {
+        let filter = |ix: &Instruction| {
+            matches!(
+                ComputeBudgetInstruction::try_from_slice(&ix.data),
+                Ok(ComputeBudgetInstruction::SetComputeUnitLimit(_))
+            )
+        };
+        self.adjust_budget(filter, ComputeBudgetInstruction::SetComputeUnitLimit(limit))
+    }
+
+    pub fn with_heap_frame(self, limit: u32) -> anyhow::Result<Self> {
+        let filter = |ix: &Instruction| {
+            matches!(
+                ComputeBudgetInstruction::try_from_slice(&ix.data),
+                Ok(ComputeBudgetInstruction::RequestHeapFrame(_))
+            )
+        };
+        self.adjust_budget(filter, ComputeBudgetInstruction::RequestHeapFrame(limit))
+    }
+
+    fn adjust_budget<F>(mut self, filter: F, ix: ComputeBudgetInstruction) -> anyhow::Result<Self>
+    where
+        F: FnMut(&Instruction) -> bool,
+    {
+        let new_ix = Instruction::new_with_borsh(compute_budget::id(), &ix, vec![]);
+        let mut filter = filter;
+        let Some((idx, target_tx)) = self
+            .instructions
+            .iter_mut()
+            .enumerate()
+            .find(|(_idx, ix)| ix.program_id == compute_budget::id() && filter(ix))
+        else {
+            self.instructions.insert(0, new_ix);
+            return self.rebuild_message();
+        };
+        let data = new_ix.data;
+        target_tx.data.clone_from(&data);
+        match &mut self.message {
+            VersionedMessage::Legacy(legacy::Message { instructions, .. })
+            | VersionedMessage::V0(v0::Message { instructions, .. }) => {
+                instructions[idx].data = data
+            }
+        }
+        Ok(self)
+    }
+
     pub fn eth_tx(&self) -> Option<&TxEnvelope> {
         match &self.stage {
             TxStage::HolderFill { tx: envelope, .. }
@@ -261,4 +327,37 @@ impl OngoingTransaction {
     pub(super) fn disassemble(self) -> TxStage {
         self.stage
     }
+
+    fn rebuild_message(mut self) -> anyhow::Result<Self> {
+        if let Some(alt) = self.alt.take() {
+            self.stage.ongoing_alt(&self.instructions, &self.payer, alt)
+        } else {
+            Ok(self.stage.ongoing(&self.instructions, &self.payer))
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct ComputeBudget {
+    cu_limit: Option<u32>,
+    heap_frame: Option<u32>,
+}
+
+fn find_compute_budget(ixs: &[Instruction]) -> ComputeBudget {
+    let mut budget = ComputeBudget::default();
+    for ix in ixs
+        .iter()
+        .filter(|ix| ix.program_id == compute_budget::id())
+    {
+        match ComputeBudgetInstruction::try_from_slice(&ix.data) {
+            Ok(ComputeBudgetInstruction::RequestHeapFrame(n)) => budget.heap_frame = Some(n),
+            Ok(ComputeBudgetInstruction::SetComputeUnitLimit(n)) => budget.cu_limit = Some(n),
+            Ok(ix) => tracing::warn!(?ix, "unexpected compute budget instruction"),
+            Err(error) => {
+                tracing::warn!(?error, ?ix, "cannot deserialize compute budget instruction")
+            }
+        }
+    }
+
+    budget
 }

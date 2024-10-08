@@ -23,9 +23,11 @@ use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::{Keypair, Signature};
 use common::solana_sdk::signer::{EncodableKey, Signer};
 use common::solana_sdk::transaction::TransactionError;
+use common::solana_sdk::transaction::VersionedTransaction;
 use common::solana_transaction_status::TransactionStatus;
 use neon_api::NeonApi;
-use solana_api::solana_api::SolanaApi;
+use solana_api::solana_api::{ClientError, ClientErrorKind, SolanaApi};
+use solana_api::solana_rpc_client_api::{request, response};
 
 use self::transactions::{OngoingTransaction, TransactionBuilder};
 
@@ -74,6 +76,41 @@ impl ExecuteRequest {
         let bytes_ref: &mut &[u8] = &mut bytes.as_ref();
         let tx = TxEnvelope::decode(bytes_ref)?;
         Ok(Self::new(tx, fallback_chain_id))
+    }
+}
+
+#[derive(Debug)]
+enum TxErrorKind {
+    CuMeterExceeded,
+    // TxSizeExceeded,
+}
+
+impl TxErrorKind {
+    fn from_error(err: &ClientError) -> Option<Self> {
+        let logs = match err.kind {
+            ClientErrorKind::RpcError(request::RpcError::RpcResponseError {
+                data:
+                    request::RpcResponseErrorData::SendTransactionPreflightFailure(
+                        response::RpcSimulateTransactionResult {
+                            logs: Some(ref logs),
+                            ..
+                        },
+                    ),
+                ..
+            }) => Some(logs),
+            // ClientErrorKind::TransactionError(tx_err) => Some(tx_err.clone()),
+            _ => None,
+        };
+        if logs
+            .into_iter()
+            .flatten()
+            .rfind(|log| log.contains("exceeded CUs meter at BPF instruction"))
+            .is_some()
+        {
+            return Some(Self::CuMeterExceeded);
+        }
+
+        None
     }
 }
 
@@ -191,20 +228,29 @@ impl Executor {
     /// The only method in this module that can call `send_transaction`
     /// or insert into `pending_transactions` map.
     async fn sign_and_send_transaction(&self, tx: OngoingTransaction) -> anyhow::Result<Signature> {
-        let blockhash = self
-            .solana_api
-            .get_recent_blockhash()
-            .await
-            .context("could not request blockhash")?; // TODO: force confirmed
+        let mut tx = tx;
 
-        // This will replace bh and clear signatures in case it's a retry
-        let sol_tx = tx.sign(&[self.builder.keypair()], blockhash)?;
-
-        let signature = self
+        let sol_tx = self.sign_tx(&tx).await?;
+        let signature = match self
             .solana_api
             .send_transaction(&sol_tx)
             .await
-            .context("could not send transaction")?;
+            .map_err(|err| (TxErrorKind::from_error(&err), err))
+        {
+            Ok(sign) => sign,
+            Err((None, err)) => return Err(err.into()),
+            Err((Some(err_kind), err)) => {
+                let tx_hash = tx.eth_tx().map(|tx| tx.tx_hash()).copied();
+                tx = self.builder.retry(tx, err_kind).await.map_err(|new_err| {
+                    anyhow!("Transaction {tx_hash:?} cannot be retried: {new_err}, Initial error: {err}")
+                })?;
+                let sol_tx = self.sign_tx(&tx).await?;
+                self.solana_api
+                    .send_transaction(&sol_tx)
+                    .await
+                    .context("cannot send retried transaction: {err:?}")?
+            }
+        };
 
         tracing::info!(%signature, ?tx, "sent new transaction");
         let do_notify = self.pending_transactions.is_empty();
@@ -214,6 +260,17 @@ impl Executor {
         }
 
         Ok(signature)
+    }
+
+    async fn sign_tx(&self, tx: &OngoingTransaction) -> anyhow::Result<VersionedTransaction> {
+        let blockhash = self
+            .solana_api
+            .get_recent_blockhash()
+            .await
+            .context("could not request blockhash")?; // TODO: force confirmed
+
+        // This will replace bh and clear signatures in case it's a retry
+        tx.sign(&[self.builder.keypair()], blockhash)
     }
 
     async fn run(self: Arc<Self>) -> anyhow::Result<()> {
