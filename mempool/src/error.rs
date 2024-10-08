@@ -30,7 +30,7 @@ pub enum MempoolError {
     AlreadyKnown,
     #[error("wrong chain id")]
     UnknownChainID,
-    #[error("tx is underpriced")]
+    #[error("replacement transaction underpriced")]
     Underprice,
     #[error("cannot recover signer from tx: {0}")]
     SignaturesError(#[from] SignatureError),
