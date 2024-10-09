@@ -2806,6 +2806,7 @@ dependencies = [
  "spl-associated-token-account",
  "spl-token",
  "tarpc",
+ "thiserror",
  "tokio",
  "tracing",
 ]
@@ -4240,9 +4241,13 @@ dependencies = [
 name = "mempool"
 version = "0.1.0"
 dependencies = [
+ "alloy-consensus",
  "clap 4.5.4",
  "dashmap 6.0.1",
+ "db",
+ "executor",
  "futures-util",
+ "jsonrpsee",
  "neon-api",
  "neon-proxy-common",
  "pyth-sdk-solana",
