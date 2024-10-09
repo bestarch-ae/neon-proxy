@@ -5,19 +5,22 @@ edition = "2021"
 
 [dependencies]
 common = { path = '../common', package = "neon-proxy-common" }
+db = { path = '../db' }
 executor = { path = '../executor' }
 solana-api = { path = '../solana-api' }
 neon-api = { path = '../neon-api', features = ["jsonrpsee"] }
 
+anyhow.workspace = true
+alloy-consensus.workspace = true
 # todo: do we need it only for tests?
 alloy-signer-wallet.workspace = true
 # todo: do we need it only for tests?
 alloy-network.workspace = true
-alloy-consensus.workspace = true
 
 crossbeam-queue = "0.3.11"
 clap.workspace = true
 dashmap.workspace = true
+jsonrpsee = { version = "0.22", features = ["server"] }
 priority-queue = "2.1.0"
 pyth-sdk-solana = "0.9.0"
 reth-primitives.workspace = true
@@ -27,6 +30,3 @@ tokio-util = { version = "0.7.12", features = ["time"] }
 tracing.workspace = true
 thiserror.workspace = true
 futures-util.workspace = true
-
-[dev-dependencies]
-anyhow.workspace = true

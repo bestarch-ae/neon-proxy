@@ -22,6 +22,7 @@ clap.workspace = true
 dashmap.workspace = true
 hex.workspace = true
 futures-util.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
