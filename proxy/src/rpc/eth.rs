@@ -18,6 +18,7 @@ use rpc_api_types::{Log, PendingTransactionFilterKind, SyncInfo};
 use common::convert::{ToNeon, ToReth};
 use common::neon_lib::types::{BalanceAddress, TxParams};
 use executor::ExecuteRequest;
+use executor::PreFlightValidator;
 use mempool::GasPricesTrait;
 
 use crate::convert::convert_filters;
@@ -556,6 +557,8 @@ impl EthApiServer for EthApiImpl {
             let execute_request = ExecuteRequest::from_bytes(&bytes, self.chain_id)
                 .inspect_err(|error| tracing::warn!(%bytes, %error, "could not decode transaction"))
                 .map_err(|_| ErrorObjectOwned::from(ErrorCode::InvalidParams))?;
+            let validator = PreFlightValidator::try_new(self.neon_api.clone()).await?;
+            validator.validate(&execute_request).await?;
             let hash = *execute_request.tx_hash();
             tracing::info!(tx_hash = %hash, %bytes, "sendRawTransaction");
             // todo: proper error
