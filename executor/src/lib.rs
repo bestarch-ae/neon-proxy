@@ -30,6 +30,7 @@ use solana_api::solana_api::{ClientError, ClientErrorKind, SolanaApi};
 use solana_api::solana_rpc_client_api::{request, response};
 
 use self::transactions::{OngoingTransaction, TransactionBuilder};
+pub use self::transactions::{PreFlightError, PreFlightValidator};
 
 #[derive(Args, Clone)]
 pub struct Config {

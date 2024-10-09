@@ -2,6 +2,7 @@ mod alt;
 mod emulator;
 mod holder;
 mod ongoing;
+mod validator;
 
 use std::mem;
 
@@ -42,6 +43,7 @@ use self::holder::{HolderInfo, HolderManager, RecoverableHolderState};
 use self::ongoing::{TxData, TxStage};
 
 pub use self::ongoing::OngoingTransaction;
+pub use self::validator::{PreFlightError, PreFlightValidator};
 
 const CU_IX_SIZE: usize = compiled_ix_size(0, 5 /* serialized data length */);
 // Taken from neon-proxy.py
