@@ -74,7 +74,7 @@ impl PreFlightValidator {
         txs: &db::TransactionRepo,
         price: Option<GasPriceModel>,
     ) -> Result<(), PreFlightError> {
-        Self::validate_tx_exists(tx, txs).await?;
+        Self::validate_tx_is_new(tx, txs).await?;
 
         let evm_config = neon_api.get_config().await?;
         let chain_id = chain_id(tx)?;
@@ -141,7 +141,7 @@ impl PreFlightValidator {
         Ok(())
     }
 
-    async fn validate_tx_exists(
+    async fn validate_tx_is_new(
         tx: &ExecuteRequest,
         txs: &db::TransactionRepo,
     ) -> Result<(), PreFlightError> {
