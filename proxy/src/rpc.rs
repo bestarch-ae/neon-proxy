@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use futures_util::{StreamExt, TryStreamExt};
 use jsonrpsee::core::RpcResult;
+use jsonrpsee::types::error::{CALL_EXECUTION_FAILED_CODE, INVALID_PARAMS_CODE};
 use jsonrpsee::types::{ErrorCode, ErrorObjectOwned};
-use reth_primitives::{BlockId, BlockNumberOrTag};
+use reth_primitives::{BlockId, BlockNumberOrTag, B256};
 use rpc_api_types::Log;
 use rpc_api_types::RichBlock;
 use rpc_api_types::{Filter, FilterBlockOption};
@@ -12,8 +13,8 @@ use sqlx::PgPool;
 
 use common::types::NeonTxInfo;
 use db::WithBlockhash;
-use executor::Executor;
-use mempool::{GasPrices, Mempool};
+use executor::{ExecuteRequest, Executor};
+use mempool::{GasPrices, Mempool, PreFlightValidator};
 use neon_api::NeonApi;
 use operator::Operators;
 
@@ -168,6 +169,25 @@ impl EthApiImpl {
         let version = format!("Neon-EVM/v{}-{}", config.version, config.revision);
         Ok(version)
     }
+
+    async fn send_transaction(&self, request: ExecuteRequest) -> Result<B256, Error> {
+        if let Some(mempool) = self.mempool.as_ref() {
+            let hash = *request.tx_hash();
+            tracing::debug!(tx_hash = %hash, ?request, "sending transaction");
+            let price_model = self.mp_gas_prices.get_gas_price_model(Some(self.chain_id));
+            PreFlightValidator::validate(&request, &self.neon_api, &self.transactions, price_model)
+                .await?;
+            mempool.schedule_tx(request).await.inspect_err(
+                |error| tracing::warn!(%hash, %error, "could not schedule transaction"),
+            )?;
+
+            tracing::info!(tx_hash = %hash, "sendRawTransaction done");
+            Ok(hash)
+        } else {
+            tracing::debug!(?request, "skip sending transaction, mempool disabled");
+            Err(Error::Unimplemented)
+        }
+    }
 }
 
 pub fn unimplemented<T>() -> RpcResult<T> {
@@ -176,4 +196,12 @@ pub fn unimplemented<T>() -> RpcResult<T> {
         "method not implemented",
         None,
     ))
+}
+
+pub fn invalid_params(msg: impl Into<String>) -> ErrorObjectOwned {
+    ErrorObjectOwned::owned::<()>(INVALID_PARAMS_CODE, msg, None)
+}
+
+pub fn call_execution_failed(msg: impl Into<String>) -> ErrorObjectOwned {
+    ErrorObjectOwned::owned::<()>(CALL_EXECUTION_FAILED_CODE, msg, None)
 }

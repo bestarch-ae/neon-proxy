@@ -1,8 +1,7 @@
+use alloy_consensus::{SignableTransaction, TxEnvelope};
 use anyhow::Context;
 use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::proc_macros::rpc;
-use jsonrpsee::types::error::CALL_EXECUTION_FAILED_CODE;
-use jsonrpsee::types::{ErrorCode, ErrorObjectOwned};
 use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, TxKind, B256, B64, U256, U64};
 use rpc_api::servers::EthApiServer;
 use rpc_api::EthFilterApiServer;
@@ -18,15 +17,13 @@ use rpc_api_types::{Log, PendingTransactionFilterKind, SyncInfo};
 use common::convert::{ToNeon, ToReth};
 use common::neon_lib::types::{BalanceAddress, TxParams};
 use executor::ExecuteRequest;
-use mempool::{GasPricesTrait, PreFlightValidator};
+use mempool::GasPricesTrait;
 
 use crate::convert::convert_filters;
 use crate::convert::{neon_to_eth, neon_to_eth_receipt};
 use crate::convert::{NeonLog, NeonTransactionReceipt};
+use crate::rpc::{call_execution_failed, invalid_params, unimplemented, EthApiImpl};
 use crate::Error;
-
-use crate::rpc::unimplemented;
-use crate::rpc::EthApiImpl;
 
 #[async_trait]
 impl EthApiServer for EthApiImpl {
@@ -546,39 +543,55 @@ impl EthApiServer for EthApiImpl {
 
     /// Sends transaction will block waiting for signer to return the
     /// transaction hash.
-    async fn send_transaction(&self, _request: TransactionRequest) -> RpcResult<B256> {
-        unimplemented()
+    async fn send_transaction(&self, request: TransactionRequest) -> RpcResult<B256> {
+        use alloy_consensus::TypedTransaction;
+
+        tracing::info!(?request, "send transaction");
+        let address = request
+            .from
+            .ok_or_else(|| invalid_params("Missing sender"))?;
+        let operator = self
+            .operators
+            .get(&address)
+            .ok_or_else(|| call_execution_failed(format!("Unknown sender {address}")))?;
+        let mut transaction = request.build_typed_tx().map_err(|request| {
+            tracing::debug!(?request, "cannot build transaction from request");
+            invalid_params("Invalid transaction request")
+        })?;
+        // TODO: Remove this nonsense when reth gets updated
+        let signable: &mut dyn SignableTransaction<_> = match transaction {
+            TypedTransaction::Legacy(ref mut tx) => tx,
+            TypedTransaction::Eip2930(ref mut tx) => tx,
+            TypedTransaction::Eip1559(ref mut tx) => tx,
+            TypedTransaction::Eip4844(ref mut tx) => tx,
+        };
+        let signature = operator.sign_eth_transaction(signable).map_err(|error| {
+            tracing::warn!(%address, ?transaction, ?error, "failed signing message");
+            // Error format taken from neon-proxy.py
+            call_execution_failed("Error signing message")
+        })?;
+        // TODO: Remove this nonsense when reth gets updated
+        let envelope: TxEnvelope = match transaction {
+            TypedTransaction::Legacy(tx) => tx.into_signed(signature).into(),
+            TypedTransaction::Eip2930(tx) => tx.into_signed(signature).into(),
+            TypedTransaction::Eip1559(tx) => tx.into_signed(signature).into(),
+            TypedTransaction::Eip4844(tx) => tx.into_signed(signature).into(),
+        };
+
+        self.send_transaction(ExecuteRequest::new(envelope, self.chain_id))
+            .await
+            .map_err(Into::into)
     }
 
     /// Sends signed transaction, returning its hash.
     async fn send_raw_transaction(&self, bytes: Bytes) -> RpcResult<B256> {
-        if let Some(mempool) = self.mempool.as_ref() {
-            let execute_request = ExecuteRequest::from_bytes(&bytes, self.chain_id)
-                .inspect_err(|error| tracing::warn!(%bytes, %error, "could not decode transaction"))
-                .map_err(|_| ErrorObjectOwned::from(ErrorCode::InvalidParams))?;
-            let hash = *execute_request.tx_hash();
-            tracing::info!(tx_hash = %hash, %bytes, "sendRawTransaction");
-            let price_model = self.mp_gas_prices.get_gas_price_model(Some(self.chain_id));
-            PreFlightValidator::validate(
-                &execute_request,
-                &self.neon_api,
-                &self.transactions,
-                price_model,
-            )
-            .await?;
-            mempool
-                .schedule_tx(execute_request)
-                .await
-                .inspect_err(
-                    |error| tracing::warn!(%bytes, %error, "could not schedule transaction"),
-                )?;
-
-            tracing::info!(tx_hash = %hash, "sendRawTransaction done");
-            Ok(hash)
-        } else {
-            tracing::debug!(%bytes, "skip sendRawTransaction, mempool disabled");
-            unimplemented()
-        }
+        tracing::info!(%bytes, "sendRawTransaction");
+        let execute_request = ExecuteRequest::from_bytes(&bytes, self.chain_id)
+            .inspect_err(|error| tracing::warn!(%bytes, %error, "could not decode transaction"))
+            .map_err(|_| invalid_params(""))?;
+        self.send_transaction(execute_request)
+            .await
+            .map_err(Into::into)
     }
 
     /// Returns an Ethereum specific signature with: sign(keccak256("\x19Ethereum Signed Message:\n"
@@ -587,22 +600,15 @@ impl EthApiServer for EthApiImpl {
         tracing::info!(%address, ?message, "sign");
         let Some(operator) = self.operators.get(&address) else {
             // Error format taken from neon-proxy.py
-            return Err(ErrorObjectOwned::owned::<()>(
-                CALL_EXECUTION_FAILED_CODE,
-                format!("Unknown sender {address}"),
-                None,
-            ));
+            return Err(call_execution_failed(format!("Unknown sender {address}")));
         };
+
         match operator.sign_message(&message) {
             Ok(signature) => Ok(signature.as_bytes().into()),
             Err(error) => {
                 tracing::warn!(%address, ?message, ?error, "failed signing message");
                 // Error format taken from neon-proxy.py
-                Err(ErrorObjectOwned::owned::<()>(
-                    CALL_EXECUTION_FAILED_CODE,
-                    "Error signing message",
-                    None,
-                ))
+                Err(call_execution_failed("Error signing message"))
             }
         }
     }

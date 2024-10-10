@@ -5387,6 +5387,7 @@ dependencies = [
 name = "proxy"
 version = "0.1.0"
 dependencies = [
+ "alloy-consensus",
  "anyhow",
  "clap 4.5.4",
  "db",

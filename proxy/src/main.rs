@@ -32,6 +32,8 @@ use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
 use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
+use crate::rpc::unimplemented;
+
 use self::rpc::{EthApiImpl, NeonCustomApiServer, NeonEthApiServer, NeonFilterApiServer};
 
 #[derive(Debug, Error)]
@@ -40,6 +42,12 @@ pub enum Error {
     DB(#[from] db::Error),
     #[error("parse error: {0}")]
     Parse(#[from] anyhow::Error),
+    #[error("mempool error: {0}")]
+    MempoolError(#[from] mempool::MempoolError),
+    #[error("mempool error: {0}")]
+    Preflight(#[from] mempool::PreFlightError),
+    #[error("method not implemented")]
+    Unimplemented,
 }
 
 impl From<Error> for jsonrpsee::types::ErrorObjectOwned {
@@ -47,6 +55,9 @@ impl From<Error> for jsonrpsee::types::ErrorObjectOwned {
         tracing::error!("error: {}", value);
         match value {
             Error::DB(..) | Error::Parse(..) => ErrorCode::InternalError.into(),
+            Error::MempoolError(err) => err.into(),
+            Error::Preflight(err) => err.into(),
+            Error::Unimplemented => unimplemented::<()>().unwrap_err(),
         }
     }
 }
