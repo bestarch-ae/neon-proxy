@@ -100,8 +100,9 @@ impl PreFlightValidator {
             tx_gas_price,
             gas_limit_multiplier_wo_chain_id,
         )?;
-        Self::validate_sender_balance(tx, tx_input_len, tx_gas_limit, tx_gas_price, neon_api)
-            .await?;
+        // TODO:
+        // Self::validate_sender_balance(tx, tx_input_len, tx_gas_limit, tx_gas_price, neon_api)
+        //     .await?;
         if let Some(price) = price {
             Self::validate_tx_gas_price(chain_id, tx_gas_price, &price)?;
             Self::validate_underpriced_tx_wo_chain_id(chain_id, tx_gas_price, &price)?;
@@ -197,6 +198,7 @@ impl PreFlightValidator {
         Ok(())
     }
 
+    #[allow(dead_code)]
     async fn validate_sender_balance(
         tx: &ExecuteRequest,
         tx_input_len: usize,
