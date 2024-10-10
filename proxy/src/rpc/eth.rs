@@ -22,8 +22,8 @@ use mempool::GasPricesTrait;
 use crate::convert::convert_filters;
 use crate::convert::{neon_to_eth, neon_to_eth_receipt};
 use crate::convert::{NeonLog, NeonTransactionReceipt};
-use crate::rpc::{call_execution_failed, invalid_params, unimplemented, EthApiImpl};
-use crate::Error;
+use crate::error::{call_execution_failed, invalid_params, unimplemented, Error};
+use crate::rpc::EthApiImpl;
 
 #[async_trait]
 impl EthApiServer for EthApiImpl {
