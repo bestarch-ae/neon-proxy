@@ -43,6 +43,13 @@ impl Operator {
     pub fn sign_message(&self, msg: &[u8]) -> anyhow::Result<EthSignature> {
         self.eth_keypair.sign_message_sync(msg).map_err(Into::into)
     }
+
+    pub fn sign_eth_transaction(
+        &self,
+        tx: &mut dyn SignableTransaction<EthSignature>,
+    ) -> anyhow::Result<EthSignature> {
+        self.sign_transaction_sync(tx).map_err(Into::into)
+    }
 }
 
 impl fmt::Debug for Operator {
