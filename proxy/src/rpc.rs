@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
+use anyhow::anyhow;
 use futures_util::{StreamExt, TryStreamExt};
-use jsonrpsee::core::RpcResult;
-use jsonrpsee::types::{ErrorCode, ErrorObjectOwned};
-use reth_primitives::{BlockId, BlockNumberOrTag};
+use reth_primitives::{BlockId, BlockNumberOrTag, B256};
 use rpc_api_types::Log;
 use rpc_api_types::RichBlock;
 use rpc_api_types::{Filter, FilterBlockOption};
@@ -12,16 +11,16 @@ use sqlx::PgPool;
 
 use common::types::NeonTxInfo;
 use db::WithBlockhash;
-use executor::Executor;
-use mempool::{GasPrices, Mempool};
+use executor::{ExecuteRequest, Executor};
+use mempool::{GasPrices, Mempool, PreFlightValidator};
 use neon_api::NeonApi;
 use operator::Operators;
 
 use crate::convert::build_block;
 use crate::convert::{convert_rich_log, LogFilters};
+use crate::error::Error;
 pub use crate::rpc::eth::{NeonEthApiServer, NeonFilterApiServer};
 pub use crate::rpc::neon::NeonCustomApiServer;
-use crate::Error;
 
 mod eth;
 mod neon;
@@ -124,7 +123,7 @@ impl EthApiImpl {
         Ok(Some(build_block(block, txs, full)?.into()))
     }
 
-    async fn get_tag_by_block_id(&self, block_id: BlockId) -> RpcResult<BlockNumberOrTag> {
+    async fn get_tag_by_block_id(&self, block_id: BlockId) -> Result<BlockNumberOrTag, Error> {
         match block_id {
             BlockId::Hash(hash) => {
                 use common::solana_sdk::hash::Hash;
@@ -134,7 +133,7 @@ impl EthApiImpl {
                     .await?;
                 Ok(block
                     .and_then(|block| block.header.number.map(BlockNumberOrTag::Number))
-                    .ok_or::<ErrorObjectOwned>(ErrorCode::InternalError.into())?)
+                    .ok_or_else(|| Error::Other(anyhow!("could not find block: {hash}")))?)
             }
             BlockId::Number(BlockNumberOrTag::Pending) => Ok(BlockNumberOrTag::Pending),
             BlockId::Number(BlockNumberOrTag::Latest) => Ok(BlockNumberOrTag::Latest),
@@ -163,17 +162,28 @@ impl EthApiImpl {
             .await
     }
 
-    async fn neon_evm_version(&self) -> RpcResult<String> {
+    async fn neon_evm_version(&self) -> Result<String, Error> {
         let config = self.neon_api.get_config().await?;
         let version = format!("Neon-EVM/v{}-{}", config.version, config.revision);
         Ok(version)
     }
-}
 
-pub fn unimplemented<T>() -> RpcResult<T> {
-    Err(ErrorObjectOwned::borrowed(
-        ErrorCode::MethodNotFound.code(),
-        "method not implemented",
-        None,
-    ))
+    async fn send_transaction(&self, request: ExecuteRequest) -> Result<B256, Error> {
+        if let Some(mempool) = self.mempool.as_ref() {
+            let hash = *request.tx_hash();
+            tracing::debug!(tx_hash = %hash, ?request, "sending transaction");
+            let price_model = self.mp_gas_prices.get_gas_price_model(Some(self.chain_id));
+            PreFlightValidator::validate(&request, &self.neon_api, &self.transactions, price_model)
+                .await?;
+            mempool.schedule_tx(request).await.inspect_err(
+                |error| tracing::warn!(%hash, %error, "could not schedule transaction"),
+            )?;
+
+            tracing::info!(tx_hash = %hash, "sendRawTransaction done");
+            Ok(hash)
+        } else {
+            tracing::debug!(?request, "skip sending transaction, mempool disabled");
+            Err(Error::Unimplemented)
+        }
+    }
 }

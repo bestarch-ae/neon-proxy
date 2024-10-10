@@ -11,15 +11,14 @@ use clap::{ArgGroup, Parser};
 use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
 use jsonrpsee::server::Server;
-use jsonrpsee::types::ErrorCode;
 use jsonrpsee::RpcModule;
 use operator::Operators;
 use rpc_api::{EthApiServer, EthFilterApiServer, NetApiServer, Web3ApiServer};
-use thiserror::Error;
 use tower::Service;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 
 mod convert;
+mod error;
 mod rpc;
 
 use common::neon_lib;
@@ -32,24 +31,7 @@ use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
 use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
-use self::rpc::{EthApiImpl, NeonCustomApiServer, NeonEthApiServer, NeonFilterApiServer};
-
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("database error: {0}")]
-    DB(#[from] db::Error),
-    #[error("parse error: {0}")]
-    Parse(#[from] anyhow::Error),
-}
-
-impl From<Error> for jsonrpsee::types::ErrorObjectOwned {
-    fn from(value: Error) -> Self {
-        tracing::error!("error: {}", value);
-        match value {
-            Error::DB(..) | Error::Parse(..) => ErrorCode::InternalError.into(),
-        }
-    }
-}
+use crate::rpc::{EthApiImpl, NeonCustomApiServer, NeonEthApiServer, NeonFilterApiServer};
 
 #[derive(Debug, Default, Copy, Clone)]
 enum LogFormat {

@@ -7,7 +7,7 @@ use crate::rpc::EthApiImpl;
 #[async_trait]
 impl Web3ApiServer for EthApiImpl {
     async fn client_version(&self) -> RpcResult<String> {
-        self.neon_evm_version().await
+        self.neon_evm_version().await.map_err(Into::into)
     }
 
     fn sha3(&self, data: Bytes) -> RpcResult<B256> {
