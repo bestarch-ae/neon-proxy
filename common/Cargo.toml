@@ -13,6 +13,8 @@ ethnum.workspace = true
 
 build-info = { version = "0.0.31", features = ["serde"] }
 
+alloy-consensus.workspace = true
+anyhow.workspace = true
 solana-sdk.workspace = true
 solana-account-decoder.workspace = true
 solana-transaction-status.workspace = true

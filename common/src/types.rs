@@ -1,8 +1,10 @@
 use std::fmt::{Display, Formatter};
 
+use alloy_consensus::{Transaction as TransactionTrait, TxEnvelope};
+use anyhow::bail;
 use ethnum::U256;
 use evm_loader::types::{Address, Transaction};
-
+use reth_primitives::alloy_primitives;
 use solana_sdk::clock::UnixTimestamp;
 use solana_sdk::hash::Hash;
 use solana_sdk::message::{v0::LoadedAddresses, AccountKeys};
@@ -11,6 +13,66 @@ use solana_sdk::signature::Signature;
 use solana_sdk::slot_history::Slot;
 use solana_sdk::transaction::{Result as TransactionResult, VersionedTransaction};
 use solana_transaction_status::InnerInstructions;
+
+pub trait TxEnvelopeExt {
+    fn chain_id(&self) -> Result<Option<u64>, anyhow::Error>;
+    fn input_len(&self) -> Result<usize, anyhow::Error>;
+    fn gas_limit(&self) -> Result<u128, anyhow::Error>;
+    fn gas_price(&self) -> Result<Option<u128>, anyhow::Error>;
+    fn value(&self) -> Result<alloy_primitives::U256, anyhow::Error>;
+}
+
+impl TxEnvelopeExt for TxEnvelope {
+    fn chain_id(&self) -> Result<Option<u64>, anyhow::Error> {
+        match self {
+            TxEnvelope::Legacy(signed) => Ok(signed.tx().chain_id),
+            TxEnvelope::Eip1559(signed) => Ok(signed.tx().chain_id()),
+            TxEnvelope::Eip2930(signed) => Ok(signed.tx().chain_id()),
+            TxEnvelope::Eip4844(signed) => Ok(signed.tx().chain_id()),
+            _ => bail!("unsupported tx type"),
+        }
+    }
+
+    fn input_len(&self) -> Result<usize, anyhow::Error> {
+        match self {
+            TxEnvelope::Legacy(signed) => Ok(signed.tx().input.len()),
+            TxEnvelope::Eip1559(signed) => Ok(signed.tx().input.len()),
+            TxEnvelope::Eip2930(signed) => Ok(signed.tx().input.len()),
+            TxEnvelope::Eip4844(signed) => Ok(signed.tx().tx().input.len()),
+            _ => bail!("unsupported tx type"),
+        }
+    }
+
+    fn gas_limit(&self) -> Result<u128, anyhow::Error> {
+        match self {
+            TxEnvelope::Legacy(signed) => Ok(signed.tx().gas_limit),
+            TxEnvelope::Eip1559(signed) => Ok(signed.tx().gas_limit()),
+            TxEnvelope::Eip2930(signed) => Ok(signed.tx().gas_limit()),
+            TxEnvelope::Eip4844(signed) => Ok(signed.tx().gas_limit()),
+            _ => bail!("unsupported tx type"),
+        }
+    }
+
+    fn gas_price(&self) -> Result<Option<u128>, anyhow::Error> {
+        match self {
+            TxEnvelope::Legacy(signed) => Ok(signed.tx().gas_price()),
+            TxEnvelope::Eip1559(signed) => Ok(signed.tx().gas_price()),
+            TxEnvelope::Eip2930(signed) => Ok(signed.tx().gas_price()),
+            TxEnvelope::Eip4844(signed) => Ok(signed.tx().gas_price()),
+            _ => bail!("unsupported tx type"),
+        }
+    }
+
+    fn value(&self) -> Result<alloy_primitives::U256, anyhow::Error> {
+        match self {
+            TxEnvelope::Legacy(signed) => Ok(signed.tx().value),
+            TxEnvelope::Eip1559(signed) => Ok(signed.tx().value),
+            TxEnvelope::Eip2930(signed) => Ok(signed.tx().value),
+            TxEnvelope::Eip4844(signed) => Ok(signed.tx().tx().value),
+            _ => bail!("unsupported tx type"),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub struct TxHash([u8; 32]);

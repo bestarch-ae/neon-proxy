@@ -18,7 +18,7 @@ use rpc_api_types::{Log, PendingTransactionFilterKind, SyncInfo};
 use common::convert::{ToNeon, ToReth};
 use common::neon_lib::types::{BalanceAddress, TxParams};
 use executor::ExecuteRequest;
-use mempool::GasPricesTrait;
+use mempool::{GasPricesTrait, PreFlightValidator};
 
 use crate::convert::convert_filters;
 use crate::convert::{neon_to_eth, neon_to_eth_receipt};
@@ -558,20 +558,20 @@ impl EthApiServer for EthApiImpl {
                 .map_err(|_| ErrorObjectOwned::from(ErrorCode::InvalidParams))?;
             let hash = *execute_request.tx_hash();
             tracing::info!(tx_hash = %hash, %bytes, "sendRawTransaction");
-            // todo: proper error
+            let price_model = self.mp_gas_prices.get_gas_price_model(Some(self.chain_id));
+            PreFlightValidator::validate(
+                &execute_request,
+                &self.neon_api,
+                &self.transactions,
+                price_model,
+            )
+            .await?;
             mempool
                 .schedule_tx(execute_request)
                 .await
                 .inspect_err(
                     |error| tracing::warn!(%bytes, %error, "could not schedule transaction"),
-                )
-                .map_err(|err| {
-                    ErrorObjectOwned::owned(
-                        ErrorCode::InternalError.code(),
-                        err.to_string(),
-                        None::<()>,
-                    )
-                })?;
+                )?;
 
             tracing::info!(tx_hash = %hash, "sendRawTransaction done");
             Ok(hash)
