@@ -4241,7 +4241,7 @@ dependencies = [
 name = "mempool"
 version = "0.1.0"
 dependencies = [
- "alloy-consensus",
+ "anyhow",
  "clap 4.5.4",
  "dashmap 6.0.1",
  "db",
@@ -4470,6 +4470,8 @@ dependencies = [
 name = "neon-proxy-common"
 version = "0.0.0"
 dependencies = [
+ "alloy-consensus",
+ "anyhow",
  "build-info 0.0.31",
  "ethnum",
  "evm-loader",

@@ -1,4 +1,3 @@
-use alloy_consensus::{Transaction, TxEnvelope};
 use reth_primitives::alloy_primitives::SignatureError;
 use reth_primitives::{alloy_primitives, U128};
 use thiserror::Error;
@@ -6,6 +5,7 @@ use thiserror::Error;
 use common::convert::ToNeon;
 use common::ethnum::{u256, U256};
 use common::neon_lib::types::BalanceAddress;
+use common::types::TxEnvelopeExt;
 use executor::ExecuteRequest;
 use neon_api::NeonApi;
 
@@ -16,8 +16,8 @@ pub const GAS_LIMIT_LOWER_BOUND: u128 = 21_000;
 
 #[derive(Debug, Error)]
 pub enum PreFlightError {
-    #[error("unsupported tx type")]
-    UnsupportedTxType,
+    #[error(transparent)]
+    InternalError(#[from] anyhow::Error),
     #[error("transaction size is too big")]
     TxSizeTooBig,
     #[error("gas limit multiplier is missing in evm config")]
@@ -77,8 +77,8 @@ impl PreFlightValidator {
         Self::validate_tx_is_new(tx, txs).await?;
 
         let evm_config = neon_api.get_config().await?;
-        let chain_id = chain_id(tx)?;
-        let tx_input_len = tx_input_len(tx)?;
+        let chain_id = tx.chain_id()?;
+        let tx_input_len = tx.input_len()?;
         let gas_limit_multiplier_wo_chain_id = evm_config
             .config
             .get("NEON_GAS_LIMIT_MULTIPLIER_NO_CHAINID")
@@ -87,8 +87,8 @@ impl PreFlightValidator {
                 s.parse::<u128>()
                     .map_err(|_| PreFlightError::GasLimitMultiplierMissing)
             })??;
-        let tx_gas_limit = tx_gas_limit(tx)?;
-        let tx_gas_price = tx_gas_price(tx)?;
+        let tx_gas_limit = tx.gas_limit()?;
+        let tx_gas_price = tx.gas_price()?;
 
         Self::validate_chain_id(chain_id, tx.fallback_chain_id())?;
         Self::validate_sender_eoa(tx, neon_api).await?;
@@ -210,8 +210,8 @@ impl PreFlightValidator {
             chain_id: tx.fallback_chain_id(),
         };
         let sender_balance = neon_api.get_balance(balance_address, None).await?; // todo: which commitment to use?
-        let required_balance = U256::from(tx_gas_price.unwrap_or(0)) * U256::from(tx_gas_limit)
-            + to_u256(tx_value(tx)?);
+        let required_balance =
+            U256::from(tx_gas_price.unwrap_or(0)) * U256::from(tx_gas_limit) + to_u256(tx.value()?);
 
         if required_balance <= sender_balance {
             return Ok(());
@@ -272,54 +272,4 @@ fn to_u256(v: alloy_primitives::U256) -> U256 {
     let limb1 = (limbs[3] as u128) << 64 | (limbs[2] as u128); // Upper u128
 
     U256([limb0, limb1])
-}
-
-fn tx_input_len(tx: &TxEnvelope) -> Result<usize, PreFlightError> {
-    match tx {
-        TxEnvelope::Legacy(signed) => Ok(signed.tx().input.len()),
-        TxEnvelope::Eip1559(signed) => Ok(signed.tx().input.len()),
-        TxEnvelope::Eip2930(signed) => Ok(signed.tx().input.len()),
-        TxEnvelope::Eip4844(signed) => Ok(signed.tx().tx().input.len()),
-        _ => Err(PreFlightError::UnsupportedTxType),
-    }
-}
-
-fn chain_id(tx: &TxEnvelope) -> Result<Option<u64>, PreFlightError> {
-    match tx {
-        TxEnvelope::Legacy(signed) => Ok(signed.tx().chain_id),
-        TxEnvelope::Eip1559(signed) => Ok(signed.tx().chain_id()),
-        TxEnvelope::Eip2930(signed) => Ok(signed.tx().chain_id()),
-        TxEnvelope::Eip4844(signed) => Ok(signed.tx().chain_id()),
-        _ => Err(PreFlightError::UnsupportedTxType),
-    }
-}
-
-fn tx_gas_limit(tx: &TxEnvelope) -> Result<u128, PreFlightError> {
-    match tx {
-        TxEnvelope::Legacy(signed) => Ok(signed.tx().gas_limit),
-        TxEnvelope::Eip1559(signed) => Ok(signed.tx().gas_limit()),
-        TxEnvelope::Eip2930(signed) => Ok(signed.tx().gas_limit()),
-        TxEnvelope::Eip4844(signed) => Ok(signed.tx().gas_limit()),
-        _ => Err(PreFlightError::UnsupportedTxType),
-    }
-}
-
-fn tx_gas_price(tx: &TxEnvelope) -> Result<Option<u128>, PreFlightError> {
-    match tx {
-        TxEnvelope::Legacy(signed) => Ok(signed.tx().gas_price()),
-        TxEnvelope::Eip1559(signed) => Ok(signed.tx().gas_price()),
-        TxEnvelope::Eip2930(signed) => Ok(signed.tx().gas_price()),
-        TxEnvelope::Eip4844(signed) => Ok(signed.tx().gas_price()),
-        _ => Err(PreFlightError::UnsupportedTxType),
-    }
-}
-
-fn tx_value(tx: &TxEnvelope) -> Result<alloy_primitives::U256, PreFlightError> {
-    match tx {
-        TxEnvelope::Legacy(signed) => Ok(signed.tx().value),
-        TxEnvelope::Eip1559(signed) => Ok(signed.tx().value),
-        TxEnvelope::Eip2930(signed) => Ok(signed.tx().value),
-        TxEnvelope::Eip4844(signed) => Ok(signed.tx().tx().value),
-        _ => Err(PreFlightError::UnsupportedTxType),
-    }
 }

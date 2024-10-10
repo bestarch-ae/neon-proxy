@@ -10,7 +10,7 @@ executor = { path = '../executor' }
 solana-api = { path = '../solana-api' }
 neon-api = { path = '../neon-api', features = ["jsonrpsee"] }
 
-alloy-consensus.workspace = true
+anyhow.workspace = true
 clap = { version = "4.5.4", features = ["derive"] }
 dashmap.workspace = true
 jsonrpsee = { version = "0.22", features = ["server"] }
