@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
+use anyhow::anyhow;
 use futures_util::{StreamExt, TryStreamExt};
-use jsonrpsee::core::RpcResult;
-use jsonrpsee::types::error::{CALL_EXECUTION_FAILED_CODE, INVALID_PARAMS_CODE};
-use jsonrpsee::types::{ErrorCode, ErrorObjectOwned};
 use reth_primitives::{BlockId, BlockNumberOrTag, B256};
 use rpc_api_types::Log;
 use rpc_api_types::RichBlock;
@@ -20,9 +18,9 @@ use operator::Operators;
 
 use crate::convert::build_block;
 use crate::convert::{convert_rich_log, LogFilters};
+use crate::error::Error;
 pub use crate::rpc::eth::{NeonEthApiServer, NeonFilterApiServer};
 pub use crate::rpc::neon::NeonCustomApiServer;
-use crate::Error;
 
 mod eth;
 mod neon;
@@ -125,7 +123,7 @@ impl EthApiImpl {
         Ok(Some(build_block(block, txs, full)?.into()))
     }
 
-    async fn get_tag_by_block_id(&self, block_id: BlockId) -> RpcResult<BlockNumberOrTag> {
+    async fn get_tag_by_block_id(&self, block_id: BlockId) -> Result<BlockNumberOrTag, Error> {
         match block_id {
             BlockId::Hash(hash) => {
                 use common::solana_sdk::hash::Hash;
@@ -135,7 +133,7 @@ impl EthApiImpl {
                     .await?;
                 Ok(block
                     .and_then(|block| block.header.number.map(BlockNumberOrTag::Number))
-                    .ok_or::<ErrorObjectOwned>(ErrorCode::InternalError.into())?)
+                    .ok_or_else(|| Error::Other(anyhow!("could not find block: {hash}")))?)
             }
             BlockId::Number(BlockNumberOrTag::Pending) => Ok(BlockNumberOrTag::Pending),
             BlockId::Number(BlockNumberOrTag::Latest) => Ok(BlockNumberOrTag::Latest),
@@ -164,7 +162,7 @@ impl EthApiImpl {
             .await
     }
 
-    async fn neon_evm_version(&self) -> RpcResult<String> {
+    async fn neon_evm_version(&self) -> Result<String, Error> {
         let config = self.neon_api.get_config().await?;
         let version = format!("Neon-EVM/v{}-{}", config.version, config.revision);
         Ok(version)
@@ -188,20 +186,4 @@ impl EthApiImpl {
             Err(Error::Unimplemented)
         }
     }
-}
-
-pub fn unimplemented<T>() -> RpcResult<T> {
-    Err(ErrorObjectOwned::borrowed(
-        ErrorCode::MethodNotFound.code(),
-        "method not implemented",
-        None,
-    ))
-}
-
-pub fn invalid_params(msg: impl Into<String>) -> ErrorObjectOwned {
-    ErrorObjectOwned::owned::<()>(INVALID_PARAMS_CODE, msg, None)
-}
-
-pub fn call_execution_failed(msg: impl Into<String>) -> ErrorObjectOwned {
-    ErrorObjectOwned::owned::<()>(CALL_EXECUTION_FAILED_CODE, msg, None)
 }
