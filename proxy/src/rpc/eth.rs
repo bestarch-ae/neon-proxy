@@ -17,6 +17,7 @@ use rpc_api_types::{Log, PendingTransactionFilterKind, SyncInfo};
 use common::convert::{ToNeon, ToReth};
 use common::neon_lib::types::{BalanceAddress, TxParams};
 use executor::ExecuteRequest;
+use mempool::PreFlightValidator;
 
 use crate::convert::convert_filters;
 use crate::convert::{neon_to_eth, neon_to_eth_receipt};
@@ -544,6 +545,14 @@ impl EthApiServer for EthApiImpl {
                 .map_err(|_| ErrorObjectOwned::from(ErrorCode::InvalidParams))?;
             let hash = *envelope.tx_hash();
             tracing::info!(tx_hash = %hash, %bytes, ?envelope, "sendRawTransaction");
+            let price_model = self.mp_gas_prices.get_gas_price_model(Some(self.chain_id));
+            PreFlightValidator::validate(
+                &envelope,
+                &self.neon_api,
+                &self.transactions,
+                price_model,
+            )
+            .await?;
             executor
                 .handle_transaction(envelope)
                 .await
