@@ -210,8 +210,8 @@ impl PreFlightValidator {
             chain_id: tx.fallback_chain_id(),
         };
         let sender_balance = neon_api.get_balance(balance_address, None).await?; // todo: which commitment to use?
-        let required_balance =
-            U256::from(tx_gas_price.unwrap_or(0)) * U256::from(tx_gas_limit) + to_u256(tx.value()?);
+        let required_balance = U256::from(tx_gas_price.unwrap_or(0)) * U256::from(tx_gas_limit)
+            + tx.value()?.to_neon();
 
         if required_balance <= sender_balance {
             return Ok(());
@@ -264,12 +264,4 @@ impl PreFlightValidator {
 
         Ok(())
     }
-}
-
-fn to_u256(v: alloy_primitives::U256) -> U256 {
-    let limbs = v.as_limbs();
-    let limb0 = (limbs[1] as u128) << 64 | (limbs[0] as u128); // Lower u128
-    let limb1 = (limbs[3] as u128) << 64 | (limbs[2] as u128); // Upper u128
-
-    U256([limb0, limb1])
 }
