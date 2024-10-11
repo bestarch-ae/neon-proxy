@@ -46,3 +46,18 @@ pub mod neon_instruction {
         pub const TX_STEP_FROM_ACCOUNT_NO_CHAINID_DEPRECATED: u8 = 0x22;
     }
 }
+
+/// [`evm_loader::types::Transaction::from_rlp`] panic workaround
+// TODO: Fix this in neon-evm
+pub fn has_valid_tx_first_byte(bytes: &[u8]) -> bool {
+    // Legacy transaction format
+    if rlp::Rlp::new(bytes).is_list() {
+        true
+    // It's an EIP-2718 typed TX envelope.
+    } else {
+        match bytes.first() {
+            Some(0x00..=0x02) => true,
+            Some(_) | None => false,
+        }
+    }
+}
