@@ -462,15 +462,15 @@ impl EthApiServer for EthApiImpl {
 
         let tag = if let Some(block_number) = block_number {
             Some(self.get_tag_by_block_id(block_number).await?)
-        } else {
             None
         };
 
-        let gas = self
-            .neon_api
-            .estimate_gas(tx, tag)
-            .await
-            .map(ToReth::to_reth)?;
+        let gas = self.neon_api.estimate_gas(tx, tag).await;
+        if let Err(err) = &gas {
+            tracing::warn!(?err, "estimate_gas failed");
+        }
+        let gas = gas?;
+        let gas = gas.to_reth();
         Ok(gas)
     }
 
