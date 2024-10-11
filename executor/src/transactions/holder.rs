@@ -237,16 +237,21 @@ impl HolderManager {
             account::TAG_HOLDER | legacy::TAG_HOLDER_DEPRECATED => {
                 let holder = Holder::from_account(&self.program_id, account_info)
                     .context("cannot parse holder")?;
-                let state = match Transaction::from_rlp(holder.transaction().as_ref())
-                    .and_then(|trx| holder.validate_transaction(&trx))
-                {
-                    Ok(()) => {
-                        let tx_buf = holder.transaction();
-                        let tx = TxEnvelope::decode_2718(&mut tx_buf.as_ref())
-                            .context("cannot decode transaction from holder")?;
-                        HolderState::Pending(tx)
+                // [`Transaction::from_rlp`] can panic if first byte is invalid
+                let state = if !common::has_valid_tx_first_byte(holder.transaction().as_ref()) {
+                    HolderState::Incomplete
+                } else {
+                    match Transaction::from_rlp(holder.transaction().as_ref())
+                        .and_then(|trx| holder.validate_transaction(&trx))
+                    {
+                        Ok(()) => {
+                            let tx_buf = holder.transaction();
+                            let tx = TxEnvelope::decode_2718(&mut tx_buf.as_ref())
+                                .context("cannot decode transaction from holder")?;
+                            HolderState::Pending(tx)
+                        }
+                        Err(_) => HolderState::Incomplete,
                     }
-                    Err(_) => HolderState::Incomplete,
                 };
                 state
             }

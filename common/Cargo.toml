@@ -12,6 +12,7 @@ hex.workspace = true
 
 ethnum = "1.5.0"
 build-info = { version = "0.0.31", features = ["serde"] }
+rlp = "0.5.2"
 
 solana-sdk.workspace = true
 solana-account-decoder.workspace = true
