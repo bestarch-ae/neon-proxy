@@ -4485,6 +4485,7 @@ dependencies = [
  "neon-lib",
  "reth-primitives",
  "reth-rpc-types",
+ "rlp",
  "solana-account-decoder",
  "solana-sdk",
  "solana-transaction-status",

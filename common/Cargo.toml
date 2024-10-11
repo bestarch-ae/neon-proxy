@@ -12,6 +12,7 @@ hex.workspace = true
 ethnum.workspace = true
 
 build-info = { version = "0.0.31", features = ["serde"] }
+rlp = "0.5.2"
 
 alloy-consensus.workspace = true
 anyhow.workspace = true
