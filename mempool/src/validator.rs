@@ -52,7 +52,7 @@ impl PreFlightError {
     pub const fn error_code(&self) -> i32 {
         match self {
             Self::NeonApiError(err) => err.error_code(),
-            Self::TxAlreadyKnown => -32000,
+            Self::TxAlreadyKnown | Self::TxSizeTooBig | Self::Underpriced(_, _) => -32000,
             _ => jsonrpsee::types::ErrorCode::InternalError.code(),
         }
     }
