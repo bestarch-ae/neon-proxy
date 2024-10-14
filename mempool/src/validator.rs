@@ -214,8 +214,8 @@ impl PreFlightValidator {
         let sender_balance = neon_api.get_balance(balance_address, None).await?; // todo: which commitment to use?
         let required_balance = U256::from(tx_gas_price.unwrap_or(0)) * U256::from(tx_gas_limit)
             + tx.value()?.to_neon();
-        tracing::info!(sender_balance, "validate_sender_balance");
-        tracing::info!(required_balance, ?tx_gas_price, tx_gas_limit, tx_value = ?tx.value(), "validate_sender_balance");
+        tracing::info!(?sender_balance, "validate_sender_balance");
+        tracing::info!(?required_balance, ?tx_gas_price, tx_gas_limit, tx_value = ?tx.value(), "validate_sender_balance");
 
         if required_balance <= sender_balance {
             tracing::info!("validate_sender_balance: ok");
@@ -230,8 +230,8 @@ impl PreFlightValidator {
 
         tracing::warn!(
             message,
-            sender_balance,
-            required_balance,
+            ?sender_balance,
+            ?required_balance,
             "validate_sender_balance: insufficient funds"
         );
 
