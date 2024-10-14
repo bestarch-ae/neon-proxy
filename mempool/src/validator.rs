@@ -1,5 +1,5 @@
 use reth_primitives::alloy_primitives::SignatureError;
-use reth_primitives::{alloy_primitives, U128};
+use reth_primitives::{alloy_primitives, BlockNumberOrTag, U128};
 use thiserror::Error;
 
 use common::convert::ToNeon;
@@ -52,7 +52,7 @@ impl PreFlightError {
     pub const fn error_code(&self) -> i32 {
         match self {
             Self::NeonApiError(err) => err.error_code(),
-            Self::TxAlreadyKnown => -32000,
+            Self::TxAlreadyKnown | Self::TxSizeTooBig | Self::Underpriced(_, _) => -32000,
             _ => jsonrpsee::types::ErrorCode::InternalError.code(),
         }
     }
@@ -100,9 +100,8 @@ impl PreFlightValidator {
             tx_gas_price,
             gas_limit_multiplier_wo_chain_id,
         )?;
-        // TODO:
-        // Self::validate_sender_balance(tx, tx_input_len, tx_gas_limit, tx_gas_price, neon_api)
-        //     .await?;
+        Self::validate_sender_balance(tx, tx_input_len, tx_gas_limit, tx_gas_price, neon_api)
+            .await?;
         if let Some(price) = price {
             Self::validate_tx_gas_price(chain_id, tx_gas_price, &price)?;
             Self::validate_underpriced_tx_wo_chain_id(chain_id, tx_gas_price, &price)?;
@@ -211,7 +210,9 @@ impl PreFlightValidator {
             address: sender_address.to_neon(),
             chain_id: tx.fallback_chain_id(),
         };
-        let sender_balance = neon_api.get_balance(balance_address, None).await?; // todo: which commitment to use?
+        let sender_balance = neon_api
+            .get_balance(balance_address, Some(BlockNumberOrTag::Pending))
+            .await?; // todo: which commitment to use?
         let required_balance = U256::from(tx_gas_price.unwrap_or(0)) * U256::from(tx_gas_limit)
             + tx.value()?.to_neon();
 
