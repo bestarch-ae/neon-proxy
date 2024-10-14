@@ -265,6 +265,7 @@ impl Executor {
         let mut tx = tx;
 
         let sol_tx = self.sign_tx(&tx).await?;
+        tracing::debug!(?sol_tx, "sending transaction");
         let signature = match self
             .solana_api
             .send_transaction(&sol_tx)
@@ -279,6 +280,7 @@ impl Executor {
                     anyhow!("Transaction {tx_hash:?} cannot be retried: {new_err}, Initial error: {err}")
                 })?;
                 let sol_tx = self.sign_tx(&tx).await?;
+                tracing::debug!(?sol_tx, "sending transaction");
                 self.solana_api
                     .send_transaction(&sol_tx)
                     .await

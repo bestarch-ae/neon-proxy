@@ -1,17 +1,18 @@
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
 use anyhow::{bail, Context};
 use dashmap::DashMap;
 use futures_util::StreamExt;
+use indexmap::IndexSet;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tracing::{debug, info, warn};
 
 use common::solana_sdk::address_lookup_table::{self, state, AddressLookupTableAccount};
 use common::solana_sdk::commitment_config::CommitmentLevel;
 use common::solana_sdk::instruction::Instruction;
 use common::solana_sdk::pubkey::Pubkey;
 use solana_api::solana_api::SolanaApi;
-use tracing::{debug, info, warn};
 
 const ACCOUNTS_PER_TX: usize = 27;
 const MAX_ACCOUNTS_PER_ALT: usize = 256;
@@ -37,12 +38,12 @@ impl AltUpdateInfo {
 #[derive(Debug, Clone)]
 struct Alt {
     pubkey: Pubkey,
-    accounts: HashSet<Pubkey>,
+    accounts: IndexSet<Pubkey>,
     write_lock: Arc<Semaphore>,
 }
 
 impl Alt {
-    fn new(pubkey: Pubkey, accounts: HashSet<Pubkey>) -> Self {
+    fn new(pubkey: Pubkey, accounts: IndexSet<Pubkey>) -> Self {
         Self {
             pubkey,
             accounts,
@@ -92,7 +93,7 @@ impl AltManager {
     where
         I: IntoIterator<Item = Pubkey>,
     {
-        let new_accounts: HashSet<_> = accounts.into_iter().collect();
+        let new_accounts: IndexSet<_> = accounts.into_iter().collect();
         // TODO: Reverse address index
         let mut candidates = BTreeMap::new();
         for alt in self.alts.iter() {
@@ -187,7 +188,7 @@ impl AltManager {
         I: IntoIterator<Item = Pubkey>,
     {
         let (ix, pubkey) = self.create_alt_ix().await?;
-        let alt = Alt::new(pubkey, HashSet::new());
+        let alt = Alt::new(pubkey, IndexSet::new());
         if let Err(err) = self.save_account(pubkey).await {
             warn!(%pubkey, ?err, "could not save ALT to db");
         }
