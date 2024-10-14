@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use alloy_consensus::{SignableTransaction, TxEnvelope, TypedTransaction};
 use anyhow::anyhow;
 use futures_util::{StreamExt, TryStreamExt};
 use operator::Operator;
@@ -191,5 +192,26 @@ impl EthApiImpl {
 
     fn get_operator(&self, address: &Address) -> Result<Arc<Operator>, Error> {
         self.operators.try_get(address).map_err(Into::into)
+    }
+
+    fn sign_transaction(&self, addr: &Address, tx: TypedTransaction) -> Result<TxEnvelope, Error> {
+        let operator = self.get_operator(addr)?;
+        let mut tx = tx;
+        // TODO: Remove this nonsense when reth gets updated
+        let signable: &mut dyn SignableTransaction<_> = match tx {
+            TypedTransaction::Legacy(ref mut tx) => tx,
+            TypedTransaction::Eip2930(ref mut tx) => tx,
+            TypedTransaction::Eip1559(ref mut tx) => tx,
+            TypedTransaction::Eip4844(ref mut tx) => tx,
+        };
+        let signature = operator.sign_eth_transaction(signable)?;
+        // TODO: Remove this nonsense when reth gets updated
+        let envelope: TxEnvelope = match tx {
+            TypedTransaction::Legacy(tx) => tx.into_signed(signature).into(),
+            TypedTransaction::Eip2930(tx) => tx.into_signed(signature).into(),
+            TypedTransaction::Eip1559(tx) => tx.into_signed(signature).into(),
+            TypedTransaction::Eip4844(tx) => tx.into_signed(signature).into(),
+        };
+        Ok(envelope)
     }
 }

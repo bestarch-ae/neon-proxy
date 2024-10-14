@@ -18,6 +18,7 @@ rpc-api.workspace = true
 rpc-api-types.workspace = true
 reth-primitives.workspace = true
 alloy-consensus.workspace = true
+alloy-rlp.workspace = true
 
 anyhow.workspace = true
 clap.workspace = true
