@@ -541,6 +541,12 @@ impl EthApiServer for EthApiImpl {
         unimplemented()
     }
 
+    /// Signs a transaction that can be submitted to the network at a later time using with
+    /// `sendRawTransaction.`
+    async fn sign_transaction(&self, _transaction: TransactionRequest) -> RpcResult<Bytes> {
+        unimplemented()
+    }
+
     /// Sends transaction will block waiting for signer to return the
     /// transaction hash.
     async fn send_transaction(&self, request: TransactionRequest) -> RpcResult<B256> {
@@ -550,10 +556,7 @@ impl EthApiServer for EthApiImpl {
         let address = request
             .from
             .ok_or_else(|| invalid_params("Missing sender"))?;
-        let operator = self
-            .operators
-            .get(&address)
-            .ok_or_else(|| call_execution_failed(format!("Unknown sender {address}")))?;
+        let operator = self.get_operator(&address)?;
         let mut transaction = request.build_typed_tx().map_err(|request| {
             tracing::debug!(?request, "cannot build transaction from request");
             invalid_params("Invalid transaction request")
@@ -598,10 +601,7 @@ impl EthApiServer for EthApiImpl {
     /// + len(message) + message))).
     async fn sign(&self, address: Address, message: Bytes) -> RpcResult<Bytes> {
         tracing::info!(%address, ?message, "sign");
-        let Some(operator) = self.operators.get(&address) else {
-            // Error format taken from neon-proxy.py
-            return Err(call_execution_failed(format!("Unknown sender {address}")));
-        };
+        let operator = self.get_operator(&address)?;
 
         match operator.sign_message(&message) {
             Ok(signature) => Ok(signature.as_bytes().into()),
@@ -611,12 +611,6 @@ impl EthApiServer for EthApiImpl {
                 Err(call_execution_failed("Error signing message"))
             }
         }
-    }
-
-    /// Signs a transaction that can be submitted to the network at a later time using with
-    /// `sendRawTransaction.`
-    async fn sign_transaction(&self, _transaction: TransactionRequest) -> RpcResult<Bytes> {
-        unimplemented()
     }
 
     /// Signs data via [EIP-712](https://github.com/ethereum/EIPs/blob/master/EIPS/eip-712.md).

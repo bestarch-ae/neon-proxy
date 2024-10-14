@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use futures_util::{StreamExt, TryStreamExt};
+use operator::Operator;
+use reth_primitives::Address;
 use reth_primitives::{BlockId, BlockNumberOrTag, B256};
 use rpc_api_types::Log;
 use rpc_api_types::RichBlock;
@@ -185,5 +187,9 @@ impl EthApiImpl {
             tracing::debug!(?request, "skip sending transaction, mempool disabled");
             Err(Error::Unimplemented)
         }
+    }
+
+    fn get_operator(&self, address: &Address) -> Result<Arc<Operator>, Error> {
+        self.operators.try_get(address).map_err(Into::into)
     }
 }

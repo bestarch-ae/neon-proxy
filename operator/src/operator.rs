@@ -12,15 +12,17 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signature};
 use solana_sdk::signer::{EncodableKey, Signer, SignerError};
 
+use crate::error::Error;
+
 pub struct Operator {
     sol_keypair: Keypair,
     eth_keypair: LocalWallet,
 }
 
 impl Operator {
-    pub fn read_from_file(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+    pub fn read_from_file(path: impl AsRef<Path>) -> Result<Self, Error> {
         let sol_keypair = Keypair::read_from_file(path)
-            .map_err(|err| anyhow!("cannot read keypair from file: {err:?}"))?;
+            .map_err(|err| Error::Load(anyhow!("cannot read keypair from file: {err:?}")))?;
         Self::from_keypair(sol_keypair)
     }
 
@@ -32,22 +34,23 @@ impl Operator {
         self.sol_keypair.pubkey()
     }
 
-    fn from_keypair(sol_keypair: Keypair) -> anyhow::Result<Self> {
-        let eth_keypair = LocalWallet::from_field_bytes(sol_keypair.secret().as_bytes().into())?;
+    fn from_keypair(sol_keypair: Keypair) -> Result<Self, Error> {
+        let eth_keypair = LocalWallet::from_field_bytes(sol_keypair.secret().as_bytes().into())
+            .map_err(|err| Error::Load(err.into()))?;
         Ok(Self {
             sol_keypair,
             eth_keypair,
         })
     }
 
-    pub fn sign_message(&self, msg: &[u8]) -> anyhow::Result<EthSignature> {
+    pub fn sign_message(&self, msg: &[u8]) -> Result<EthSignature, Error> {
         self.eth_keypair.sign_message_sync(msg).map_err(Into::into)
     }
 
     pub fn sign_eth_transaction(
         &self,
         tx: &mut dyn SignableTransaction<EthSignature>,
-    ) -> anyhow::Result<EthSignature> {
+    ) -> Result<EthSignature, Error> {
         self.sign_transaction_sync(tx).map_err(Into::into)
     }
 }

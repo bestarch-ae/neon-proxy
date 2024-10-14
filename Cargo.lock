@@ -4887,6 +4887,7 @@ dependencies = [
  "reth-primitives",
  "solana-cli-config",
  "solana-sdk",
+ "thiserror",
  "tracing",
 ]
 
