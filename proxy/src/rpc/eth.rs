@@ -1,4 +1,4 @@
-use alloy_consensus::{SignableTransaction, TxEnvelope};
+use alloy_rlp::Encodable;
 use anyhow::Context;
 use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::proc_macros::rpc;
@@ -541,43 +541,35 @@ impl EthApiServer for EthApiImpl {
         unimplemented()
     }
 
+    /// Signs a transaction that can be submitted to the network at a later time using with
+    /// `sendRawTransaction.`
+    async fn sign_transaction(&self, request: TransactionRequest) -> RpcResult<Bytes> {
+        tracing::info!(?request, "sign transaction");
+        let address = request
+            .from
+            .ok_or_else(|| invalid_params("Missing sender"))?;
+        let transaction = request.build_typed_tx().map_err(|request| {
+            tracing::debug!(?request, "cannot build transaction from request");
+            invalid_params("Invalid transaction request")
+        })?;
+        let envelope = self.sign_transaction(&address, transaction)?;
+        let mut bytes = Vec::new();
+        envelope.encode(&mut bytes);
+        Ok(bytes.into())
+    }
+
     /// Sends transaction will block waiting for signer to return the
     /// transaction hash.
     async fn send_transaction(&self, request: TransactionRequest) -> RpcResult<B256> {
-        use alloy_consensus::TypedTransaction;
-
         tracing::info!(?request, "send transaction");
         let address = request
             .from
             .ok_or_else(|| invalid_params("Missing sender"))?;
-        let operator = self
-            .operators
-            .get(&address)
-            .ok_or_else(|| call_execution_failed(format!("Unknown sender {address}")))?;
-        let mut transaction = request.build_typed_tx().map_err(|request| {
+        let transaction = request.build_typed_tx().map_err(|request| {
             tracing::debug!(?request, "cannot build transaction from request");
             invalid_params("Invalid transaction request")
         })?;
-        // TODO: Remove this nonsense when reth gets updated
-        let signable: &mut dyn SignableTransaction<_> = match transaction {
-            TypedTransaction::Legacy(ref mut tx) => tx,
-            TypedTransaction::Eip2930(ref mut tx) => tx,
-            TypedTransaction::Eip1559(ref mut tx) => tx,
-            TypedTransaction::Eip4844(ref mut tx) => tx,
-        };
-        let signature = operator.sign_eth_transaction(signable).map_err(|error| {
-            tracing::warn!(%address, ?transaction, ?error, "failed signing message");
-            // Error format taken from neon-proxy.py
-            call_execution_failed("Error signing message")
-        })?;
-        // TODO: Remove this nonsense when reth gets updated
-        let envelope: TxEnvelope = match transaction {
-            TypedTransaction::Legacy(tx) => tx.into_signed(signature).into(),
-            TypedTransaction::Eip2930(tx) => tx.into_signed(signature).into(),
-            TypedTransaction::Eip1559(tx) => tx.into_signed(signature).into(),
-            TypedTransaction::Eip4844(tx) => tx.into_signed(signature).into(),
-        };
-
+        let envelope = self.sign_transaction(&address, transaction)?;
         self.send_transaction(ExecuteRequest::new(envelope, self.chain_id))
             .await
             .map_err(Into::into)
@@ -598,10 +590,7 @@ impl EthApiServer for EthApiImpl {
     /// + len(message) + message))).
     async fn sign(&self, address: Address, message: Bytes) -> RpcResult<Bytes> {
         tracing::info!(%address, ?message, "sign");
-        let Some(operator) = self.operators.get(&address) else {
-            // Error format taken from neon-proxy.py
-            return Err(call_execution_failed(format!("Unknown sender {address}")));
-        };
+        let operator = self.get_operator(&address)?;
 
         match operator.sign_message(&message) {
             Ok(signature) => Ok(signature.as_bytes().into()),
@@ -611,12 +600,6 @@ impl EthApiServer for EthApiImpl {
                 Err(call_execution_failed("Error signing message"))
             }
         }
-    }
-
-    /// Signs a transaction that can be submitted to the network at a later time using with
-    /// `sendRawTransaction.`
-    async fn sign_transaction(&self, _transaction: TransactionRequest) -> RpcResult<Bytes> {
-        unimplemented()
     }
 
     /// Signs data via [EIP-712](https://github.com/ethereum/EIPs/blob/master/EIPS/eip-712.md).

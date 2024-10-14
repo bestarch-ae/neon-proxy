@@ -4887,6 +4887,7 @@ dependencies = [
  "reth-primitives",
  "solana-cli-config",
  "solana-sdk",
+ "thiserror",
  "tracing",
 ]
 
@@ -5389,6 +5390,7 @@ name = "proxy"
 version = "0.1.0"
 dependencies = [
  "alloy-consensus",
+ "alloy-rlp",
  "anyhow",
  "clap 4.5.4",
  "db",

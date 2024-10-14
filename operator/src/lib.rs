@@ -1,3 +1,4 @@
+pub mod error;
 mod operator;
 
 use std::collections::HashMap;
@@ -10,6 +11,7 @@ use clap::Args;
 use reth_primitives::Address;
 use solana_cli_config::CONFIG_FILE;
 
+pub use error::Error;
 pub use operator::Operator;
 
 fn default_kp_path() -> OsString {
@@ -91,6 +93,13 @@ impl Operators {
 
     pub fn get(&self, address: &Address) -> Option<Arc<Operator>> {
         self.map.get(address).cloned()
+    }
+
+    pub fn try_get(&self, address: &Address) -> Result<Arc<Operator>, Error> {
+        self.map
+            .get(address)
+            .cloned()
+            .ok_or(Error::UnknownOperator(*address))
     }
 
     pub fn addresses(&self) -> impl Iterator<Item = &'_ Address> + '_ {
