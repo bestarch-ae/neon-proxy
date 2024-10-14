@@ -29,7 +29,7 @@ use crate::rpc::EthApiImpl;
 impl EthApiServer for EthApiImpl {
     /// Returns the protocol version encoded as a string.
     async fn protocol_version(&self) -> RpcResult<U64> {
-        unimplemented()
+        unimplemented("eth_protocolVersion")
     }
 
     /// Returns an object with data about the sync status or false.
@@ -60,7 +60,7 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns the client coinbase address.
     async fn author(&self) -> RpcResult<Address> {
-        unimplemented()
+        unimplemented("eth_coinbase")
     }
 
     /// Returns a list of addresses owned by client.
@@ -139,7 +139,7 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns the number of uncles in a block from a block matching the given block hash.
     async fn block_uncles_count_by_hash(&self, _hash: B256) -> RpcResult<Option<U256>> {
-        unimplemented()
+        unimplemented("eth_getUncleCountByBlockHash")
     }
 
     /// Returns the number of uncles in a block with given block number.
@@ -147,7 +147,7 @@ impl EthApiServer for EthApiImpl {
         &self,
         _number: BlockNumberOrTag,
     ) -> RpcResult<Option<U256>> {
-        unimplemented()
+        unimplemented("eth_getUncleCountByBlockNumber")
     }
 
     /// Returns all transaction receipts for a given block.
@@ -155,7 +155,7 @@ impl EthApiServer for EthApiImpl {
         &self,
         _block_id: BlockId,
     ) -> RpcResult<Option<Vec<AnyTransactionReceipt>>> {
-        unimplemented()
+        unimplemented("eth_getBlockReceipts")
     }
 
     /// Returns an uncle block of the given block and index.
@@ -164,7 +164,7 @@ impl EthApiServer for EthApiImpl {
         _hash: B256,
         _index: Index,
     ) -> RpcResult<Option<RichBlock>> {
-        unimplemented()
+        unimplemented("eth_getUncleByBlockHashAndIndex")
     }
 
     /// Returns an uncle block of the given block and index.
@@ -173,14 +173,14 @@ impl EthApiServer for EthApiImpl {
         _number: BlockNumberOrTag,
         _index: Index,
     ) -> RpcResult<Option<RichBlock>> {
-        unimplemented()
+        unimplemented("eth_getUncleByBlockNumberAndIndex")
     }
 
     /// Returns the EIP-2718 encoded transaction if it exists.
     ///
     /// If this is a EIP-4844 transaction that is in the pool it will include the sidecar.
     async fn raw_transaction_by_hash(&self, _hash: B256) -> RpcResult<Option<Bytes>> {
-        unimplemented()
+        unimplemented("eth_getRawTransactionByHash")
     }
 
     /// Returns the information about a transaction requested by transaction hash.
@@ -199,7 +199,7 @@ impl EthApiServer for EthApiImpl {
         _hash: B256,
         _index: Index,
     ) -> RpcResult<Option<Bytes>> {
-        unimplemented()
+        unimplemented("eth_getRawTransactionByBlockHashAndIndex")
     }
 
     /// Returns information about a transaction by block hash and transaction index position.
@@ -226,7 +226,7 @@ impl EthApiServer for EthApiImpl {
         _number: BlockNumberOrTag,
         _index: Index,
     ) -> RpcResult<Option<Bytes>> {
-        unimplemented()
+        unimplemented("eth_getRawTransactionByBlockNumberAndIndex")
     }
 
     /// Returns information about a transaction by block number and transaction index position.
@@ -350,12 +350,12 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns the block's header at given number.
     async fn header_by_number(&self, _hash: BlockNumberOrTag) -> RpcResult<Option<Header>> {
-        unimplemented()
+        unimplemented("eth_headerByNumber")
     }
 
     /// Returns the block's header at given hash.
     async fn header_by_hash(&self, _hash: B256) -> RpcResult<Option<Header>> {
-        unimplemented()
+        unimplemented("eth_headerByHash")
     }
 
     /// Executes a new message call immediately without creating a transaction on the block chain.
@@ -407,7 +407,7 @@ impl EthApiServer for EthApiImpl {
         _state_context: Option<StateContext>,
         _state_override: Option<StateOverride>,
     ) -> RpcResult<Vec<EthCallResponse>> {
-        unimplemented()
+        unimplemented("eth_callMany")
     }
 
     /// Generates an access list for a transaction.
@@ -429,7 +429,7 @@ impl EthApiServer for EthApiImpl {
         _request: TransactionRequest,
         _block_number: Option<BlockId>,
     ) -> RpcResult<AccessListWithGasUsed> {
-        unimplemented()
+        unimplemented("eth_createAccessList")
     }
 
     /// Generates and returns an estimate of how much gas is necessary to allow the transaction to
@@ -482,12 +482,12 @@ impl EthApiServer for EthApiImpl {
 
     /// Introduced in EIP-1559, returns suggestion for the priority for dynamic fee transactions.
     async fn max_priority_fee_per_gas(&self) -> RpcResult<U256> {
-        unimplemented()
+        unimplemented("eth_maxPriorityFeePerGas")
     }
 
     /// Introduced in EIP-4844, returns the current blob base fee in wei.
     async fn blob_base_fee(&self) -> RpcResult<U256> {
-        unimplemented()
+        unimplemented("eth_blobBaseFee")
     }
 
     /// Returns the Transaction fee history
@@ -503,7 +503,7 @@ impl EthApiServer for EthApiImpl {
         _newest_block: BlockNumberOrTag,
         _reward_percentiles: Option<Vec<f64>>,
     ) -> RpcResult<FeeHistory> {
-        unimplemented()
+        unimplemented("eth_feeHistory")
     }
 
     /// Returns whether the client is actively mining new blocks.
@@ -513,13 +513,13 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns the number of hashes per second that the node is mining with.
     async fn hashrate(&self) -> RpcResult<U256> {
-        unimplemented()
+        unimplemented("eth_hashrate")
     }
 
     /// Returns the hash of the current block, the seedHash, and the boundary condition to be met
     /// (“target”)
     async fn get_work(&self) -> RpcResult<Work> {
-        unimplemented()
+        unimplemented("eth_getWork")
     }
 
     /// Used for submitting mining hashrate.
@@ -528,7 +528,7 @@ impl EthApiServer for EthApiImpl {
     /// It accepts the miner hash rate and an identifier which must be unique between nodes.
     /// Returns `true` if the block was successfully submitted, `false` otherwise.
     async fn submit_hashrate(&self, _hashrate: U256, _id: B256) -> RpcResult<bool> {
-        unimplemented()
+        unimplemented("eth_submitHashrate")
     }
 
     /// Used for submitting a proof-of-work solution.
@@ -538,7 +538,7 @@ impl EthApiServer for EthApiImpl {
         _pow_hash: B256,
         _mix_digest: B256,
     ) -> RpcResult<bool> {
-        unimplemented()
+        unimplemented("eth_submitWork")
     }
 
     /// Signs a transaction that can be submitted to the network at a later time using with
@@ -608,7 +608,7 @@ impl EthApiServer for EthApiImpl {
         _address: Address,
         _data: serde_json::Value,
     ) -> RpcResult<Bytes> {
-        unimplemented()
+        unimplemented("eth_signTypedData")
     }
 
     /// Returns the account and storage values of the specified account including the Merkle-proof.
@@ -619,7 +619,7 @@ impl EthApiServer for EthApiImpl {
         _keys: Vec<JsonStorageKey>,
         _block_number: Option<BlockId>,
     ) -> RpcResult<EIP1186AccountProofResponse> {
-        unimplemented()
+        unimplemented("eth_getProof")
     }
 }
 
@@ -670,12 +670,12 @@ impl EthFilterApiServer for EthApiImpl {
 
     /// Creates anew filter and returns its id.
     async fn new_filter(&self, _filter: Filter) -> RpcResult<FilterId> {
-        unimplemented()
+        unimplemented("eth_newFilter")
     }
 
     /// Creates a new block filter and returns its id.
     async fn new_block_filter(&self) -> RpcResult<FilterId> {
-        unimplemented()
+        unimplemented("eth_newBlockFilter")
     }
 
     /// Creates a pending transaction filter and returns its id.
@@ -683,21 +683,21 @@ impl EthFilterApiServer for EthApiImpl {
         &self,
         _kind: Option<PendingTransactionFilterKind>,
     ) -> RpcResult<FilterId> {
-        unimplemented()
+        unimplemented("eth_newPendingTransactionFilter")
     }
 
     /// Returns all filter changes since last poll.
     async fn filter_changes(&self, _id: FilterId) -> RpcResult<FilterChanges> {
-        unimplemented()
+        unimplemented("eth_getFilterChanges")
     }
 
     /// Returns all logs matching given filter (in a range 'from' - 'to').
     async fn filter_logs(&self, _id: FilterId) -> RpcResult<Vec<Log>> {
-        unimplemented()
+        unimplemented("eth_getFilterLogs")
     }
 
     /// Uninstalls filter.
     async fn uninstall_filter(&self, _id: FilterId) -> RpcResult<bool> {
-        unimplemented()
+        unimplemented("eth_uninstallFilter")
     }
 }

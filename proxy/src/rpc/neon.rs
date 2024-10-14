@@ -439,7 +439,7 @@ impl NeonCustomApiServer for EthApiImpl {
     }
 
     async fn transaction_receipt(&self, _hash: B256, _detail: ReceiptDetail) -> RpcResult<()> {
-        unimplemented()
+        unimplemented("neon_getTransactionReceipt")
     }
 
     async fn native_token_list(&self) -> RpcResult<Vec<Token>> {

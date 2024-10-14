@@ -186,7 +186,7 @@ impl EthApiImpl {
             Ok(hash)
         } else {
             tracing::debug!(?request, "skip sending transaction, mempool disabled");
-            Err(Error::Unimplemented)
+            Err(Error::Unimplemented("eth_sendRawTransaction"))
         }
     }
 

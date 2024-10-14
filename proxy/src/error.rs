@@ -20,7 +20,7 @@ pub enum Error {
     #[error("operator error: {0}")]
     Operator(#[from] operator::Error),
     #[error("method not implemented")]
-    Unimplemented,
+    Unimplemented(&'static str),
     #[error("other error: {0}")]
     Other(anyhow::Error),
 }
@@ -34,16 +34,16 @@ impl From<Error> for ErrorObjectOwned {
             Error::Mempool(error) => error.into(),
             Error::Preflight(error) => error.into(),
             Error::Operator(error) => operator_into_jsonrpsee(error),
-            Error::Unimplemented => unimplemented::<()>().unwrap_err(),
+            Error::Unimplemented(name) => unimplemented::<()>(name).unwrap_err(),
         }
     }
 }
 
-pub fn unimplemented<T>() -> RpcResult<T> {
-    Err(ErrorObjectOwned::borrowed(
+pub fn unimplemented<T>(method: &'static str) -> RpcResult<T> {
+    Err(ErrorObjectOwned::owned(
         ErrorCode::MethodNotFound.code(),
-        "method not implemented",
-        None,
+        format!("the method {method} does not exist/is not available"),
+        None::<()>,
     ))
 }
 
