@@ -26,11 +26,10 @@ use common::solana_sdk::transaction::TransactionError;
 use common::solana_sdk::transaction::VersionedTransaction;
 use common::solana_transaction_status::TransactionStatus;
 use neon_api::NeonApi;
-use solana_api::solana_api::{ClientError, ClientErrorKind, SolanaApi};
-use solana_api::solana_rpc_client_api::{request, response};
+use solana_api::solana_api::SolanaApi;
 use tracing::info;
 
-use self::transactions::{OngoingTransaction, TransactionBuilder};
+use self::transactions::{OngoingTransaction, TransactionBuilder, TxErrorKind};
 
 #[derive(Args, Clone)]
 pub struct Config {
@@ -77,51 +76,6 @@ impl ExecuteRequest {
         let bytes_ref: &mut &[u8] = &mut bytes.as_ref();
         let tx = TxEnvelope::decode(bytes_ref)?;
         Ok(Self::new(tx, fallback_chain_id))
-    }
-}
-
-#[derive(Debug)]
-enum TxErrorKind {
-    CuMeterExceeded,
-    TxSizeExceeded,
-}
-
-impl TxErrorKind {
-    fn from_error(err: &ClientError) -> Option<Self> {
-        match err.kind {
-            ClientErrorKind::RpcError(request::RpcError::RpcResponseError {
-                code: -32602,
-                ref message,
-                ..
-            }) if message.contains("Transaction too large:") => {
-                return Some(TxErrorKind::TxSizeExceeded)
-            }
-            _ => (),
-        };
-
-        let logs = match err.kind {
-            ClientErrorKind::RpcError(request::RpcError::RpcResponseError {
-                data:
-                    request::RpcResponseErrorData::SendTransactionPreflightFailure(
-                        response::RpcSimulateTransactionResult {
-                            logs: Some(ref logs),
-                            ..
-                        },
-                    ),
-                ..
-            }) => Some(logs),
-            _ => None,
-        };
-        if logs
-            .into_iter()
-            .flatten()
-            .rfind(|log| log.contains("exceeded CUs meter at BPF instruction"))
-            .is_some()
-        {
-            return Some(Self::CuMeterExceeded);
-        }
-
-        None
     }
 }
 
@@ -249,7 +203,7 @@ impl Executor {
             .solana_api
             .send_transaction(&sol_tx)
             .await
-            .map_err(|err| (TxErrorKind::from_error(&err), err))
+            .map_err(|err| (TxErrorKind::from_error(&err, &tx), err))
         {
             Ok(sign) => sign,
             Err((None, err)) => return Err(err.into()),
