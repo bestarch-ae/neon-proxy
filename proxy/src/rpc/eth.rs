@@ -261,11 +261,10 @@ impl EthApiServer for EthApiImpl {
     async fn balance(&self, address: Address, block_number: Option<BlockId>) -> RpcResult<U256> {
         use common::evm_loader::types::Address;
 
-        let tag = if let Some(block_number) = block_number {
-            Some(self.get_tag_by_block_id(block_number).await?)
-        } else {
-            None
+        let Some(block_number) = block_number else {
+            return Err(invalid_params("Missing block number"));
         };
+        let tag = Some(self.get_tag_by_block_id(block_number).await?);
 
         let balance_address = BalanceAddress {
             address: Address::from(<[u8; 20]>::from(address.0)),
