@@ -6,13 +6,14 @@ use dashmap::DashMap;
 use futures_util::StreamExt;
 use indexmap::IndexSet;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tracing::{debug, info, warn};
 
 use common::solana_sdk::address_lookup_table::{self, state, AddressLookupTableAccount};
 use common::solana_sdk::commitment_config::CommitmentLevel;
 use common::solana_sdk::instruction::Instruction;
 use common::solana_sdk::pubkey::Pubkey;
 use solana_api::solana_api::SolanaApi;
+
+use tracing::{debug, info, warn};
 
 const ACCOUNTS_PER_TX: usize = 27;
 const MAX_ACCOUNTS_PER_ALT: usize = 256;
@@ -78,7 +79,7 @@ pub enum UpdateProgress {
 
 impl AltManager {
     pub async fn new(operator: Pubkey, solana_api: SolanaApi, pg_pool: Option<db::PgPool>) -> Self {
-        let this = Self {
+        let mut this = Self {
             operator,
             solana_api,
             alts: DashMap::new(),
@@ -111,6 +112,7 @@ impl AltManager {
 
         const RETRIES: usize = 5;
 
+        let candidates_len = candidates.len();
         for retry_idx in 0..RETRIES {
             if let Some((_, candidate)) = candidates.pop_last() {
                 // WARN: Do not hold lock into the map while awaiting on semaphore,
@@ -127,9 +129,11 @@ impl AltManager {
                 //     : this ALT got updated to the point where new accounts no longer fit .
                 if alt.accounts.len() + accounts.len() > MAX_ACCOUNTS_PER_ALT {
                     debug!(
+                        %self.operator,
                         alt_len = alt.accounts.len(),
                         extension_len = accounts.len(),
                         retry_idx,
+                        key = %alt.pubkey,
                         "skipping ALT due to race"
                     );
                     continue;
@@ -142,6 +146,14 @@ impl AltManager {
                     idx: 0,
                     written: 0,
                 };
+                debug!(
+                    %self.operator,
+                    alt_len = alt.accounts.len(),
+                    extension_len = info.accounts.len(),
+                    retry_idx,
+                    key = %alt.pubkey,
+                    "updating ALT with new accounts"
+                );
                 let ix = self.write_next_chunk(&mut info);
                 return Ok(UpdateProgress::WriteChunk { ix, info });
             } else {
@@ -149,6 +161,12 @@ impl AltManager {
             }
         }
 
+        debug!(
+            %self.operator,
+            extension_len = new_accounts.len(),
+            candidates_len,
+            "no suitable ALT candidates"
+        );
         // Otherwise create new ALT
         let (info, ix) = self.create_new_alt(new_accounts).await?;
         Ok(UpdateProgress::WriteChunk { ix, info })
@@ -167,7 +185,7 @@ impl AltManager {
             .expect("alts dont get deleted");
         assert_eq!(info.pubkey, alt.pubkey);
         alt.accounts.extend(info.accounts.drain(0..info.idx));
-        let alt_len = alt.accounts.len();
+        let alt_length = alt.accounts.len();
 
         if info.is_empty() {
             UpdateProgress::Ready(alt.get_account())
@@ -175,8 +193,10 @@ impl AltManager {
             drop(alt);
             let ix = self.write_next_chunk(&mut info);
             info!(
+                %self.operator,
                 extension_length = info.idx,
-                alt_length = alt_len,
+                alt_length,
+                key = %info.pubkey,
                 "extending ALT"
             );
             UpdateProgress::WriteChunk { ix, info }
@@ -190,7 +210,7 @@ impl AltManager {
         let (ix, pubkey) = self.create_alt_ix().await?;
         let alt = Alt::new(pubkey, IndexSet::new());
         if let Err(err) = self.save_account(pubkey).await {
-            warn!(%pubkey, ?err, "could not save ALT to db");
+            warn!(%self.operator, %pubkey, ?err, "could not save ALT to db");
         }
         let _guard = alt.write_lock.clone().acquire_owned().await.unwrap();
         self.alts.insert(pubkey, alt);
@@ -201,7 +221,7 @@ impl AltManager {
             idx: 0,
             written: 0,
         };
-        info!(%pubkey, length = update_info.accounts.len(), "creating new alt");
+        info!(%self.operator, %pubkey, length = update_info.accounts.len(), "creating new alt");
 
         Ok((update_info, ix))
     }
@@ -230,19 +250,27 @@ impl AltManager {
         )
     }
 
-    async fn recover(&self) {
+    async fn recover(&mut self) {
         if let Some(repo) = self.repo.as_ref() {
             let alts_stream = repo.fetch();
             tokio::pin!(alts_stream);
             while let Some(item) = alts_stream.next().await {
-                let Ok(key) = item.inspect_err(|err| warn!(?err, "invalid ALT address")) else {
+                let Ok(key) =
+                    item.inspect_err(|err| warn!(%self.operator, ?err, "invalid ALT address"))
+                else {
                     continue;
                 };
 
                 if let Err(err) = self.load_account(key).await {
-                    warn!(%key, ?err, "could not load account");
+                    warn!(%self.operator, %key, ?err, "could not load account");
+                } else if let Some(alt) = self.alts.get(&key) {
+                    info!(%self.operator, %key, addresses = ?alt.accounts, "loaded ALT account");
+                } else {
+                    // Probably unreachable if recover is `&mut`
+                    info!(%self.operator, %key, "loaded ALT account, but it is not present in map");
                 }
             }
+            info!(%self.operator, recovered = self.alts.len(), "finished ALT recovery");
         }
     }
 

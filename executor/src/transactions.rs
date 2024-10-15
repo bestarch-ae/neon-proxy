@@ -175,13 +175,14 @@ impl TransactionBuilder {
 
     pub async fn recover(&mut self) -> anyhow::Result<Vec<OngoingTransaction>> {
         let mut output = Vec::new();
-        let holders = self.holder_mgr.recover().await?;
+        let holders = self.holder_mgr.recover().await;
 
         for holder in holders {
             let stage = match holder.state {
                 RecoverableHolderState::Pending(tx) => {
                     let Some(chain_id) = get_chain_id(&tx) else {
                         tracing::warn!(
+                            operator = %self.operator.pubkey(),
                             pubkey = %holder.info.pubkey(),
                             tx_hash = %tx.tx_hash(),
                             "cannot determine chain id for recovered holder"
@@ -209,6 +210,7 @@ impl TransactionBuilder {
                 }
                 RecoverableHolderState::State { chain_id: None, .. } => {
                     tracing::warn!(
+                        operator = %self.operator.pubkey(),
                         pubkey = %holder.info.pubkey(),
                         tx_hash = %holder.state.tx_hash(),
                         "cannot determine chain id for recovered holder"
