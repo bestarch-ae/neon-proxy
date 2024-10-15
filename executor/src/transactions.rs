@@ -2,6 +2,7 @@ mod alt;
 mod emulator;
 mod holder;
 mod ongoing;
+mod tx_error;
 
 use std::mem;
 
@@ -34,7 +35,7 @@ use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
 
 use crate::transactions::holder::AcquireHolder;
-use crate::{ExecuteRequest, TxErrorKind};
+use crate::ExecuteRequest;
 
 use self::alt::{AltInfo, AltManager, AltUpdateInfo};
 use self::emulator::{get_chain_id, Emulator, IterInfo};
@@ -42,6 +43,7 @@ use self::holder::{HolderInfo, HolderManager, RecoverableHolderState};
 use self::ongoing::{TxData, TxStage};
 
 pub use self::ongoing::OngoingTransaction;
+pub use self::tx_error::TxErrorKind;
 
 const CU_IX_SIZE: usize = compiled_ix_size(0, 5 /* serialized data length */);
 // Taken from neon-proxy.py
@@ -437,6 +439,17 @@ impl TransactionBuilder {
                     self.start_holder_execution(tx_data.envelope).await?
                 }
                 stage => bail!("unretriable transaction: {stage:?}"),
+            },
+            TxErrorKind::AltFail => match tx.disassemble() {
+                TxStage::AltFill {
+                    info,
+                    tx_data,
+                    holder,
+                } => {
+                    let (info, ix) = self.alt_mgr.recreate_alt(info).await?;
+                    TxStage::alt_fill(info, tx_data, holder).ongoing(&[ix], &self.pubkey())
+                }
+                stage => unreachable!("only alt stages can fail with AltFail: {stage:?}"),
             },
         };
 

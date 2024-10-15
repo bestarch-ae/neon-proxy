@@ -328,6 +328,10 @@ impl OngoingTransaction {
         self.stage
     }
 
+    pub(super) fn is_alt(&self) -> bool {
+        matches!(self.stage, TxStage::AltFill { .. })
+    }
+
     fn rebuild_message(mut self) -> anyhow::Result<Self> {
         if let Some(alt) = self.alt.take() {
             self.stage.ongoing_alt(&self.instructions, &self.payer, alt)
