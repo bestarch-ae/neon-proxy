@@ -1,6 +1,7 @@
 use anyhow::Context;
 use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::proc_macros::rpc;
+use jsonrpsee::types::error::{INVALID_PARAMS_CODE, INVALID_PARAMS_MSG};
 use jsonrpsee::types::{ErrorCode, ErrorObjectOwned};
 use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, TxKind, B256, B64, U256, U64};
 use rpc_api::servers::EthApiServer;
@@ -262,11 +263,10 @@ impl EthApiServer for EthApiImpl {
     async fn balance(&self, address: Address, block_number: Option<BlockId>) -> RpcResult<U256> {
         use common::evm_loader::types::Address;
 
-        let tag = if let Some(block_number) = block_number {
-            Some(self.get_tag_by_block_id(block_number).await?)
-        } else {
-            None
+        let Some(block_number) = block_number else {
+            return Err(invalid_params("Missing block number"));
         };
+        let tag = Some(self.get_tag_by_block_id(block_number).await?);
 
         let balance_address = BalanceAddress {
             address: Address::from(<[u8; 20]>::from(address.0)),
@@ -631,6 +631,24 @@ impl NeonFilterApiServer for EthApiImpl {
         let logs = logs.into_iter().map(crate::convert::to_neon_log).collect();
         Ok(logs)
     }
+}
+
+pub fn invalid_params(msg: impl Into<String>) -> ErrorObjectOwned {
+    jsonrpsee_error(INVALID_PARAMS_CODE, INVALID_PARAMS_MSG, msg)
+}
+
+fn jsonrpsee_error(
+    code: i32,
+    default_msg: &'static str,
+    msg: impl Into<String>,
+) -> ErrorObjectOwned {
+    let msg = msg.into();
+    let msg = if msg.is_empty() {
+        default_msg.into()
+    } else {
+        msg
+    };
+    ErrorObjectOwned::owned::<()>(code, msg, None)
 }
 
 #[async_trait]
