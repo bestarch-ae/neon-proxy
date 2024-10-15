@@ -579,7 +579,7 @@ impl EthApiServer for EthApiImpl {
         tracing::info!(%bytes, "sendRawTransaction");
         let execute_request = ExecuteRequest::from_bytes(&bytes, self.chain_id)
             .inspect_err(|error| tracing::warn!(%bytes, %error, "could not decode transaction"))
-            .map_err(|_| invalid_params(""))?;
+            .map_err(|_| invalid_params("wrong transaction format"))?;
         self.send_transaction(execute_request)
             .await
             .map_err(Into::into)
