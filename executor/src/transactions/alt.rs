@@ -203,6 +203,24 @@ impl AltManager {
         }
     }
 
+    pub async fn recreate_alt(
+        &self,
+        info: AltUpdateInfo,
+    ) -> anyhow::Result<(AltUpdateInfo, Instruction)> {
+        let account_raw = self.solana_api.get_account(&info.pubkey).await;
+        let account_data = account_raw.as_ref().ok().and_then(Option::as_ref);
+        let account = account_data.map(|acc| state::AddressLookupTable::deserialize(&acc.data));
+        warn!(%self.operator, key = %info.pubkey, ?account, "recreating ALT");
+        if let Some((_key, old)) = self.alts.remove(&info.pubkey) {
+            let accounts = old.accounts.into_iter().chain(info.accounts);
+            self.create_new_alt(accounts).await
+        } else {
+            // This should be unreachable since we lock semaphore on update.
+            // If this error occurs the logic is invalid.
+            bail!("missing ALT ({}) for recreation", info.pubkey);
+        }
+    }
+
     async fn create_new_alt<I>(&self, accounts: I) -> anyhow::Result<(AltUpdateInfo, Instruction)>
     where
         I: IntoIterator<Item = Pubkey>,
