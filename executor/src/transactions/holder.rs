@@ -14,6 +14,7 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use async_channel::TrySendError;
 use reth_primitives::B256;
+use tracing::{error, info};
 
 use common::evm_loader::account;
 use common::evm_loader::account::Holder;
@@ -189,33 +190,35 @@ impl HolderManager {
         }
     }
 
-    pub async fn recover(&mut self) -> anyhow::Result<Vec<HolderToFinalize>> {
+    pub async fn recover(&mut self) -> Vec<HolderToFinalize> {
         let mut output = Vec::new();
         let mut idx = self.counter.fetch_add(1, SeqCst);
         while idx < self.max_holders {
-            match self
-                .try_recover_holder(idx)
-                .await
-                .inspect_err(|error| tracing::error!(idx, ?error, "could not recover holder"))?
-            {
-                None => {
-                    tracing::debug!(idx, "stopping holder recovery");
+            match self.try_recover_holder(idx).await {
+                Ok(None) => {
                     self.counter.store(idx, SeqCst);
                     break;
                 }
-                Some(recovered_holder) => {
-                    tracing::debug!(?recovered_holder, "discovered holder");
+                Ok(Some(recovered_holder)) => {
+                    info!(%self.operator, ?recovered_holder, "discovered holder");
                     let info = self.attach_info(recovered_holder.meta, None);
                     match recovered_holder.state.recoverable() {
                         None => drop(info),
                         Some(state) => output.push(HolderToFinalize { info, state }),
                     }
                 }
+                Err(error) => error!(%self.operator, idx, ?error, "could not recover holder"),
             }
             idx = self.counter.fetch_add(1, SeqCst);
         }
+        info!(
+            %self.operator,
+            counter = idx,
+            recovered = self.receiver.len(),
+            "finished holder recovery"
+        );
 
-        Ok(output)
+        output
     }
 
     async fn try_recover_holder(&self, idx: u8) -> anyhow::Result<Option<RecoveredHolder>> {

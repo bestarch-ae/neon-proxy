@@ -28,6 +28,7 @@ use common::solana_transaction_status::TransactionStatus;
 use neon_api::NeonApi;
 use solana_api::solana_api::{ClientError, ClientErrorKind, SolanaApi};
 use solana_api::solana_rpc_client_api::{request, response};
+use tracing::info;
 
 use self::transactions::{OngoingTransaction, TransactionBuilder};
 
@@ -217,6 +218,7 @@ impl Executor {
         config: transactions::Config,
         init_balances: bool,
     ) -> anyhow::Result<Self> {
+        info!(operator = %config.operator.pubkey(), "started executor initialization");
         let notify = Notify::new();
 
         let program_id = config.program_id;
@@ -247,6 +249,7 @@ impl Executor {
             this.sign_and_send_transaction(tx, None).await?;
         }
 
+        info!(operator = %this.builder.pubkey(), "finished executor initialization");
         Ok(this)
     }
 
@@ -316,6 +319,7 @@ impl Executor {
     async fn run(self: Arc<Self>) -> anyhow::Result<()> {
         const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
+        info!(operator = %self.builder.pubkey(), "started executor task");
         let mut signatures = Vec::new();
         loop {
             if self.pending_transactions.is_empty() {
