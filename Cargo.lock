@@ -4890,11 +4890,28 @@ dependencies = [
  "alloy-signer-wallet",
  "anyhow",
  "async-trait",
- "clap 4.5.4",
  "reth-primitives",
+ "solana-sdk",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "operator-pool"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap 4.5.4",
+ "db",
+ "executor",
+ "neon-api",
+ "operator",
+ "reth-primitives",
+ "solana-api",
  "solana-cli-config",
  "solana-sdk",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 
@@ -5410,6 +5427,7 @@ dependencies = [
  "neon-api",
  "neon-proxy-common",
  "operator",
+ "operator-pool",
  "reth-primitives",
  "reth-rpc-api",
  "reth-rpc-types",

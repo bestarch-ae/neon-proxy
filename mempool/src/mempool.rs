@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
 
-use executor::{ExecuteRequest, ExecutorTrait};
+use executor::{Execute, ExecuteRequest};
 use neon_api::NeonApi;
 
 use crate::error::MempoolError;
@@ -127,7 +127,7 @@ pub enum Command {
     GetTxHash(Address, TxNonce, oneshot::Sender<Option<EthTxHash>>),
 }
 
-pub struct Mempool<E: ExecutorTrait, G: GasPricesTrait> {
+pub struct Mempool<E: Execute, G: GasPricesTrait> {
     config: Config,
     executor: Arc<E>,
     txs: Arc<DashMap<EthTxHash, TxRecord>>,
@@ -136,7 +136,7 @@ pub struct Mempool<E: ExecutorTrait, G: GasPricesTrait> {
     gas_prices: G,
 }
 
-impl<E: ExecutorTrait, G: GasPricesTrait> Mempool<E, G> {
+impl<E: Execute, G: GasPricesTrait> Mempool<E, G> {
     pub fn new(config: Config, gas_prices: G, executor: Arc<E>, neon_api: NeonApi) -> Self {
         Self {
             config,
