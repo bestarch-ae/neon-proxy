@@ -102,7 +102,7 @@ impl ExecuteResult {
     }
 }
 
-pub trait ExecutorTrait: Send + Sync + 'static {
+pub trait Execute: Send + Sync + 'static {
     fn handle_transaction(
         &self,
         tx: ExecuteRequest,
@@ -442,7 +442,7 @@ impl Executor {
     }
 }
 
-impl ExecutorTrait for Executor {
+impl Execute for Executor {
     async fn handle_transaction(
         &self,
         tx: ExecuteRequest,

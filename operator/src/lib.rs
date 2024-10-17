@@ -164,7 +164,7 @@ impl OperatorPool {
     }
 }
 
-impl executor::ExecutorTrait for OperatorPool {
+impl executor::Execute for OperatorPool {
     fn handle_transaction(
         &self,
         tx: executor::ExecuteRequest,
