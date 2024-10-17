@@ -25,3 +25,4 @@ reth-primitives = { workspace = true, optional = true }
 
 evm-loader.workspace = true
 neon-lib.workspace = true
+serde = { version = "1.0.208", features = ["derive"] }

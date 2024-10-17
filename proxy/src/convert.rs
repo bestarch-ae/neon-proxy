@@ -1,6 +1,11 @@
 use anyhow::{anyhow, Context, Error};
+use common::evm_loader::types::{Address as NeonAddress, TransactionPayload};
+use common::solana_sdk::hash::Hash;
+use common::solana_sdk::signature::Signature;
+use common::types::{EventKind, EventLog, NeonTxInfo, SolanaBlock};
 use db::{RichLog, RichLogBy};
 use hex_literal::hex;
+use jsonrpsee::core::Serialize;
 use reth_primitives::revm_primitives::LogData;
 use reth_primitives::trie::EMPTY_ROOT_HASH;
 use reth_primitives::{Address, Bloom, Bytes, Log as PrimitiveLog, B256, B64, U256};
@@ -10,15 +15,30 @@ use rpc_api_types::{
     FilterBlockOption, FilterSet, Header, Log, Receipt, ReceiptWithBloom, Transaction,
     TransactionReceipt, ValueOrArray, WithOtherFields,
 };
-
-use common::evm_loader::types::{Address as NeonAddress, TransactionPayload};
-use common::solana_sdk::hash::Hash;
-use common::types::{EventLog, NeonTxInfo, SolanaBlock};
+use serde_with::{serde_as, DisplayFromStr};
 
 pub type NeonTransactionReceipt =
     WithOtherFields<TransactionReceipt<AnyReceiptEnvelope<Log<NeonLogData>>>>;
 pub type NeonLogData = WithOtherFields<LogData>;
-pub type NeonLog = Log<NeonLogData>;
+pub type EthNeonLog = Log<NeonLogData>;
+
+#[serde_as]
+#[derive(Serialize, Debug, Clone)]
+pub struct NeonLog {
+    #[serde(flatten)]
+    pub log: Log,
+    pub removed: bool,
+    #[serde_as(as = "DisplayFromStr")]
+    pub solana_transaction_signature: Signature,
+    pub solana_instruction_index: u64,
+    pub solana_inner_instruction_index: Option<u64>,
+    pub solana_address: Option<Address>,
+    pub neon_event_type: EventKind,
+    pub neon_event_level: u64,
+    pub neon_event_order: u64,
+    pub neon_is_hidden: bool,
+    pub neon_is_reverted: bool,
+}
 
 pub fn to_neon_receipt(rec: AnyTransactionReceipt) -> NeonTransactionReceipt {
     let WithOtherFields { inner, other } = rec;
@@ -34,7 +54,7 @@ fn to_neon_envelope(env: AnyReceiptEnvelope<Log>) -> AnyReceiptEnvelope<Log<Neon
         .receipt
         .logs
         .into_iter()
-        .map(to_neon_log)
+        .map(to_eth_neon_log)
         .collect();
     let receipt = Receipt {
         status: env.inner.receipt.status,
@@ -50,7 +70,7 @@ fn to_neon_envelope(env: AnyReceiptEnvelope<Log>) -> AnyReceiptEnvelope<Log<Neon
     }
 }
 
-pub fn to_neon_log(log: Log) -> Log<NeonLogData> {
+pub fn to_eth_neon_log(log: Log) -> EthNeonLog {
     Log {
         inner: to_neon_log_inner(log.inner),
         transaction_index: log.transaction_index,
@@ -316,8 +336,8 @@ fn sol_blockhash_into_hex(hash: Hash) -> B256 {
     hash.to_bytes().into()
 }
 
-pub fn convert_rich_log(log: RichLog) -> Result<Log, Error> {
-    Ok(Log {
+pub fn convert_rich_log(log: RichLog) -> Result<NeonLog, Error> {
+    let inner_log = Log {
         inner: neon_event_to_log(&log.event),
         transaction_index: Some(log.tx_idx),
         block_hash: Some(sol_blockhash_into_hex(log.blockhash)),
@@ -326,6 +346,19 @@ pub fn convert_rich_log(log: RichLog) -> Result<Log, Error> {
         transaction_hash: Some(B256::try_from(log.tx_hash.as_slice()).context("transaction hash")?),
         log_index: Some(log.event.blk_log_idx),
         removed: false,
+    };
+    Ok(NeonLog {
+        log: inner_log,
+        removed: false,
+        solana_transaction_signature: log.sol_signature,
+        solana_instruction_index: log.sol_ix_idx,
+        solana_inner_instruction_index: Some(log.sol_ix_inner_idx),
+        solana_address: None, //log.event.address,
+        neon_event_type: log.event.event_type,
+        neon_event_level: log.event.level,
+        neon_event_order: log.event.order,
+        neon_is_hidden: false,
+        neon_is_reverted: false,
     })
 }
 

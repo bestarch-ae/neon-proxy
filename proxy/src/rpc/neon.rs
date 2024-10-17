@@ -5,13 +5,11 @@ use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::types::{ErrorCode, ErrorObjectOwned};
 use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, B256, U256, U64};
-use rpc_api_types::{Filter, Log, Transaction};
+use rpc_api_types::{Filter, Transaction};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
+// use evm_loader::types::{Address as NeonAddress};
 
-use crate::convert::neon_to_eth;
-use crate::convert::NeonTransactionReceipt;
-use crate::rpc::EthApiImpl;
 use common::convert::{ToNeon, ToReth};
 use common::neon_lib::commands::emulate::{EmulateResponse, SolanaAccount};
 use common::neon_lib::commands::get_balance::BalanceStatus;
@@ -20,7 +18,9 @@ use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
 use mempool::GasPriceModel;
 
+use crate::convert::{neon_to_eth, NeonLog, NeonTransactionReceipt};
 use crate::error::{unimplemented, Error};
+use crate::rpc::EthApiImpl;
 
 #[serde_as]
 #[derive(Serialize, Clone)]
@@ -73,24 +73,6 @@ impl From<Vec<Signature>> for SolanaByNeonResponse {
     fn from(value: Vec<Signature>) -> Self {
         SolanaByNeonResponse::Signatures(SignatureList { inner: value })
     }
-}
-
-#[serde_as]
-#[derive(Serialize, Debug, Clone)]
-pub struct NeonLog {
-    #[serde(flatten)]
-    log: Log,
-    removed: bool,
-    #[serde_as(as = "DisplayFromStr")]
-    solana_transaction_signature: Signature,
-    solana_instruction_index: u32,
-    solana_inner_instruction_index: Option<u32>,
-    solana_address: Option<()>,
-    neon_event_type: String,
-    neon_event_level: u32,
-    neon_event_order: u32,
-    neon_is_hidden: bool,
-    neon_is_reverted: bool,
 }
 
 #[serde_as]
@@ -404,25 +386,7 @@ impl NeonCustomApiServer for EthApiImpl {
         use crate::convert::convert_filters;
 
         let filters = convert_filters(filter).map_err(Error::from)?;
-        // TODO: get more data from logs
-        let logs = self
-            .get_logs(filters)
-            .await?
-            .into_iter()
-            .map(|log| NeonLog {
-                log,
-                removed: false,
-                solana_transaction_signature: Signature::default(),
-                solana_instruction_index: 0,
-                solana_inner_instruction_index: None,
-                solana_address: None,
-                neon_event_type: "".to_string(),
-                neon_event_level: 0,
-                neon_event_order: 0,
-                neon_is_hidden: false,
-                neon_is_reverted: false,
-            })
-            .collect();
+        let logs = self.get_logs(filters).await?;
         Ok(logs)
     }
 
