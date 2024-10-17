@@ -1,0 +1,23 @@
+[package]
+name = "operator-pool"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+db = { path = '../db' }
+executor = { path = "../executor" }
+neon-api = { path = '../neon-api' }
+operator = { path = "../operator" }
+solana-api = { path = '../solana-api' }
+
+anyhow.workspace = true
+clap.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+solana-sdk.workspace = true
+
+reth-primitives.workspace = true
+
+solana-cli-config = "1.18"

@@ -12,7 +12,7 @@ use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
 use jsonrpsee::server::Server;
 use jsonrpsee::RpcModule;
-use operator::OperatorPool;
+use operator_pool::OperatorPool;
 use rpc_api::{EthApiServer, EthFilterApiServer, NetApiServer, Web3ApiServer};
 use tower::Service;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
@@ -130,7 +130,7 @@ struct Args {
     executor: executor::Config,
 
     #[group(flatten)]
-    operator: operator::Config,
+    operator: operator_pool::Config,
 
     #[group(flatten)]
     gas_prices_calculator_config: GasPriceCalculatorConfig,

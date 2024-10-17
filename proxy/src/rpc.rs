@@ -17,7 +17,7 @@ use db::WithBlockhash;
 use executor::ExecuteRequest;
 use mempool::{GasPrices, Mempool, PreFlightValidator};
 use neon_api::NeonApi;
-use operator::OperatorPool;
+use operator_pool::OperatorPool;
 
 use crate::convert::build_block;
 use crate::convert::{convert_rich_log, LogFilters};
