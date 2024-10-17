@@ -6,7 +6,6 @@ use futures_util::{StreamExt, TryStreamExt};
 use operator::Operator;
 use reth_primitives::Address;
 use reth_primitives::{BlockId, BlockNumberOrTag, B256};
-use rpc_api_types::Log;
 use rpc_api_types::RichBlock;
 use rpc_api_types::{Filter, FilterBlockOption};
 
@@ -20,7 +19,7 @@ use neon_api::NeonApi;
 use operator::Operators;
 
 use crate::convert::build_block;
-use crate::convert::{convert_rich_log, LogFilters};
+use crate::convert::{convert_rich_log, LogFilters, NeonLog};
 use crate::error::Error;
 pub use crate::rpc::eth::{NeonEthApiServer, NeonFilterApiServer};
 pub use crate::rpc::neon::NeonCustomApiServer;
@@ -152,7 +151,7 @@ impl EthApiImpl {
         Ok(tx)
     }
 
-    async fn get_logs(&self, filters: LogFilters) -> Result<Vec<Log>, Error> {
+    async fn get_logs(&self, filters: LogFilters) -> Result<Vec<NeonLog>, Error> {
         self.transactions
             .fetch_rich_logs(
                 filters.block,
