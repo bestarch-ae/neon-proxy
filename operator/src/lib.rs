@@ -35,12 +35,12 @@ pub struct Config {
     pub operator_keypair_prefix: Option<OsString>,
 }
 
-#[derive(Debug, Clone)]
-pub struct Operators {
-    map: Arc<HashMap<Address, Arc<Operator>>>,
+#[derive(Debug)]
+pub struct OperatorPool {
+    map: HashMap<Address, Operator>,
 }
 
-impl Operators {
+impl OperatorPool {
     pub fn from_config(config: Config) -> anyhow::Result<Self> {
         Self::load_from_path(
             config.operator_keypair_path,
@@ -84,22 +84,19 @@ impl Operators {
             {
                 let operator = ok!(Operator::read_from_file(entry.path()));
                 tracing::info!(sol = %operator.pubkey(), eth = %operator.address(), "loaded key");
-                map.insert(operator.address(), Arc::new(operator));
+                map.insert(operator.address(), operator);
             }
         }
 
-        Ok(Self { map: Arc::new(map) })
+        Ok(Self { map })
     }
 
-    pub fn get(&self, address: &Address) -> Option<Arc<Operator>> {
-        self.map.get(address).cloned()
+    pub fn get(&self, address: &Address) -> Option<&Operator> {
+        self.map.get(address)
     }
 
-    pub fn try_get(&self, address: &Address) -> Result<Arc<Operator>, Error> {
-        self.map
-            .get(address)
-            .cloned()
-            .ok_or(Error::UnknownOperator(*address))
+    pub fn try_get(&self, address: &Address) -> Result<&Operator, Error> {
+        self.get(address).ok_or(Error::UnknownOperator(*address))
     }
 
     pub fn addresses(&self) -> impl Iterator<Item = &'_ Address> + '_ {

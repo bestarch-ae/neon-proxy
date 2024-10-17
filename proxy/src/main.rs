@@ -12,7 +12,7 @@ use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
 use jsonrpsee::server::Server;
 use jsonrpsee::RpcModule;
-use operator::Operators;
+use operator::OperatorPool;
 use rpc_api::{EthApiServer, EthFilterApiServer, NetApiServer, Web3ApiServer};
 use tower::Service;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
@@ -224,7 +224,7 @@ async fn main() {
         clickhouse_password: opts.neon_db_clickhouse_password,
     };
 
-    let operator = Operators::from_config(opts.operator).unwrap();
+    let operator = OperatorPool::from_config(opts.operator).unwrap();
 
     let neon_api = NeonApi::new(
         opts.solana_url.clone(),

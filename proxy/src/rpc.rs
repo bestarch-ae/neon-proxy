@@ -17,7 +17,7 @@ use db::WithBlockhash;
 use executor::{ExecuteRequest, Executor};
 use mempool::{GasPrices, Mempool, PreFlightValidator};
 use neon_api::NeonApi;
-use operator::Operators;
+use operator::OperatorPool;
 
 use crate::convert::build_block;
 use crate::convert::{convert_rich_log, LogFilters};
@@ -38,7 +38,7 @@ pub struct EthApiImpl {
     chain_id: u64,
     mempool: Option<Arc<Mempool<Executor, GasPrices>>>,
     mp_gas_prices: GasPrices,
-    operators: Operators,
+    operators: Arc<OperatorPool>,
     lib_version: String,
 }
 
@@ -49,11 +49,12 @@ impl EthApiImpl {
         chain_id: u64,
         mempool: Option<Arc<Mempool<Executor, GasPrices>>>,
         mp_gas_prices: GasPrices,
-        operators: Operators,
+        operators: OperatorPool,
         lib_version: String,
     ) -> Self {
         let transactions = ::db::TransactionRepo::new(pool.clone());
         let blocks = ::db::BlockRepo::new(pool.clone());
+        let operators = Arc::new(operators);
 
         Self {
             transactions,
@@ -190,7 +191,7 @@ impl EthApiImpl {
         }
     }
 
-    fn get_operator(&self, address: &Address) -> Result<Arc<Operator>, Error> {
+    fn get_operator(&self, address: &Address) -> Result<&Operator, Error> {
         self.operators.try_get(address).map_err(Into::into)
     }
 
