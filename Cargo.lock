@@ -4891,10 +4891,15 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap 4.5.4",
+ "db",
+ "executor",
+ "neon-api",
  "reth-primitives",
+ "solana-api",
  "solana-cli-config",
  "solana-sdk",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 

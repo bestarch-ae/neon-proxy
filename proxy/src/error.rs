@@ -79,6 +79,6 @@ fn operator_into_jsonrpsee(error: operator::Error) -> ErrorObjectOwned {
             call_execution_failed(format!("Unknown sender {address}"))
         }
         operator::Error::Signature(_) => call_execution_failed("Error signing message"),
-        operator::Error::Load(_) => internal_error(""),
+        operator::Error::Load(_) | operator::Error::Executor(_) => internal_error(""),
     }
 }

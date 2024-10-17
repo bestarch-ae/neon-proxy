@@ -9,4 +9,6 @@ pub enum Error {
     Signature(#[from] alloy_signer::Error),
     #[error("load error: {0}")]
     Load(anyhow::Error),
+    #[error("executor error: {0}")]
+    Executor(anyhow::Error),
 }

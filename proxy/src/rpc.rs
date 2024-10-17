@@ -14,7 +14,7 @@ use sqlx::PgPool;
 
 use common::types::NeonTxInfo;
 use db::WithBlockhash;
-use executor::{ExecuteRequest, Executor};
+use executor::ExecuteRequest;
 use mempool::{GasPrices, Mempool, PreFlightValidator};
 use neon_api::NeonApi;
 use operator::OperatorPool;
@@ -36,7 +36,7 @@ pub struct EthApiImpl {
     blocks: ::db::BlockRepo,
     neon_api: NeonApi,
     chain_id: u64,
-    mempool: Option<Arc<Mempool<Executor, GasPrices>>>,
+    mempool: Option<Arc<Mempool<OperatorPool, GasPrices>>>,
     mp_gas_prices: GasPrices,
     operators: Arc<OperatorPool>,
     lib_version: String,
@@ -47,14 +47,13 @@ impl EthApiImpl {
         pool: PgPool,
         neon_api: NeonApi,
         chain_id: u64,
-        mempool: Option<Arc<Mempool<Executor, GasPrices>>>,
+        mempool: Option<Arc<Mempool<OperatorPool, GasPrices>>>,
         mp_gas_prices: GasPrices,
-        operators: OperatorPool,
+        operators: Arc<OperatorPool>,
         lib_version: String,
     ) -> Self {
         let transactions = ::db::TransactionRepo::new(pool.clone());
         let blocks = ::db::BlockRepo::new(pool.clone());
-        let operators = Arc::new(operators);
 
         Self {
             transactions,
