@@ -12,7 +12,7 @@ use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
 use jsonrpsee::server::Server;
 use jsonrpsee::RpcModule;
-use operator::Operators;
+use operator_pool::OperatorPool;
 use rpc_api::{EthApiServer, EthFilterApiServer, NetApiServer, Web3ApiServer};
 use tower::Service;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
@@ -25,7 +25,6 @@ use common::neon_lib;
 use common::neon_lib::types::ChDbConfig;
 use common::solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use common::solana_sdk::pubkey::Pubkey;
-use executor::Executor;
 use mempool::{GasPriceCalculatorConfig, GasPrices, GasPricesConfig, Mempool, MempoolConfig};
 use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
@@ -131,7 +130,7 @@ struct Args {
     executor: executor::Config,
 
     #[group(flatten)]
-    operator: operator::Config,
+    operator: operator_pool::Config,
 
     #[group(flatten)]
     gas_prices_calculator_config: GasPriceCalculatorConfig,
@@ -224,8 +223,6 @@ async fn main() {
         clickhouse_password: opts.neon_db_clickhouse_password,
     };
 
-    let operator = Operators::from_config(opts.operator).unwrap();
-
     let neon_api = NeonApi::new(
         opts.solana_url.clone(),
         opts.neon_pubkey,
@@ -236,6 +233,17 @@ async fn main() {
             commitment: opts.simulation_commitment,
         }),
     );
+    let operators = OperatorPool::from_config(
+        opts.operator,
+        opts.neon_pubkey,
+        neon_api.clone(),
+        SolanaApi::new(opts.solana_url.clone(), false),
+        opts.executor,
+        Some(pool.clone()),
+    )
+    .await
+    .unwrap();
+    let operators = Arc::new(operators);
 
     let config = neon_api
         .get_config()
@@ -302,40 +310,22 @@ async fn main() {
     )
     .expect("failed to create gas prices");
 
-    let executor = if opts.executor.operator_keypair.is_some() {
-        let (executor, executor_task) = Executor::initialize_and_start(
-            neon_api.clone(),
-            SolanaApi::new(opts.solana_url, false),
-            opts.neon_pubkey,
-            opts.executor,
-            Some(pool.clone()),
-        )
-        .await
-        .expect("could not initialize executor");
-        tokio::spawn(executor_task);
-        Some(executor)
-    } else {
-        None
-    };
-
-    let mempool = if let Some(executor) = &executor {
-        // todo: we should have a single executor; and we shouldn't allow direct access to it
-        //  bypassing mempool
-        let executor = executor.clone();
+    let mempool = if !operators.is_empty() {
         let mp_config = MempoolConfig {
             capacity: opts.mp_capacity,
             capacity_high_watermark: opts.mp_capacity_high_watermark,
             eviction_timeout_sec: opts.mp_eviction_timeout_sec,
         };
-        let mut mempool = Mempool::<Executor, GasPrices>::new(
+        let mut mempool = Mempool::<_, GasPrices>::new(
             mp_config,
             mp_gas_prices.clone(),
-            executor,
+            operators.clone(),
             neon_api.clone(),
         );
         mempool.start().await.expect("failed to start mempool");
         Some(Arc::new(mempool))
     } else {
+        tracing::warn!("No operator keys provided, Mempool will be disabled");
         None
     };
 
@@ -345,7 +335,7 @@ async fn main() {
         default_chain_id,
         mempool,
         mp_gas_prices.clone(),
-        operator,
+        operators,
         neon_lib_version.unwrap_or("UNKNOWN".to_string()),
     );
     let mut other_tokens = HashSet::new();

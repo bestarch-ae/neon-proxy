@@ -15,7 +15,7 @@ use tokio_util::time::delay_queue::Key as DelayQueueKey;
 use tokio_util::time::DelayQueue;
 
 use common::neon_lib::types::BalanceAddress;
-use executor::ExecutorTrait;
+use executor::Execute;
 use neon_api::{NeonApi, NeonApiError};
 
 use crate::mempool::{ChainPoolContent, Command, EthTxHash, GasPrice, TxRecord};
@@ -68,7 +68,7 @@ enum HeartBeatTaskKind {
     Evict,
 }
 
-pub struct ChainPool<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> {
+pub struct ChainPool<E: Execute, G: GasPricesTrait, C: GetTxCountTrait> {
     capacity: usize,
     capacity_high_watermark: usize,
     chain_id: ChainId,
@@ -95,7 +95,7 @@ pub struct ChainPool<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> {
     eviction_timeout_sec: u64,
 }
 
-impl<E: ExecutorTrait, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C> {
+impl<E: Execute, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C> {
     fn new(
         config: Config,
         gas_prices: G,
@@ -731,7 +731,7 @@ mod tests {
 
     struct MockExecutor;
 
-    impl ExecutorTrait for MockExecutor {
+    impl Execute for MockExecutor {
         async fn handle_transaction(
             &self,
             tx_request: ExecuteRequest,

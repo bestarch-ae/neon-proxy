@@ -19,6 +19,8 @@ pub enum Error {
     Preflight(#[from] mempool::PreFlightError),
     #[error("operator error: {0}")]
     Operator(#[from] operator::Error),
+    #[error("operator error: {0}")]
+    OperatorPool(#[from] operator_pool::Error),
     #[error("method not implemented")]
     Unimplemented,
     #[error("other error: {0}")]
@@ -34,6 +36,7 @@ impl From<Error> for ErrorObjectOwned {
             Error::Mempool(error) => error.into(),
             Error::Preflight(error) => error.into(),
             Error::Operator(error) => operator_into_jsonrpsee(error),
+            Error::OperatorPool(error) => operator_pool_into_jsonrpsee(error),
             Error::Unimplemented => unimplemented::<()>().unwrap_err(),
         }
     }
@@ -75,10 +78,19 @@ fn jsonrpsee_error(
 
 fn operator_into_jsonrpsee(error: operator::Error) -> ErrorObjectOwned {
     match error {
-        operator::Error::UnknownOperator(address) => {
-            call_execution_failed(format!("Unknown sender {address}"))
-        }
         operator::Error::Signature(_) => call_execution_failed("Error signing message"),
         operator::Error::Load(_) => internal_error(""),
+    }
+}
+
+fn operator_pool_into_jsonrpsee(error: operator_pool::Error) -> ErrorObjectOwned {
+    use operator_pool::Error;
+
+    match error {
+        Error::UnknownOperator(address) => {
+            call_execution_failed(format!("Unknown sender {address}"))
+        }
+        Error::Load(_) | Error::Executor(_) => internal_error(""),
+        Error::Operator(error) => operator_into_jsonrpsee(error),
     }
 }

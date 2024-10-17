@@ -45,7 +45,7 @@ use common::solana_sdk::{bpf_loader_upgradeable, system_instruction, system_prog
 use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
 
-use crate::{ExecuteRequest, ExecutorTrait};
+use crate::{Execute, ExecuteRequest};
 
 use self::mock::BanksRpcMock;
 use super::Executor;
