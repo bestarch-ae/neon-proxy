@@ -2,6 +2,7 @@ use std::fmt::{Display, Formatter};
 
 use ethnum::U256;
 use evm_loader::types::{Address, Transaction};
+use serde::Serialize;
 use solana_sdk::clock::UnixTimestamp;
 use solana_sdk::hash::Hash;
 use solana_sdk::message::{v0::LoadedAddresses, AccountKeys};
@@ -10,7 +11,6 @@ use solana_sdk::signature::Signature;
 use solana_sdk::slot_history::Slot;
 use solana_sdk::transaction::{Result as TransactionResult, VersionedTransaction};
 use solana_transaction_status::InnerInstructions;
-
 #[cfg(feature = "reth")]
 pub use tx_envelope_ext::TxEnvelopeExt;
 
@@ -215,7 +215,7 @@ pub struct CanceledNeonTxInfo {
 }
 
 /// Event kinds can be logged to solana transaction logs.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
 #[repr(u32)]
 pub enum EventKind {
     Log = 1,
