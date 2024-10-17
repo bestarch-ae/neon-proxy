@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
-clap.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
@@ -18,4 +17,3 @@ alloy-consensus.workspace = true
 alloy-signer.workspace = true
 alloy-signer-wallet.workspace = true
 alloy-network.workspace = true
-solana-cli-config = "1.18"
