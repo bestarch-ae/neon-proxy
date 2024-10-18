@@ -48,7 +48,7 @@ fn get_lib_version() -> Option<String> {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let opts = Cli::parse();
 
     let format = opts.log_format.unwrap_or_default();
@@ -76,10 +76,7 @@ async fn main() {
         "starting"
     );
 
-    let pool = db::connect(&opts.pg_url)
-        .await
-        .context("connecting to db")
-        .unwrap();
+    let pool = db::connect(&opts.pg_url).await.context("connect to db")?;
     let tracer_db_config = ChDbConfig {
         clickhouse_url: opts.tracer_db.neon_db_clickhouse_urls,
         clickhouse_user: opts.tracer_db.neon_db_clickhouse_user,
@@ -104,21 +101,20 @@ async fn main() {
         solana_api,
         pool.clone(),
     )
-    .await
-    .unwrap();
+    .await?;
     let operators = Arc::new(operators);
 
     let config = neon_api
         .get_config()
         .await
-        .expect("failed to get EVM config");
+        .context("failed to get EVM config")?;
     tracing::info!(?config, "evm config");
     let default_token_name = opts.default_token_name.to_lowercase();
     let default_chain_id = config
         .chains
         .iter()
         .find(|c| c.name == default_token_name)
-        .expect("default chain not found")
+        .context("default chain not found")?
         .id;
     tracing::info!(%default_chain_id, %default_token_name, "default chain");
     let additional_chains = config
@@ -137,19 +133,19 @@ async fn main() {
     );
     let pyth_symbology = if let Some(path) = opts.gas_price.symbology_path.as_ref() {
         tracing::info!(?path, "loading symbology");
-        let raw = std::fs::read_to_string(path).expect("failed to read symbology");
+        let raw = std::fs::read_to_string(path).context("failed to read symbology")?;
         let symbology_raw: HashMap<String, String> =
-            serde_json::from_str(&raw).expect("failed to parse symbology json");
+            serde_json::from_str(&raw).context("failed to parse symbology json")?;
         symbology_raw
             .iter()
             .map(|(k, v)| Pubkey::from_str(v).map(|pubkey| (k.clone(), pubkey)))
             .collect::<Result<HashMap<String, Pubkey>, _>>()
-            .expect("failed to parse symbology")
+            .context("failed to parse symbology")?
     } else if let Some(mapping_addr) = &opts.gas_price.pyth_mapping_addr {
         tracing::info!(%mapping_addr, "loading symbology");
         mempool::pyth_collect_symbology(mapping_addr, &rpc_client)
             .await
-            .expect("failed to collect pyth symbology")
+            .context("failed to collect pyth symbology")?
     } else {
         HashMap::new()
     };
@@ -172,7 +168,7 @@ async fn main() {
         opts.gas_prices_calculator_config,
         chain_token_map,
     )
-    .expect("failed to create gas prices");
+    .context("failed to create gas prices")?;
 
     let mempool = if !operators.is_empty() {
         let mp_config = MempoolConfig {
@@ -186,7 +182,7 @@ async fn main() {
             operators.clone(),
             neon_api.clone(),
         );
-        mempool.start().await.expect("failed to start mempool");
+        mempool.start().await.context("failed to start mempool")?;
         Some(Arc::new(mempool))
     } else {
         tracing::warn!("No operator keys provided, Mempool will be disabled");
@@ -214,7 +210,7 @@ async fn main() {
         other_tokens.insert(token_name.clone());
     }
 
-    let addr: SocketAddr = opts.listen.parse().expect("invalid listen address");
+    let addr: SocketAddr = opts.listen.parse().context("invalid listen address")?;
     let (stop_handle, server_handle) = jsonrpsee::server::stop_channel();
     let svc_builder = Server::builder().to_service_builder();
     let stop_handle2 = stop_handle.clone();
@@ -248,11 +244,12 @@ async fn main() {
 
     tokio::spawn(async move {
         let graceful = server.with_graceful_shutdown(async move { stop_handle.shutdown().await });
-        graceful.await.expect("server error");
+        graceful.await.context("server error")
     });
 
     tracing::info!("Listening on {}", opts.listen);
     server_handle.stopped().await;
+    Ok(())
 }
 
 fn build_module(eth: EthApiImpl) -> RpcModule<()> {
