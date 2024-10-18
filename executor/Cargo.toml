@@ -18,6 +18,13 @@ alloy-consensus.workspace = true
 alloy-eips.workspace = true
 alloy-rlp.workspace = true
 
+solana-sdk.workspace = true
+solana-transaction-status.workspace = true
+
+ethnum.workspace = true
+neon-lib.workspace = true
+evm-loader.workspace = true
+
 anyhow.workspace = true
 clap.workspace = true
 dashmap.workspace = true
@@ -53,7 +60,6 @@ alloy-sol-types.workspace = true
 solana-account-decoder.workspace = true
 solana-client.workspace = true
 solana-program-test.workspace = true
-solana-sdk.workspace = true
 spl-token.workspace = true
 spl-associated-token-account.workspace = true
 tarpc = "0.29.0"
