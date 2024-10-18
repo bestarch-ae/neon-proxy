@@ -119,12 +119,19 @@ fn tx_chain_id(tx: &TxEnvelope) -> Result<Option<ChainId>, MempoolError> {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct ChainPoolContent {
+    pub pending_list: Vec<TxEnvelope>,
+    pub queued_list: Vec<TxEnvelope>,
+}
+
 #[derive(Debug)]
 pub enum Command {
     ScheduleTx(TxRecord, oneshot::Sender<Result<(), MempoolError>>),
     Shutdown,
     GetPendingTxCount(Address, oneshot::Sender<Option<u64>>),
     GetTxHash(Address, TxNonce, oneshot::Sender<Option<EthTxHash>>),
+    GetContent(oneshot::Sender<ChainPoolContent>),
 }
 
 pub struct Mempool<E: ExecutorTrait, G: GasPricesTrait> {
@@ -206,6 +213,17 @@ impl<E: ExecutorTrait, G: GasPricesTrait> Mempool<E, G> {
             tracing::debug!(chain_id, "unknown chain id");
             Err(MempoolError::UnknownChainID)
         }
+    }
+
+    pub async fn get_content(&self, chain_id: ChainId) -> Result<ChainPoolContent, MempoolError> {
+        tracing::debug!(chain_id, "getting content");
+        let Some(tx) = self.chain_pool_txs.get(&chain_id) else {
+            return Err(MempoolError::UnknownChainID);
+        };
+
+        let (cmd_tx, cmd_rx) = oneshot::channel();
+        tx.send(Command::GetContent(cmd_tx)).await.unwrap();
+        Ok(cmd_rx.await.unwrap())
     }
 
     pub async fn shutdown(&self) {
