@@ -26,6 +26,7 @@ thiserror = "1.0.60"
 tokio = "1.38.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "json"] }
+typed-builder = "0.20.0"
 
 # Solana deps
 solana-account-decoder = "1.18"
