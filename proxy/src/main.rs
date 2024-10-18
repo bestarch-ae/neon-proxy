@@ -2,12 +2,11 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::io::IsTerminal;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::Context;
-use clap::{ArgGroup, Parser};
+use clap::Parser;
 use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
 use jsonrpsee::server::Server;
@@ -17,155 +16,22 @@ use rpc_api::{EthApiServer, EthFilterApiServer, NetApiServer, Web3ApiServer};
 use tower::Service;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 
+mod config;
 mod convert;
 mod error;
 mod rpc;
 
 use common::neon_lib;
 use common::neon_lib::types::ChDbConfig;
-use common::solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
+use common::solana_sdk::commitment_config::CommitmentConfig;
 use common::solana_sdk::pubkey::Pubkey;
-use mempool::{GasPriceCalculatorConfig, GasPrices, GasPricesConfig, Mempool, MempoolConfig};
+use mempool::{GasPrices, GasPricesConfig, Mempool, MempoolConfig};
 use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
 use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
+use crate::config::{Args, LogFormat};
 use crate::rpc::{EthApiImpl, NeonCustomApiServer, NeonEthApiServer, NeonFilterApiServer};
-
-#[derive(Debug, Default, Copy, Clone)]
-enum LogFormat {
-    Json,
-    #[default]
-    Plain,
-}
-
-impl FromStr for LogFormat {
-    type Err = std::io::Error;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "json" => Ok(LogFormat::Json),
-            "plain" => Ok(LogFormat::Plain),
-            any => {
-                eprintln!("invalid log format {}, defaulting to plain", any);
-                Ok(LogFormat::Plain)
-            }
-        }
-    }
-}
-
-#[derive(Parser)]
-#[command(group(
-    ArgGroup::new("required_group")
-    .args(&["symbology_path", "const_gas_price", "pyth_mapping_addr"])
-    .required(true)
-))]
-struct Args {
-    #[arg(short, long, default_value = None, value_name = "POSTGRES_URL")]
-    /// Postgres url
-    pg_url: String,
-
-    #[arg(
-        short,
-        long,
-        default_value = "127.0.0.1:8888",
-        value_name = "LISTEN_ADDR"
-    )]
-    listen: String,
-
-    #[arg(
-        value_name = "NEON_PUBKEY",
-        default_value = "eeLSJgWzzxrqKv1UxtRVVH8FX3qCQWUs9QuAjJpETGU"
-    )]
-    /// Neon program pubkey
-    neon_pubkey: Pubkey,
-
-    #[arg(
-        short('c'),
-        long,
-        value_name = "CONFIG_PUBKEY",
-        default_value = "BMp6gEnveANdvSvspESJUrNczuHz1GF5UQKjVLCkAZih"
-    )]
-    neon_config_pubkey: Pubkey,
-
-    #[arg(
-        short('u'),
-        long,
-        default_value = "https://api.mainnet-beta.solana.com",
-        value_name = "URL"
-    )]
-    /// Solana endpoint
-    solana_url: String,
-
-    #[arg(long, value_name = "URL")]
-    /// Pyth solana endpoint (for fetching symbology)
-    /// If not provided, solana_url will be used
-    pyth_solana_url: Option<String>,
-
-    #[arg(short('w'), long, default_value = "wss://api.mainnet-beta.solana.com")]
-    /// Solana websocket endpoint
-    solana_ws_url: String,
-
-    #[arg(long)]
-    /// Pyth mapping address
-    pyth_mapping_addr: Option<Pubkey>,
-
-    #[arg(long, env, value_delimiter = ';')]
-    /// Tracer db urls, comma separated
-    neon_db_clickhouse_urls: Vec<String>,
-
-    #[arg(long, env)]
-    /// Trace db user
-    neon_db_clickhouse_user: Option<String>,
-
-    #[arg(long, env)]
-    /// Trace db password
-    neon_db_clickhouse_password: Option<String>,
-
-    #[arg(long, env, default_value = "245022926")]
-    // Neon chain id
-    chain_id: u64,
-
-    #[group(flatten)]
-    operator: operator_pool::Config,
-
-    #[group(flatten)]
-    gas_prices_calculator_config: GasPriceCalculatorConfig,
-
-    #[arg(long, env, default_value = "SOL")]
-    /// Chain token name
-    chain_token_name: String,
-
-    #[arg(long, env, default_value = "NEON")]
-    /// Default token name
-    default_token_name: String,
-
-    #[arg(long, env)]
-    symbology_path: Option<PathBuf>,
-
-    #[arg(long, env, default_value = "64")]
-    // Max tx account count
-    max_tx_account_count: usize,
-
-    #[arg(long, env, default_value = "finalized")]
-    simulation_commitment: CommitmentLevel,
-
-    #[arg(long)]
-    /// Log format, either json or plain
-    log_format: Option<LogFormat>,
-
-    // todo: pick a default value
-    #[arg(long, env, default_value = "100")]
-    mp_capacity: usize,
-
-    // todo: pick a default value
-    #[arg(long, env, default_value = "0.9")]
-    mp_capacity_high_watermark: f64,
-
-    // todo: pick a default value
-    #[arg(long, env, default_value = "3600")]
-    mp_eviction_timeout_sec: u64,
-}
 
 fn get_lib_version() -> Option<String> {
     let build_info = serde_json::to_string(&neon_lib::build_info::get_build_info()).ok()?;
