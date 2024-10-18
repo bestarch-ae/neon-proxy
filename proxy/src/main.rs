@@ -69,9 +69,9 @@ async fn main() {
 
     tracing::info!(
         neon_pubkey = %opts.neon_pubkey,
-        neon_config = %opts.neon_config_pubkey,
+        neon_config = %opts.neon_api.neon_config_pubkey,
         default_token = opts.default_token_name,
-        simulation_commitment = ?opts.simulation_commitment,
+        simulation_commitment = ?opts.neon_api.simulation_commitment,
         neon_lib_version = ?neon_lib_version,
         "starting"
     );
@@ -90,11 +90,11 @@ async fn main() {
     let neon_api = NeonApi::new(
         opts.solana_url.clone(),
         opts.neon_pubkey,
-        opts.neon_config_pubkey,
+        opts.neon_api.neon_config_pubkey,
         tracer_db_config,
-        opts.max_tx_account_count,
+        opts.neon_api.max_tx_account_count,
         Some(CommitmentConfig {
-            commitment: opts.simulation_commitment,
+            commitment: opts.neon_api.simulation_commitment,
         }),
     );
     let operators = OperatorPool::from_config(

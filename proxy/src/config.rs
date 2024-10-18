@@ -56,14 +56,6 @@ pub struct Cli {
     pub neon_pubkey: Pubkey,
 
     #[arg(
-        short('c'),
-        long,
-        value_name = "CONFIG_PUBKEY",
-        default_value = "BMp6gEnveANdvSvspESJUrNczuHz1GF5UQKjVLCkAZih"
-    )]
-    pub neon_config_pubkey: Pubkey,
-
-    #[arg(
         short('u'),
         long,
         default_value = "https://api.mainnet-beta.solana.com",
@@ -80,16 +72,12 @@ pub struct Cli {
     /// Default token name
     pub default_token_name: String,
 
-    #[arg(long, env, default_value = "64")]
-    // Max tx account count
-    pub max_tx_account_count: usize,
-
-    #[arg(long, env, default_value = "finalized")]
-    pub simulation_commitment: CommitmentLevel,
-
     #[arg(long)]
     /// Log format, either json or plain
     pub log_format: Option<LogFormat>,
+
+    #[group(flatten)]
+    pub neon_api: NeonApi,
 
     #[group(flatten)]
     pub tracer_db: TracerDb,
@@ -105,6 +93,25 @@ pub struct Cli {
 
     #[group(flatten)]
     pub gas_prices_calculator_config: GasPriceCalculatorConfig,
+}
+
+#[derive(Args)]
+#[group(id = "NeonApiConfig")]
+pub struct NeonApi {
+    #[arg(long, env, default_value = "64")]
+    // Max tx account count
+    pub max_tx_account_count: usize,
+
+    #[arg(long, env, default_value = "finalized")]
+    pub simulation_commitment: CommitmentLevel,
+
+    #[arg(
+        short('c'),
+        long,
+        value_name = "CONFIG_PUBKEY",
+        default_value = "BMp6gEnveANdvSvspESJUrNczuHz1GF5UQKjVLCkAZih"
+    )]
+    pub neon_config_pubkey: Pubkey,
 }
 
 #[derive(Args)]
