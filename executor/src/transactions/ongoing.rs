@@ -10,7 +10,7 @@ use common::solana_sdk::hash::Hash;
 use common::solana_sdk::instruction::Instruction;
 use common::solana_sdk::message::{self, legacy, v0, VersionedMessage};
 use common::solana_sdk::pubkey::Pubkey;
-use common::solana_sdk::signature::Keypair;
+use common::solana_sdk::signer::Signer;
 use common::solana_sdk::transaction::VersionedTransaction;
 
 use crate::ExecuteRequest;
@@ -316,7 +316,7 @@ impl OngoingTransaction {
 
     pub fn sign(
         &self,
-        signers: &[&Keypair],
+        signers: &[&impl Signer],
         blockhash: Hash,
     ) -> anyhow::Result<VersionedTransaction> {
         let mut message = self.message.clone();

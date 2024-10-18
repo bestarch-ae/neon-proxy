@@ -20,7 +20,6 @@ use tokio::time::sleep;
 
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
-use common::solana_sdk::signer::Signer;
 use common::solana_sdk::transaction::TransactionError;
 use common::solana_sdk::transaction::VersionedTransaction;
 use common::solana_transaction_status::TransactionStatus;
@@ -156,19 +155,14 @@ impl Executor {
             solana_api,
             pg_pool,
         } = params;
+        tracing::info!(?operator, "building executor");
 
-        let address = operator.address().0 .0.into();
-        let operator = operator.get_sol_keypair();
-
-        tracing::info!(sol_key = %operator.pubkey(), eth_key = %address, "executor operator keys");
-
-        let tx_builder_config = transactions::Config {
-            program_id: neon_pubkey,
-            operator,
-            address,
-            max_holders,
-            pg_pool,
-        };
+        let tx_builder_config = transactions::Config::builder()
+            .program_id(neon_pubkey)
+            .operator(operator)
+            .max_holders(max_holders)
+            .pg_pool(pg_pool)
+            .build();
 
         let this = Self::initialize(
             neon_api,
@@ -188,7 +182,8 @@ impl Executor {
         config: transactions::Config,
         init_balances: bool,
     ) -> anyhow::Result<Self> {
-        info!(operator = %config.operator.pubkey(), "started executor initialization");
+        let operator = config.operator.clone();
+        info!(?operator, "started executor initialization");
         let notify = Notify::new();
 
         let program_id = config.program_id;
@@ -209,7 +204,12 @@ impl Executor {
 
         if init_balances {
             for chain in this.builder.chains().load().deref() {
-                tracing::info!(name = chain.name, id = chain.id, "initializing balance");
+                tracing::info!(
+                    ?operator,
+                    name = chain.name,
+                    id = chain.id,
+                    "initializing balance"
+                );
                 this.init_operator_balance(chain.id).await?;
             }
         }
@@ -219,7 +219,7 @@ impl Executor {
             this.sign_and_send_transaction(tx, None).await?;
         }
 
-        info!(operator = %this.builder.pubkey(), "finished executor initialization");
+        info!(?operator, "finished executor initialization");
         Ok(this)
     }
 
@@ -283,7 +283,7 @@ impl Executor {
             .context("could not request blockhash")?; // TODO: force confirmed
 
         // This will replace bh and clear signatures in case it's a retry
-        tx.sign(&[self.builder.keypair()], blockhash)
+        tx.sign(&[self.builder.operator()], blockhash)
     }
 
     async fn run(self: Arc<Self>) -> anyhow::Result<()> {
