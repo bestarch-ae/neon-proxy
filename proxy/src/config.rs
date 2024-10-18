@@ -72,45 +72,13 @@ pub struct Cli {
     /// Solana endpoint
     pub solana_url: String,
 
-    #[arg(long, value_name = "URL")]
-    /// Pyth solana endpoint (for fetching symbology)
-    /// If not provided, solana_url will be used
-    pub pyth_solana_url: Option<String>,
-
-    #[arg(short('w'), long, default_value = "wss://api.mainnet-beta.solana.com")]
-    /// Solana websocket endpoint
-    pub solana_ws_url: String,
-
-    #[arg(long)]
-    /// Pyth mapping address
-    pub pyth_mapping_addr: Option<Pubkey>,
-
     #[arg(long, env, default_value = "245022926")]
     // Neon chain id
     pub chain_id: u64,
 
-    #[group(flatten)]
-    pub tracer_db: TracerDb,
-
-    #[group(flatten)]
-    pub operator: operator_pool::Config,
-
-    #[group(flatten)]
-    pub mempool: Mempool,
-
-    #[group(flatten)]
-    pub gas_prices_calculator_config: GasPriceCalculatorConfig,
-
-    #[arg(long, env, default_value = "SOL")]
-    /// Chain token name
-    pub chain_token_name: String,
-
     #[arg(long, env, default_value = "NEON")]
     /// Default token name
     pub default_token_name: String,
-
-    #[arg(long, env)]
-    pub symbology_path: Option<PathBuf>,
 
     #[arg(long, env, default_value = "64")]
     // Max tx account count
@@ -122,6 +90,21 @@ pub struct Cli {
     #[arg(long)]
     /// Log format, either json or plain
     pub log_format: Option<LogFormat>,
+
+    #[group(flatten)]
+    pub tracer_db: TracerDb,
+
+    #[group(flatten)]
+    pub operator: operator_pool::Config,
+
+    #[group(flatten)]
+    pub mempool: Mempool,
+
+    #[group(flatten)]
+    pub gas_price: GasPrice,
+
+    #[group(flatten)]
+    pub gas_prices_calculator_config: GasPriceCalculatorConfig,
 }
 
 #[derive(Args)]
@@ -154,4 +137,28 @@ pub struct TracerDb {
     #[arg(long, env)]
     /// Trace db password
     pub neon_db_clickhouse_password: Option<String>,
+}
+
+#[derive(Args)]
+#[group(id = "GasPriceConfig")]
+pub struct GasPrice {
+    #[arg(long, value_name = "URL")]
+    /// Pyth solana endpoint (for fetching symbology)
+    /// If not provided, solana_url will be used
+    pub pyth_solana_url: Option<String>,
+
+    #[arg(short('w'), long, default_value = "wss://api.mainnet-beta.solana.com")]
+    /// Solana websocket endpoint
+    pub solana_ws_url: String,
+
+    #[arg(long)]
+    /// Pyth mapping address
+    pub pyth_mapping_addr: Option<Pubkey>,
+
+    #[arg(long, env)]
+    pub symbology_path: Option<PathBuf>,
+
+    #[arg(long, env, default_value = "SOL")]
+    /// Chain token name
+    pub chain_token_name: String,
 }

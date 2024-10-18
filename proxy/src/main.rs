@@ -130,11 +130,12 @@ async fn main() {
     tracing::info!(?additional_chains, "additional chains");
 
     let rpc_client = RpcClient::new(
-        opts.pyth_solana_url
+        opts.gas_price
+            .pyth_solana_url
             .unwrap_or(opts.solana_url.clone())
             .clone(),
     );
-    let pyth_symbology = if let Some(path) = opts.symbology_path.as_ref() {
+    let pyth_symbology = if let Some(path) = opts.gas_price.symbology_path.as_ref() {
         tracing::info!(?path, "loading symbology");
         let raw = std::fs::read_to_string(path).expect("failed to read symbology");
         let symbology_raw: HashMap<String, String> =
@@ -144,7 +145,7 @@ async fn main() {
             .map(|(k, v)| Pubkey::from_str(v).map(|pubkey| (k.clone(), pubkey)))
             .collect::<Result<HashMap<String, Pubkey>, _>>()
             .expect("failed to parse symbology")
-    } else if let Some(mapping_addr) = &opts.pyth_mapping_addr {
+    } else if let Some(mapping_addr) = &opts.gas_price.pyth_mapping_addr {
         tracing::info!(%mapping_addr, "loading symbology");
         mempool::pyth_collect_symbology(mapping_addr, &rpc_client)
             .await
@@ -153,8 +154,8 @@ async fn main() {
         HashMap::new()
     };
     let gas_prices_config = GasPricesConfig {
-        ws_url: opts.solana_ws_url.to_owned(),
-        base_token: opts.chain_token_name.to_owned(),
+        ws_url: opts.gas_price.solana_ws_url.to_owned(),
+        base_token: opts.gas_price.chain_token_name.to_owned(),
         default_token: opts.default_token_name.to_owned(),
         default_chain_id,
     };
