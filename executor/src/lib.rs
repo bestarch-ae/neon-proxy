@@ -77,6 +77,16 @@ impl ExecuteRequest {
         let tx = TxEnvelope::decode(bytes_ref)?;
         Ok(Self::new(tx, fallback_chain_id))
     }
+
+    #[inline]
+    pub fn tx(&self) -> &TxEnvelope {
+        &self.tx
+    }
+
+    #[inline]
+    pub fn fallback_chain_id(&self) -> u64 {
+        self.fallback_chain_id
+    }
 }
 
 #[derive(Debug)]
