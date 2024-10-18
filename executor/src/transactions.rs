@@ -5,6 +5,7 @@ mod ongoing;
 mod tx_error;
 
 use std::mem;
+use std::sync::Arc;
 
 use alloy_consensus::TxEnvelope;
 use alloy_eips::eip2718::Encodable2718;
@@ -12,6 +13,7 @@ use alloy_rlp::Encodable;
 use anyhow::{bail, Context, Result};
 use arc_swap::access::Access;
 use arc_swap::ArcSwap;
+use operator::Operator;
 use reth_primitives::B256;
 use semver::Version;
 
@@ -27,12 +29,12 @@ use common::solana_sdk::instruction::{AccountMeta, Instruction};
 use common::solana_sdk::message::MESSAGE_HEADER_LENGTH;
 use common::solana_sdk::packet::PACKET_DATA_SIZE;
 use common::solana_sdk::pubkey::{Pubkey, PUBKEY_BYTES};
-use common::solana_sdk::signature::{Keypair, SIGNATURE_BYTES};
-use common::solana_sdk::signer::Signer;
+use common::solana_sdk::signature::SIGNATURE_BYTES;
 use common::solana_sdk::system_program;
 use common::solana_sdk::transaction::Transaction;
 use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
+use typed_builder::TypedBuilder;
 
 use crate::transactions::holder::AcquireHolder;
 use crate::ExecuteRequest;
@@ -50,12 +52,12 @@ const CU_IX_SIZE: usize = compiled_ix_size(0, 5 /* serialized data length */);
 const MAX_HEAP_SIZE: u32 = 256 * 1024;
 const MAX_COMPUTE_UNITS: u32 = 1_400_000;
 
-#[derive(Debug)]
+#[derive(Debug, TypedBuilder)]
 pub struct Config {
     pub program_id: Pubkey,
-    pub operator: Keypair,
-    pub address: Address,
+    pub operator: Arc<Operator>,
     pub max_holders: u8,
+    #[builder(default)]
     pub pg_pool: Option<db::PgPool>,
 }
 
@@ -86,9 +88,7 @@ pub struct TransactionBuilder {
     program_id: Pubkey,
     neon_api: NeonApi,
 
-    operator: Keypair,
-    operator_address: Address,
-
+    operator: Arc<Operator>,
     emulator: Emulator,
     holder_mgr: HolderManager,
     alt_mgr: AltManager,
@@ -106,7 +106,6 @@ impl TransactionBuilder {
         let Config {
             program_id,
             operator,
-            address,
             max_holders,
             pg_pool,
         } = config;
@@ -122,7 +121,6 @@ impl TransactionBuilder {
             program_id,
             neon_api,
             operator,
-            operator_address: address,
             emulator,
             holder_mgr,
             alt_mgr,
@@ -231,7 +229,7 @@ impl TransactionBuilder {
         Ok(output)
     }
 
-    pub fn keypair(&self) -> &Keypair {
+    pub fn operator(&self) -> &Operator {
         &self.operator
     }
 
@@ -250,7 +248,7 @@ impl TransactionBuilder {
         let seeds: &[&[u8]] = &[
             &[ACCOUNT_SEED_VERSION],
             opkey.as_ref(),
-            &self.operator_address.0,
+            &self.operator.address().0 .0,
             &chain_id.to_be_bytes(),
         ];
         Pubkey::find_program_address(seeds, &self.program_id).0
@@ -281,7 +279,7 @@ impl TransactionBuilder {
 
         let mut data = vec![0; DATA_LEN];
         data[TAG_IDX] = tag::OPERATOR_BALANCE_CREATE;
-        data[ADDR_IDX..CHAIN_ID_IDX].copy_from_slice(&self.operator_address.0);
+        data[ADDR_IDX..CHAIN_ID_IDX].copy_from_slice(&self.operator.address().0 .0);
         data[CHAIN_ID_IDX..].copy_from_slice(&chain_id.to_le_bytes());
 
         let accounts = vec![

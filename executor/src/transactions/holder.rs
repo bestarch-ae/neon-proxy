@@ -14,6 +14,7 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use async_channel::TrySendError;
 use reth_primitives::B256;
+use tracing::debug;
 use tracing::{error, info};
 
 use common::evm_loader::account;
@@ -227,9 +228,12 @@ impl HolderManager {
         let seed = holder_seed(idx);
         let pubkey = Pubkey::create_with_seed(&self.operator, &seed, &self.program_id)
             .expect("create with seed failed");
+        debug!(%self.operator, idx, seed, %pubkey, "requesting holder");
         let Some(mut account) = self.solana_api.get_account(&pubkey).await? else {
+            debug!(%self.operator, idx, seed, %pubkey, "holder does not exists");
             return Ok(None);
         };
+        debug!(%self.operator, idx, seed, %pubkey, ?account, "holder exists");
 
         let meta = HolderMeta { idx, pubkey };
         let account_info = (&pubkey, &mut account).into_account_info();

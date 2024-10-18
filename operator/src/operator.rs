@@ -36,11 +36,6 @@ impl Operator {
         self.sol_keypair.pubkey()
     }
 
-    #[deprecated(note = "bad practice to use this")]
-    pub fn get_sol_keypair(&self) -> Keypair {
-        self.sol_keypair.insecure_clone()
-    }
-
     pub fn from_keypair(sol_keypair: Keypair) -> Result<Self, Error> {
         let eth_keypair = LocalWallet::from_field_bytes(sol_keypair.secret().as_bytes().into())
             .map_err(|err| Error::Load(err.into()))?;
