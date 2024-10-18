@@ -81,9 +81,9 @@ async fn main() {
         .context("connecting to db")
         .unwrap();
     let tracer_db_config = ChDbConfig {
-        clickhouse_url: opts.neon_db_clickhouse_urls,
-        clickhouse_user: opts.neon_db_clickhouse_user,
-        clickhouse_password: opts.neon_db_clickhouse_password,
+        clickhouse_url: opts.tracer_db.neon_db_clickhouse_urls,
+        clickhouse_user: opts.tracer_db.neon_db_clickhouse_user,
+        clickhouse_password: opts.tracer_db.neon_db_clickhouse_password,
     };
 
     let solana_api = SolanaApi::new(opts.solana_url.clone(), false);

@@ -85,20 +85,12 @@ pub struct Cli {
     /// Pyth mapping address
     pub pyth_mapping_addr: Option<Pubkey>,
 
-    #[arg(long, env, value_delimiter = ';')]
-    /// Tracer db urls, comma separated
-    pub neon_db_clickhouse_urls: Vec<String>,
-
-    #[arg(long, env)]
-    /// Trace db user
-    pub neon_db_clickhouse_user: Option<String>,
-
-    #[arg(long, env)]
-    /// Trace db password
-    pub neon_db_clickhouse_password: Option<String>,
     #[arg(long, env, default_value = "245022926")]
     // Neon chain id
     pub chain_id: u64,
+
+    #[group(flatten)]
+    pub tracer_db: TracerDb,
 
     #[group(flatten)]
     pub operator: operator_pool::Config,
@@ -146,4 +138,20 @@ pub struct Mempool {
     // pub todo: pick a default value
     #[arg(long, env, default_value = "3600")]
     pub mp_eviction_timeout_sec: u64,
+}
+
+#[derive(Args)]
+#[group(id = "TracerDbConfig")]
+pub struct TracerDb {
+    #[arg(long, env, value_delimiter = ';')]
+    /// Tracer db urls, comma separated
+    pub neon_db_clickhouse_urls: Vec<String>,
+
+    #[arg(long, env)]
+    /// Trace db user
+    pub neon_db_clickhouse_user: Option<String>,
+
+    #[arg(long, env)]
+    /// Trace db password
+    pub neon_db_clickhouse_password: Option<String>,
 }
