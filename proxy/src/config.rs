@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use clap::{ArgGroup, Parser};
+use clap::{ArgGroup, Args, Parser};
 
 use common::solana_sdk::commitment_config::CommitmentLevel;
 use common::solana_sdk::pubkey::Pubkey;
@@ -35,7 +35,7 @@ impl FromStr for LogFormat {
     .args(&["symbology_path", "const_gas_price", "pyth_mapping_addr"])
     .required(true)
 ))]
-pub struct Args {
+pub struct Cli {
     #[arg(short, long, default_value = None, value_name = "POSTGRES_URL")]
     /// Postgres url
     pub pg_url: String,
@@ -96,13 +96,15 @@ pub struct Args {
     #[arg(long, env)]
     /// Trace db password
     pub neon_db_clickhouse_password: Option<String>,
-
     #[arg(long, env, default_value = "245022926")]
     // Neon chain id
     pub chain_id: u64,
 
     #[group(flatten)]
     pub operator: operator_pool::Config,
+
+    #[group(flatten)]
+    pub mempool: Mempool,
 
     #[group(flatten)]
     pub gas_prices_calculator_config: GasPriceCalculatorConfig,
@@ -128,7 +130,11 @@ pub struct Args {
     #[arg(long)]
     /// Log format, either json or plain
     pub log_format: Option<LogFormat>,
+}
 
+#[derive(Args)]
+#[group(id = "MempoolConfig")]
+pub struct Mempool {
     // pub todo: pick a default value
     #[arg(long, env, default_value = "100")]
     pub mp_capacity: usize,

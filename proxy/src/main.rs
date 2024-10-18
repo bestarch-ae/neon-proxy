@@ -30,7 +30,7 @@ use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
 use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
-use crate::config::{Args, LogFormat};
+use crate::config::{Cli, LogFormat};
 use crate::rpc::{EthApiImpl, NeonCustomApiServer, NeonEthApiServer, NeonFilterApiServer};
 
 fn get_lib_version() -> Option<String> {
@@ -49,7 +49,7 @@ fn get_lib_version() -> Option<String> {
 
 #[tokio::main]
 async fn main() {
-    let opts = Args::parse();
+    let opts = Cli::parse();
 
     let format = opts.log_format.unwrap_or_default();
     let builder = tracing_subscriber::fmt::fmt()
@@ -175,9 +175,9 @@ async fn main() {
 
     let mempool = if !operators.is_empty() {
         let mp_config = MempoolConfig {
-            capacity: opts.mp_capacity,
-            capacity_high_watermark: opts.mp_capacity_high_watermark,
-            eviction_timeout_sec: opts.mp_eviction_timeout_sec,
+            capacity: opts.mempool.mp_capacity,
+            capacity_high_watermark: opts.mempool.mp_capacity_high_watermark,
+            eviction_timeout_sec: opts.mempool.mp_eviction_timeout_sec,
         };
         let mut mempool = Mempool::<_, GasPrices>::new(
             mp_config,
