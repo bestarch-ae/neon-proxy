@@ -1,4 +1,5 @@
 use std::fmt;
+use std::hash;
 use std::path::Path;
 
 use alloy_consensus::SignableTransaction;
@@ -14,6 +15,7 @@ use solana_sdk::signer::{EncodableKey, Signer, SignerError};
 
 use crate::error::Error;
 
+#[derive(PartialEq)]
 pub struct Operator {
     sol_keypair: Keypair,
     eth_keypair: LocalWallet,
@@ -34,7 +36,7 @@ impl Operator {
         self.sol_keypair.pubkey()
     }
 
-    fn from_keypair(sol_keypair: Keypair) -> Result<Self, Error> {
+    pub fn from_keypair(sol_keypair: Keypair) -> Result<Self, Error> {
         let eth_keypair = LocalWallet::from_field_bytes(sol_keypair.secret().as_bytes().into())
             .map_err(|err| Error::Load(err.into()))?;
         Ok(Self {
@@ -52,6 +54,15 @@ impl Operator {
         tx: &mut dyn SignableTransaction<EthSignature>,
     ) -> Result<EthSignature, Error> {
         self.sign_transaction_sync(tx).map_err(Into::into)
+    }
+}
+
+impl Eq for Operator {}
+
+impl hash::Hash for Operator {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        // We do not use chain_id in eth_keypair atm
+        self.sol_keypair.pubkey().hash(state)
     }
 }
 

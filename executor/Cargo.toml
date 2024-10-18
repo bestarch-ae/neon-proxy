@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 common = { path = '../common', package = "neon-proxy-common", features = ["reth"] }
+operator = { path = '../operator' }
 solana-api = { path = '../solana-api' }
 neon-api = { path = '../neon-api', features = ["jsonrpsee"] }
 db = { path = '../db' }
@@ -17,6 +18,13 @@ alloy-consensus.workspace = true
 alloy-eips.workspace = true
 alloy-rlp.workspace = true
 
+solana-sdk.workspace = true
+solana-transaction-status.workspace = true
+
+ethnum.workspace = true
+neon-lib.workspace = true
+evm-loader.workspace = true
+
 anyhow.workspace = true
 clap.workspace = true
 dashmap.workspace = true
@@ -25,6 +33,7 @@ futures-util.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+typed-builder.workspace = true
 
 rust_decimal = "1.35"
 rust_decimal_macros = "1.35"
@@ -51,7 +60,6 @@ alloy-sol-types.workspace = true
 solana-account-decoder.workspace = true
 solana-client.workspace = true
 solana-program-test.workspace = true
-solana-sdk.workspace = true
 spl-token.workspace = true
 spl-associated-token-account.workspace = true
 tarpc = "0.29.0"

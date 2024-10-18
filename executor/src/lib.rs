@@ -4,43 +4,34 @@ mod transactions;
 
 use std::future::Future;
 use std::ops::Deref;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use alloy_consensus::TxEnvelope;
 use alloy_rlp::Decodable;
-use alloy_signer_wallet::LocalWallet;
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, Context};
 use arc_swap::access::Access;
 use clap::Args;
 use dashmap::DashMap;
+use operator::Operator;
+use solana_sdk::pubkey::Pubkey;
+use solana_sdk::signature::Signature;
+use solana_sdk::transaction::TransactionError;
+use solana_sdk::transaction::VersionedTransaction;
+use solana_transaction_status::TransactionStatus;
 use tokio::sync::{oneshot, Notify};
+use tokio::task::JoinHandle;
 use tokio::time::sleep;
 
-use common::neon_lib::types::Address;
-use common::solana_sdk::pubkey::Pubkey;
-use common::solana_sdk::signature::{Keypair, Signature};
-use common::solana_sdk::signer::{EncodableKey, Signer};
-use common::solana_sdk::transaction::TransactionError;
-use common::solana_sdk::transaction::VersionedTransaction;
-use common::solana_transaction_status::TransactionStatus;
 use neon_api::NeonApi;
 use solana_api::solana_api::SolanaApi;
 use tracing::info;
+use typed_builder::TypedBuilder;
 
 use self::transactions::{OngoingTransaction, TransactionBuilder, TxErrorKind};
 
 #[derive(Args, Clone)]
 pub struct Config {
-    #[arg(long)]
-    /// Path to operator keypair
-    pub operator_keypair: Option<PathBuf>,
-
-    #[arg(long, requires = "operator_keypair")]
-    /// Operator ETH address
-    pub operator_address: Option<Address>,
-
     #[arg(long, default_value_t = false)]
     /// Initialize operator balance accounts at service startup
     pub init_operator_balance: bool,
@@ -102,12 +93,35 @@ impl ExecuteResult {
     }
 }
 
-pub trait ExecutorTrait: Send + Sync + 'static {
+pub trait Execute: Send + Sync + 'static {
     fn handle_transaction(
         &self,
         tx: ExecuteRequest,
         result_sender: Option<oneshot::Sender<ExecuteResult>>,
     ) -> impl Future<Output = anyhow::Result<Signature>> + Send;
+}
+
+#[derive(TypedBuilder)]
+#[builder(build_method(name = prepare))]
+pub struct ExecutorBuilder {
+    neon_pubkey: Pubkey,
+    init_operator_balance: bool,
+    max_holders: u8,
+
+    operator: Arc<Operator>,
+    neon_api: NeonApi,
+    solana_api: SolanaApi,
+
+    #[builder(default, setter(strip_option))]
+    pg_pool: Option<db::PgPool>,
+}
+
+impl ExecutorBuilder {
+    pub async fn start(self) -> anyhow::Result<(Arc<Executor>, JoinHandle<anyhow::Result<()>>)> {
+        let (executor, task) = Executor::initialize_and_start(self).await?;
+        let handle = tokio::spawn(task);
+        Ok((executor, handle))
+    }
 }
 
 #[derive(Debug)]
@@ -125,40 +139,36 @@ pub struct Executor {
 }
 
 impl Executor {
-    pub async fn initialize_and_start(
-        neon_api: NeonApi,
-        solana_api: SolanaApi,
-        neon_pubkey: Pubkey,
-        config: Config,
-        pg_pool: Option<db::PgPool>,
+    pub fn builder() -> ExecutorBuilderBuilder {
+        ExecutorBuilder::builder()
+    }
+
+    async fn initialize_and_start(
+        params: ExecutorBuilder,
     ) -> anyhow::Result<(Arc<Self>, impl Future<Output = anyhow::Result<()>>)> {
-        let Some(keypair_path) = config.operator_keypair else {
-            bail!("missing operator keypair");
-        };
-        let operator = Keypair::read_from_file(&keypair_path).map_err(|err| anyhow!("{err}"))?;
-
-        let address = match config.operator_address {
-            Some(addr) => addr,
-            None => {
-                let operator_signer = LocalWallet::from_slice(operator.secret().as_ref())?;
-                operator_signer.address().0 .0.into()
-            }
-        };
-        tracing::info!(sol_key = %operator.pubkey(), eth_key = %address, "executor operator keys");
-
-        let tx_builder_config = transactions::Config {
-            program_id: neon_pubkey,
+        let ExecutorBuilder {
+            neon_pubkey,
+            init_operator_balance,
+            max_holders,
             operator,
-            address,
-            max_holders: config.max_holders,
+            neon_api,
+            solana_api,
             pg_pool,
-        };
+        } = params;
+        tracing::info!(?operator, "building executor");
+
+        let tx_builder_config = transactions::Config::builder()
+            .program_id(neon_pubkey)
+            .operator(operator)
+            .max_holders(max_holders)
+            .pg_pool(pg_pool)
+            .build();
 
         let this = Self::initialize(
             neon_api,
             solana_api,
             tx_builder_config,
-            config.init_operator_balance,
+            init_operator_balance,
         )
         .await?;
         let this = Arc::new(this);
@@ -172,7 +182,8 @@ impl Executor {
         config: transactions::Config,
         init_balances: bool,
     ) -> anyhow::Result<Self> {
-        info!(operator = %config.operator.pubkey(), "started executor initialization");
+        let operator = config.operator.clone();
+        info!(?operator, "started executor initialization");
         let notify = Notify::new();
 
         let program_id = config.program_id;
@@ -193,7 +204,12 @@ impl Executor {
 
         if init_balances {
             for chain in this.builder.chains().load().deref() {
-                tracing::info!(name = chain.name, id = chain.id, "initializing balance");
+                tracing::info!(
+                    ?operator,
+                    name = chain.name,
+                    id = chain.id,
+                    "initializing balance"
+                );
                 this.init_operator_balance(chain.id).await?;
             }
         }
@@ -203,7 +219,7 @@ impl Executor {
             this.sign_and_send_transaction(tx, None).await?;
         }
 
-        info!(operator = %this.builder.pubkey(), "finished executor initialization");
+        info!(?operator, "finished executor initialization");
         Ok(this)
     }
 
@@ -267,7 +283,7 @@ impl Executor {
             .context("could not request blockhash")?; // TODO: force confirmed
 
         // This will replace bh and clear signatures in case it's a retry
-        tx.sign(&[self.builder.keypair()], blockhash)
+        tx.sign(&[self.builder.operator()], blockhash)
     }
 
     async fn run(self: Arc<Self>) -> anyhow::Result<()> {
@@ -442,7 +458,7 @@ impl Executor {
     }
 }
 
-impl ExecutorTrait for Executor {
+impl Execute for Executor {
     async fn handle_transaction(
         &self,
         tx: ExecuteRequest,
