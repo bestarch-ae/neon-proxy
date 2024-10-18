@@ -83,7 +83,7 @@ impl Rpc for BanksRpcMock {
 #[async_trait]
 impl RpcSender for BanksRpcMock {
     async fn send(&self, request: RpcRequest, params: Value) -> ClientResult<Value> {
-        tracing::info!(?request, ?params, "outgoing request");
+        // tracing::info!(?request, ?params, "outgoing request");
         // eprintln!("outgoing request: {request:?} {params:?}");
 
         let mut rpc = self.0.clone();

@@ -127,9 +127,6 @@ struct Args {
     chain_id: u64,
 
     #[group(flatten)]
-    executor: executor::Config,
-
-    #[group(flatten)]
     operator: operator_pool::Config,
 
     #[group(flatten)]
@@ -223,6 +220,7 @@ async fn main() {
         clickhouse_password: opts.neon_db_clickhouse_password,
     };
 
+    let solana_api = SolanaApi::new(opts.solana_url.clone(), false);
     let neon_api = NeonApi::new(
         opts.solana_url.clone(),
         opts.neon_pubkey,
@@ -237,9 +235,8 @@ async fn main() {
         opts.operator,
         opts.neon_pubkey,
         neon_api.clone(),
-        SolanaApi::new(opts.solana_url.clone(), false),
-        opts.executor,
-        Some(pool.clone()),
+        solana_api,
+        pool.clone(),
     )
     .await
     .unwrap();

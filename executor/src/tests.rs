@@ -13,6 +13,7 @@ use alloy_sol_types::SolConstructor;
 use alloy_sol_types::{sol, SolCall};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use operator::Operator;
 use reth_primitives::{TxKind, U256};
 use serial_test::serial;
 use solana_client::nonblocking::rpc_client::RpcClient;
@@ -369,27 +370,20 @@ impl ExecutorTestEnvironment {
             max_retries: 5,
         };
 
-        let operator = Keypair::read_from_file("tests/keys/operator.json")
-            .map_err(|err| anyhow::anyhow!("{err}"))?;
+        let operator = Operator::read_from_file("tests/keys/operator.json").map(Arc::new)?;
         let ix =
             system_instruction::transfer(&payer.pubkey(), &operator.pubkey(), 100 * 10u64.pow(9));
         ctx.send_instructions(&[ix], &[&payer]).await?;
-        let config = super::Config {
-            operator_keypair: Some("tests/keys/operator.json".into()),
-            operator_address: None,
-            init_operator_balance: false,
-            max_holders: MAX_HOLDERS,
-        };
-        let (executor, task) = Executor::initialize_and_start(
-            neon_api.clone(),
-            solana_api.clone(),
-            NEON_KEY,
-            config,
-            None,
-        )
-        .await
-        .context("failed initializing executor")?;
-        tokio::spawn(task);
+        let (executor, _task) = Executor::builder()
+            .neon_pubkey(NEON_KEY)
+            .operator(operator.clone())
+            .neon_api(neon_api.clone())
+            .solana_api(solana_api.clone())
+            .init_operator_balance(false)
+            .max_holders(MAX_HOLDERS)
+            .prepare()
+            .start()
+            .await?;
         executor.init_operator_balance(CHAIN_ID).await?.unwrap();
         executor.join_current_transactions().await;
 
@@ -647,16 +641,17 @@ async fn recover_holder() -> anyhow::Result<()> {
     let account = env.banks_client.get_account(FST_HOLDER_KEY).await?.unwrap();
     assert_eq!(account.data[0], TAG_HOLDER); // We haven't started yet
 
-    let config = super::Config {
-        operator_keypair: Some("tests/keys/operator.json".into()),
-        operator_address: None,
-        init_operator_balance: false,
-        max_holders: MAX_HOLDERS,
-    };
-
-    let (executor, task) =
-        Executor::initialize_and_start(neon_api, solana_api, NEON_KEY, config, None).await?;
-    tokio::spawn(task);
+    let operator = Operator::read_from_file("tests/keys/operator.json").map(Arc::new)?;
+    let (executor, _task) = Executor::builder()
+        .neon_pubkey(NEON_KEY)
+        .operator(operator.clone())
+        .neon_api(neon_api.clone())
+        .solana_api(solana_api.clone())
+        .init_operator_balance(false)
+        .max_holders(MAX_HOLDERS)
+        .prepare()
+        .start()
+        .await?;
     let txs = executor.join_current_transactions().await;
     assert_eq!(txs.len(), 1);
 
@@ -785,16 +780,17 @@ async fn recover_state() -> anyhow::Result<()> {
     let account = env.banks_client.get_account(FST_HOLDER_KEY).await?.unwrap();
     assert_eq!(account.data[0], TAG_STATE); // We started
 
-    let config = super::Config {
-        operator_keypair: Some("tests/keys/operator.json".into()),
-        operator_address: None,
-        init_operator_balance: false,
-        max_holders: MAX_HOLDERS,
-    };
-
-    let (executor, task) =
-        Executor::initialize_and_start(neon_api, solana_api, NEON_KEY, config, None).await?;
-    tokio::spawn(task);
+    let operator = Operator::read_from_file("tests/keys/operator.json").map(Arc::new)?;
+    let (executor, _task) = Executor::builder()
+        .neon_pubkey(NEON_KEY)
+        .operator(operator.clone())
+        .neon_api(neon_api.clone())
+        .solana_api(solana_api.clone())
+        .init_operator_balance(false)
+        .max_holders(MAX_HOLDERS)
+        .prepare()
+        .start()
+        .await?;
     let txs = executor.join_current_transactions().await;
     assert!(txs.len() > 1);
     let account = env.banks_client.get_account(FST_HOLDER_KEY).await?.unwrap();

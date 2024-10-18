@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 common = { path = '../common', package = "neon-proxy-common", features = ["reth"] }
+operator = { path = '../operator' }
 solana-api = { path = '../solana-api' }
 neon-api = { path = '../neon-api', features = ["jsonrpsee"] }
 db = { path = '../db' }
@@ -25,6 +26,7 @@ futures-util.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+typed-builder.workspace = true
 
 rust_decimal = "1.35"
 rust_decimal_macros = "1.35"

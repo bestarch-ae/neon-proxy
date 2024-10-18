@@ -17,6 +17,7 @@ use executor::Executor;
 use neon_api::NeonApi;
 use operator::Operator;
 use solana_api::solana_api::SolanaApi;
+use tokio::task::JoinHandle;
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -51,12 +52,21 @@ pub struct Config {
     #[arg(long)]
     /// Prefix filter for operator keys
     pub operator_keypair_prefix: Option<OsString>,
+
+    #[arg(long, default_value_t = false)]
+    /// Initialize operator balance accounts at service startup
+    pub init_operator_balance: bool,
+
+    #[arg(long, default_value_t = u8::MAX)]
+    /// Maximum holder accounts
+    pub max_holders: u8,
 }
 
 #[derive(Debug)]
 struct PoolEntry {
-    operator: Operator,
+    operator: Arc<Operator>,
     executor: Arc<Executor>,
+    _executor_task: JoinHandle<anyhow::Result<()>>,
 }
 
 #[derive(Debug)]
@@ -72,8 +82,7 @@ impl OperatorPool {
         neon_pubkey: Pubkey,
         neon_api: NeonApi,
         solana_api: SolanaApi,
-        executor_config: executor::Config,
-        pg_pool: Option<db::PgPool>,
+        pg_pool: db::PgPool,
     ) -> Result<Self> {
         let operators = Self::load_from_path(
             config.operator_keypair_path,
@@ -83,18 +92,26 @@ impl OperatorPool {
         let mut map = HashMap::new();
         let mut operator_order = Vec::new();
         for operator in operators {
-            let (executor, task) = Executor::initialize_and_start(
-                neon_api.clone(),
-                solana_api.clone(),
-                neon_pubkey,
-                executor_config.clone(),
-                pg_pool.clone(),
-            )
-            .await
-            .map_err(Error::Executor)?;
-            tokio::spawn(task);
+            let operator = Arc::new(operator);
+            let (executor, _executor_task) = Executor::builder()
+                .neon_pubkey(neon_pubkey)
+                .operator(operator.clone())
+                .neon_api(neon_api.clone())
+                .solana_api(solana_api.clone())
+                .pg_pool(pg_pool.clone())
+                .init_operator_balance(config.init_operator_balance)
+                .max_holders(config.max_holders)
+                .prepare()
+                .start()
+                .await
+                .map_err(Error::Executor)?;
             operator_order.push(operator.address());
-            map.insert(operator.address(), PoolEntry { operator, executor });
+            let entry = PoolEntry {
+                operator,
+                executor,
+                _executor_task,
+            };
+            map.insert(entry.operator.address(), entry);
         }
 
         Ok(Self {
@@ -154,7 +171,7 @@ impl OperatorPool {
     }
 
     pub fn get(&self, address: &Address) -> Option<&Operator> {
-        self.map.get(address).map(|entry| &entry.operator)
+        self.map.get(address).map(|entry| entry.operator.as_ref())
     }
 
     pub fn try_get(&self, address: &Address) -> Result<&Operator> {
