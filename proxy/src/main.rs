@@ -52,20 +52,7 @@ fn get_lib_version() -> Option<String> {
 async fn main() -> anyhow::Result<()> {
     let opts = Cli::parse();
 
-    let format = opts.log_format.unwrap_or_default();
-    let builder = tracing_subscriber::fmt::fmt()
-        .with_env_filter(
-            EnvFilter::builder()
-                .with_default_directive(LevelFilter::INFO.into())
-                .from_env_lossy(),
-        )
-        .with_ansi(std::io::stdout().is_terminal());
-    match format {
-        LogFormat::Json => builder.json().init(),
-        LogFormat::Plain => builder.init(),
-    }
-    let _ = tracing_log::LogTracer::init();
-
+    configure_logging(opts.log_format.unwrap_or_default())?;
     let neon_lib_version = get_lib_version();
 
     tracing::info!(
@@ -249,6 +236,24 @@ fn build_module(eth: EthApiImpl) -> RpcModule<()> {
         .expect("no conflicts");
 
     module
+}
+
+fn configure_logging(format: config::LogFormat) -> anyhow::Result<()> {
+    let builder = tracing_subscriber::fmt::fmt()
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
+        .with_ansi(std::io::stdout().is_terminal());
+
+    match format {
+        LogFormat::Json => builder.json().init(),
+        LogFormat::Plain => builder.init(),
+    }
+    let _ = tracing_log::LogTracer::init();
+
+    Ok(())
 }
 
 async fn build_gas_prices(
