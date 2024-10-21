@@ -3,7 +3,8 @@ use std::str::FromStr;
 
 use clap::{ArgGroup, Args, Parser};
 
-use common::solana_sdk::commitment_config::CommitmentLevel;
+use common::neon_lib::types::ChDbConfig;
+use common::solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use common::solana_sdk::pubkey::Pubkey;
 pub use mempool::GasPriceCalculatorConfig;
 
@@ -168,4 +169,25 @@ pub struct GasPrice {
     #[arg(long, env, default_value = "NEON")]
     /// Default token name
     pub default_token_name: String,
+}
+
+impl Cli {
+    pub fn neon_api(&self) -> neon_api::NeonApi {
+        let tracer_db_config = ChDbConfig {
+            clickhouse_url: self.tracer_db.neon_db_clickhouse_urls.clone(),
+            clickhouse_user: self.tracer_db.neon_db_clickhouse_user.clone(),
+            clickhouse_password: self.tracer_db.neon_db_clickhouse_password.clone(),
+        };
+
+        neon_api::NeonApi::new(
+            self.solana_url.clone(),
+            self.neon_pubkey,
+            self.neon_api.neon_config_pubkey,
+            tracer_db_config,
+            self.neon_api.max_tx_account_count,
+            Some(CommitmentConfig {
+                commitment: self.neon_api.simulation_commitment,
+            }),
+        )
+    }
 }

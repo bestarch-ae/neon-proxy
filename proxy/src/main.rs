@@ -23,8 +23,6 @@ mod error;
 mod rpc;
 
 use common::neon_lib;
-use common::neon_lib::types::ChDbConfig;
-use common::solana_sdk::commitment_config::CommitmentConfig;
 use common::solana_sdk::pubkey::Pubkey;
 use mempool::{GasPrices, GasPricesConfig, Mempool, MempoolConfig};
 use neon_api::NeonApi;
@@ -58,23 +56,9 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(config = ?opts, "starting");
 
     let pool = db::connect(&opts.pg_url).await.context("connect to db")?;
-    let tracer_db_config = ChDbConfig {
-        clickhouse_url: opts.tracer_db.neon_db_clickhouse_urls,
-        clickhouse_user: opts.tracer_db.neon_db_clickhouse_user,
-        clickhouse_password: opts.tracer_db.neon_db_clickhouse_password.clone(),
-    };
-
     let solana_api = SolanaApi::new(opts.solana_url.clone(), false);
-    let neon_api = NeonApi::new(
-        opts.solana_url.clone(),
-        opts.neon_pubkey,
-        opts.neon_api.neon_config_pubkey,
-        tracer_db_config,
-        opts.neon_api.max_tx_account_count,
-        Some(CommitmentConfig {
-            commitment: opts.neon_api.simulation_commitment,
-        }),
-    );
+    let neon_api = opts.neon_api();
+
     let operators = OperatorPool::from_config(
         opts.operator.clone(),
         opts.neon_pubkey,
