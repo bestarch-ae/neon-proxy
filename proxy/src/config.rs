@@ -29,7 +29,7 @@ impl FromStr for LogFormat {
     }
 }
 
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 #[command(group(
     ArgGroup::new("required_group")
     .args(&["symbology_path", "const_gas_price", "pyth_mapping_addr"])
@@ -91,7 +91,7 @@ pub struct Cli {
     pub gas_prices_calculator_config: GasPriceCalculatorConfig,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 #[group(id = "NeonApiConfig")]
 pub struct NeonApi {
     #[arg(long, env, default_value = "64")]
@@ -110,7 +110,7 @@ pub struct NeonApi {
     pub neon_config_pubkey: Pubkey,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 #[group(id = "MempoolConfig")]
 pub struct Mempool {
     // pub todo: pick a default value
@@ -126,7 +126,7 @@ pub struct Mempool {
     pub mp_eviction_timeout_sec: u64,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 #[group(id = "TracerDbConfig")]
 pub struct TracerDb {
     #[arg(long, env, value_delimiter = ';')]
@@ -142,7 +142,7 @@ pub struct TracerDb {
     pub neon_db_clickhouse_password: Option<String>,
 }
 
-#[derive(Args)]
+#[derive(Debug, Args)]
 #[group(id = "GasPriceConfig")]
 pub struct GasPrice {
     #[arg(long, value_name = "URL")]

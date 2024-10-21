@@ -55,14 +55,7 @@ async fn main() -> anyhow::Result<()> {
     configure_logging(opts.log_format.unwrap_or_default())?;
     let neon_lib_version = get_lib_version();
 
-    tracing::info!(
-        neon_pubkey = %opts.neon_pubkey,
-        neon_config = %opts.neon_api.neon_config_pubkey,
-        default_token = opts.gas_price.default_token_name,
-        simulation_commitment = ?opts.neon_api.simulation_commitment,
-        neon_lib_version = ?neon_lib_version,
-        "starting"
-    );
+    tracing::info!(config = ?opts, "starting");
 
     let pool = db::connect(&opts.pg_url).await.context("connect to db")?;
     let tracer_db_config = ChDbConfig {
