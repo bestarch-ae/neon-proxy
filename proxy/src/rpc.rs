@@ -43,6 +43,7 @@ pub struct EthApiImpl {
 }
 
 impl EthApiImpl {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pool: PgPool,
         neon_api: NeonApi,
