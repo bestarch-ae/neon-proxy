@@ -1,4 +1,4 @@
-use reth_primitives::alloy_primitives::SignatureError;
+use reth_primitives::alloy_primitives::{Parity, SignatureError};
 use reth_primitives::{alloy_primitives, BlockNumberOrTag, ChainId, U128};
 use thiserror::Error;
 
@@ -46,6 +46,8 @@ pub enum PreFlightError {
     Underpriced(U128, U128),
     #[error("proxy configuration doesn't allow underpriced transaction without chain-id")]
     UnderpricedWoChainId,
+    #[error("Invalid V value {0}")]
+    InvalidSignatureVValue(u64),
 }
 
 impl PreFlightError {
@@ -92,6 +94,7 @@ impl PreFlightValidator {
         let tx_gas_price = tx.gas_price()?;
 
         Self::validate_chain_id(chain_id, tx.fallback_chain_id(), default_chain_id)?;
+        Self::validate_v_value(tx, chain_id)?;
         Self::validate_sender_eoa(tx, neon_api).await?;
         Self::validate_tx_size(tx_input_len)?;
         Self::validate_gas_limit(
@@ -145,6 +148,23 @@ impl PreFlightValidator {
         }
 
         Ok(())
+    }
+
+    fn validate_v_value(
+        tx: &ExecuteRequest,
+        chain_id: Option<ChainId>,
+    ) -> Result<(), PreFlightError> {
+        let sig = tx.signature()?;
+        let v = match sig.v() {
+            Parity::Eip155(v) => v,
+            Parity::NonEip155(v) | Parity::Parity(v) => v as u64,
+        };
+
+        if v >= 37 || (chain_id.is_none() && (v == 0 || v == 27 || v == 28)) {
+            return Ok(());
+        }
+
+        Err(PreFlightError::InvalidSignatureVValue(v))
     }
 
     async fn validate_tx_is_new(
