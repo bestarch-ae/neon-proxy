@@ -35,6 +35,7 @@ pub struct EthApiImpl {
     blocks: ::db::BlockRepo,
     neon_api: NeonApi,
     chain_id: u64,
+    default_chain_id: u64,
     mempool: Option<Arc<Mempool<OperatorPool, GasPrices>>>,
     mp_gas_prices: GasPrices,
     operators: Arc<OperatorPool>,
@@ -46,6 +47,7 @@ impl EthApiImpl {
         pool: PgPool,
         neon_api: NeonApi,
         chain_id: u64,
+        default_chain_id: u64,
         mempool: Option<Arc<Mempool<OperatorPool, GasPrices>>>,
         mp_gas_prices: GasPrices,
         operators: Arc<OperatorPool>,
@@ -60,6 +62,7 @@ impl EthApiImpl {
             neon_api,
             mempool,
             chain_id,
+            default_chain_id,
             mp_gas_prices,
             operators,
             lib_version,
@@ -175,8 +178,14 @@ impl EthApiImpl {
             let hash = *request.tx_hash();
             tracing::debug!(tx_hash = %hash, ?request, "sending transaction");
             let price_model = self.mp_gas_prices.get_gas_price_model(Some(self.chain_id));
-            PreFlightValidator::validate(&request, &self.neon_api, &self.transactions, price_model)
-                .await?;
+            PreFlightValidator::validate(
+                &request,
+                &self.neon_api,
+                &self.transactions,
+                price_model,
+                self.default_chain_id,
+            )
+            .await?;
             mempool.schedule_tx(request).await.inspect_err(
                 |error| tracing::warn!(%hash, %error, "could not schedule transaction"),
             )?;
