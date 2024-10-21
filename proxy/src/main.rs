@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use clap::Parser;
+use common::neon_lib::commands::get_config::GetConfigResponse;
 use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
 use jsonrpsee::server::Server;
@@ -70,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(
         neon_pubkey = %opts.neon_pubkey,
         neon_config = %opts.neon_api.neon_config_pubkey,
-        default_token = opts.default_token_name,
+        default_token = opts.gas_price.default_token_name,
         simulation_commitment = ?opts.neon_api.simulation_commitment,
         neon_lib_version = ?neon_lib_version,
         "starting"
@@ -80,7 +81,7 @@ async fn main() -> anyhow::Result<()> {
     let tracer_db_config = ChDbConfig {
         clickhouse_url: opts.tracer_db.neon_db_clickhouse_urls,
         clickhouse_user: opts.tracer_db.neon_db_clickhouse_user,
-        clickhouse_password: opts.tracer_db.neon_db_clickhouse_password,
+        clickhouse_password: opts.tracer_db.neon_db_clickhouse_password.clone(),
     };
 
     let solana_api = SolanaApi::new(opts.solana_url.clone(), false);
@@ -95,7 +96,7 @@ async fn main() -> anyhow::Result<()> {
         }),
     );
     let operators = OperatorPool::from_config(
-        opts.operator,
+        opts.operator.clone(),
         opts.neon_pubkey,
         neon_api.clone(),
         solana_api,
@@ -109,7 +110,7 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("failed to get EVM config")?;
     tracing::info!(?config, "evm config");
-    let default_token_name = opts.default_token_name.to_lowercase();
+    let default_token_name = opts.gas_price.default_token_name.to_lowercase();
     let default_chain_id = config
         .chains
         .iter()
@@ -125,51 +126,15 @@ async fn main() -> anyhow::Result<()> {
         .collect::<HashMap<_, _>>();
     tracing::info!(?additional_chains, "additional chains");
 
-    let rpc_client = RpcClient::new(
-        opts.gas_price
-            .pyth_solana_url
-            .unwrap_or(opts.solana_url.clone())
-            .clone(),
-    );
-    let pyth_symbology = if let Some(path) = opts.gas_price.symbology_path.as_ref() {
-        tracing::info!(?path, "loading symbology");
-        let raw = std::fs::read_to_string(path).context("failed to read symbology")?;
-        let symbology_raw: HashMap<String, String> =
-            serde_json::from_str(&raw).context("failed to parse symbology json")?;
-        symbology_raw
-            .iter()
-            .map(|(k, v)| Pubkey::from_str(v).map(|pubkey| (k.clone(), pubkey)))
-            .collect::<Result<HashMap<String, Pubkey>, _>>()
-            .context("failed to parse symbology")?
-    } else if let Some(mapping_addr) = &opts.gas_price.pyth_mapping_addr {
-        tracing::info!(%mapping_addr, "loading symbology");
-        mempool::pyth_collect_symbology(mapping_addr, &rpc_client)
-            .await
-            .context("failed to collect pyth symbology")?
-    } else {
-        HashMap::new()
-    };
-    let gas_prices_config = GasPricesConfig {
-        ws_url: opts.gas_price.solana_ws_url.to_owned(),
-        base_token: opts.gas_price.chain_token_name.to_owned(),
-        default_token: opts.default_token_name.to_owned(),
-        default_chain_id,
-    };
-    let chain_token_map = config
-        .chains
-        .iter()
-        .map(|c| (c.id, c.name.to_uppercase()))
-        .collect::<HashMap<_, _>>();
-    let mp_gas_prices = mempool::GasPrices::try_new(
-        gas_prices_config,
-        neon_api.clone(),
-        rpc_client,
-        pyth_symbology,
+    let mp_gas_prices = build_gas_prices(
+        opts.gas_price,
         opts.gas_prices_calculator_config,
-        chain_token_map,
+        &config,
+        neon_api.clone(),
+        &opts.solana_url,
     )
+    .await
     .context("failed to create gas prices")?;
-
     let mempool = if !operators.is_empty() {
         let mp_config = MempoolConfig {
             capacity: opts.mempool.mp_capacity,
@@ -284,4 +249,65 @@ fn build_module(eth: EthApiImpl) -> RpcModule<()> {
         .expect("no conflicts");
 
     module
+}
+
+async fn build_gas_prices(
+    config: config::GasPrice,
+    gas_price_calculator_config: config::GasPriceCalculatorConfig,
+    neon_config: &GetConfigResponse,
+    neon_api: NeonApi,
+    default_solana_url: &str,
+) -> anyhow::Result<mempool::GasPrices> {
+    let default_token_name = config.default_token_name.to_lowercase();
+    let default_chain_id = neon_config
+        .chains
+        .iter()
+        .find(|c| c.name == default_token_name)
+        .context("default chain not found")?
+        .id;
+    let rpc_client = RpcClient::new(
+        config
+            .pyth_solana_url
+            .unwrap_or(default_solana_url.to_string())
+            .clone(),
+    );
+
+    let pyth_symbology = if let Some(path) = config.symbology_path.as_ref() {
+        tracing::info!(?path, "loading symbology");
+        let raw = std::fs::read_to_string(path).context("failed to read symbology")?;
+        let symbology_raw: HashMap<String, String> =
+            serde_json::from_str(&raw).context("failed to parse symbology json")?;
+        symbology_raw
+            .iter()
+            .map(|(k, v)| Pubkey::from_str(v).map(|pubkey| (k.clone(), pubkey)))
+            .collect::<Result<HashMap<String, Pubkey>, _>>()
+            .context("failed to parse symbology")?
+    } else if let Some(mapping_addr) = &config.pyth_mapping_addr {
+        tracing::info!(%mapping_addr, "loading symbology");
+        mempool::pyth_collect_symbology(mapping_addr, &rpc_client)
+            .await
+            .context("failed to collect pyth symbology")?
+    } else {
+        HashMap::new()
+    };
+    let gas_prices_config = GasPricesConfig {
+        ws_url: config.solana_ws_url.to_owned(),
+        base_token: config.chain_token_name.to_owned(),
+        default_token: config.default_token_name.to_owned(),
+        default_chain_id,
+    };
+    let chain_token_map = neon_config
+        .chains
+        .iter()
+        .map(|c| (c.id, c.name.to_uppercase()))
+        .collect::<HashMap<_, _>>();
+    mempool::GasPrices::try_new(
+        gas_prices_config,
+        neon_api.clone(),
+        rpc_client,
+        pyth_symbology,
+        gas_price_calculator_config,
+        chain_token_map,
+    )
+    .map_err(Into::into)
 }

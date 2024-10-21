@@ -5,7 +5,7 @@ use clap::{ArgGroup, Args, Parser};
 
 use common::solana_sdk::commitment_config::CommitmentLevel;
 use common::solana_sdk::pubkey::Pubkey;
-use mempool::GasPriceCalculatorConfig;
+pub use mempool::GasPriceCalculatorConfig;
 
 #[derive(Debug, Default, Copy, Clone)]
 pub enum LogFormat {
@@ -67,10 +67,6 @@ pub struct Cli {
     #[arg(long, env, default_value = "245022926")]
     // Neon chain id
     pub chain_id: u64,
-
-    #[arg(long, env, default_value = "NEON")]
-    /// Default token name
-    pub default_token_name: String,
 
     #[arg(long)]
     /// Log format, either json or plain
@@ -168,4 +164,8 @@ pub struct GasPrice {
     #[arg(long, env, default_value = "SOL")]
     /// Chain token name
     pub chain_token_name: String,
+
+    #[arg(long, env, default_value = "NEON")]
+    /// Default token name
+    pub default_token_name: String,
 }
