@@ -1,3 +1,8 @@
+mod config;
+mod convert;
+mod error;
+mod rpc;
+
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::io::IsTerminal;
@@ -14,11 +19,6 @@ use jsonrpsee::RpcModule;
 use rpc_api::{EthApiServer, EthFilterApiServer, NetApiServer, Web3ApiServer};
 use tower::Service;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
-
-mod config;
-mod convert;
-mod error;
-mod rpc;
 
 use common::neon_lib;
 use common::neon_lib::commands::get_config::GetConfigResponse;
