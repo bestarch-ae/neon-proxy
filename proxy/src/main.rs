@@ -7,12 +7,10 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use clap::Parser;
-use common::neon_lib::commands::get_config::GetConfigResponse;
 use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
 use jsonrpsee::server::Server;
 use jsonrpsee::RpcModule;
-use operator_pool::OperatorPool;
 use rpc_api::{EthApiServer, EthFilterApiServer, NetApiServer, Web3ApiServer};
 use tower::Service;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
@@ -23,13 +21,15 @@ mod error;
 mod rpc;
 
 use common::neon_lib;
+use common::neon_lib::commands::get_config::GetConfigResponse;
 use common::solana_sdk::pubkey::Pubkey;
 use mempool::{GasPrices, GasPricesConfig, Mempool, MempoolConfig};
 use neon_api::NeonApi;
+use operator_pool::OperatorPool;
 use solana_api::solana_api::SolanaApi;
 use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
-use crate::config::{Cli, LogFormat};
+use crate::config::{Cli, LogFormat, NeonConfigExt};
 use crate::rpc::{EthApiImpl, NeonCustomApiServer, NeonEthApiServer, NeonFilterApiServer};
 
 fn get_lib_version() -> Option<String> {
@@ -76,11 +76,8 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(?config, "evm config");
     let default_token_name = opts.gas_price.default_token_name.to_lowercase();
     let default_chain_id = config
-        .chains
-        .iter()
-        .find(|c| c.name == default_token_name)
-        .context("default chain not found")?
-        .id;
+        .chain_id_for_name(&default_token_name)
+        .context("default chain not found")?;
     tracing::info!(%default_chain_id, %default_token_name, "default chain");
     let additional_chains = config
         .chains
@@ -242,11 +239,8 @@ async fn build_gas_prices(
 ) -> anyhow::Result<mempool::GasPrices> {
     let default_token_name = config.default_token_name.to_lowercase();
     let default_chain_id = neon_config
-        .chains
-        .iter()
-        .find(|c| c.name == default_token_name)
-        .context("default chain not found")?
-        .id;
+        .chain_id_for_name(&default_token_name)
+        .context("default chain not found")?;
     let rpc_client = RpcClient::new(
         config
             .pyth_solana_url

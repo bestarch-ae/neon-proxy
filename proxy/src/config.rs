@@ -3,6 +3,7 @@ use std::str::FromStr;
 
 use clap::{ArgGroup, Args, Parser};
 
+use common::neon_lib::commands::get_config::GetConfigResponse;
 use common::neon_lib::types::ChDbConfig;
 use common::solana_sdk::commitment_config::{CommitmentConfig, CommitmentLevel};
 use common::solana_sdk::pubkey::Pubkey;
@@ -189,5 +190,26 @@ impl Cli {
                 commitment: self.neon_api.simulation_commitment,
             }),
         )
+    }
+}
+
+pub trait NeonConfigExt {
+    // fn chain_name_for_id(&self, chain_id: u64) -> Option<&str>;
+    fn chain_id_for_name(&self, name: &str) -> Option<u64>;
+}
+
+impl NeonConfigExt for GetConfigResponse {
+    // fn chain_name_for_id(&self, chain_id: u64) -> Option<&str> {
+    //     self.chains
+    //         .iter()
+    //         .find(|c| c.id == chain_id)
+    //         .map(|chain| chain.name.as_ref())
+    // }
+
+    fn chain_id_for_name(&self, name: &str) -> Option<u64> {
+        self.chains
+            .iter()
+            .find(|c| c.name == name)
+            .map(|chain| chain.id)
     }
 }
