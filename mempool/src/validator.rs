@@ -1,5 +1,5 @@
 use reth_primitives::alloy_primitives::SignatureError;
-use reth_primitives::{alloy_primitives, BlockNumberOrTag, U128};
+use reth_primitives::{alloy_primitives, BlockNumberOrTag, ChainId, U128};
 use thiserror::Error;
 
 use common::convert::ToNeon;
@@ -73,6 +73,7 @@ impl PreFlightValidator {
         neon_api: &NeonApi,
         txs: &db::TransactionRepo,
         price: Option<GasPriceModel>,
+        default_chain_id: ChainId,
     ) -> Result<(), PreFlightError> {
         Self::validate_tx_is_new(tx, txs).await?;
 
@@ -90,7 +91,7 @@ impl PreFlightValidator {
         let tx_gas_limit = tx.gas_limit()?;
         let tx_gas_price = tx.gas_price()?;
 
-        Self::validate_chain_id(chain_id, tx.fallback_chain_id())?;
+        Self::validate_chain_id(chain_id, tx.fallback_chain_id(), default_chain_id)?;
         Self::validate_sender_eoa(tx, neon_api).await?;
         Self::validate_tx_size(tx_input_len)?;
         Self::validate_gas_limit(
@@ -128,13 +129,18 @@ impl PreFlightValidator {
     }
 
     fn validate_chain_id(
-        chain_id: Option<u64>,
-        fallback_chain_id: u64,
+        chain_id: Option<ChainId>,
+        fallback_chain_id: ChainId,
+        default_chain_id: ChainId,
     ) -> Result<(), PreFlightError> {
         if let Some(chain_id) = chain_id {
             if chain_id == fallback_chain_id {
                 return Ok(());
             }
+            return Err(PreFlightError::WrongChainId);
+        }
+
+        if default_chain_id != fallback_chain_id {
             return Err(PreFlightError::WrongChainId);
         }
 
@@ -165,7 +171,7 @@ impl PreFlightValidator {
     }
 
     fn validate_gas_limit(
-        chain_id: Option<u64>,
+        chain_id: Option<ChainId>,
         tx_input_len: usize,
         tx_gas_limit: u128,
         tx_gas_price: Option<u128>,
@@ -235,7 +241,7 @@ impl PreFlightValidator {
     }
 
     fn validate_tx_gas_price(
-        chain_id: Option<u64>,
+        chain_id: Option<ChainId>,
         tx_gas_price: Option<u128>,
         price: &GasPriceModel,
     ) -> Result<(), PreFlightError> {
@@ -251,7 +257,7 @@ impl PreFlightValidator {
     }
 
     fn validate_underpriced_tx_wo_chain_id(
-        chain_id: Option<u64>,
+        chain_id: Option<ChainId>,
         tx_gas_price: Option<u128>,
         price: &GasPriceModel,
     ) -> Result<(), PreFlightError> {
