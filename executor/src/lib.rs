@@ -11,7 +11,6 @@ use std::time::Duration;
 use alloy_consensus::TxEnvelope;
 use alloy_rlp::Decodable;
 use anyhow::{anyhow, Context};
-use arc_swap::access::Access;
 use clap::Args;
 use dashmap::DashMap;
 use solana_sdk::pubkey::Pubkey;
@@ -102,7 +101,7 @@ pub trait Execute: Send + Sync + 'static {
         &self,
         tx: ExecuteRequest,
         result_sender: Option<oneshot::Sender<ExecuteResult>>,
-    ) -> impl Future<Output = anyhow::Result<Signature>> + Send;
+    ) -> impl Future<Output = anyhow::Result<Signature>> + Send + '_;
 }
 
 #[derive(TypedBuilder)]
@@ -221,7 +220,7 @@ impl Executor {
                 sleep(BALANCE_RETRY_DELAY).await;
             }
 
-            for chain in this.builder.chains().load().deref() {
+            for chain in this.builder.chains() {
                 info!(
                     ?operator,
                     name = chain.name,

@@ -239,7 +239,7 @@ impl EthApiImpl {
         }
     }
 
-    fn get_operator(&self, address: &Address) -> Result<&Operator, Error> {
+    fn get_operator(&self, address: &Address) -> Result<Arc<Operator>, Error> {
         self.operators.try_get(address).map_err(Into::into)
     }
 

@@ -67,7 +67,6 @@ async fn main() -> anyhow::Result<()> {
         pool.clone(),
     )
     .await?;
-    let operators = Arc::new(operators);
 
     let config = neon_api
         .get_config()

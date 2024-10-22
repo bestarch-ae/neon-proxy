@@ -4923,9 +4923,14 @@ name = "operator-pool"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
+ "async-channel 2.3.1",
  "clap 4.5.4",
+ "dashmap 6.0.1",
  "db",
  "executor",
+ "futures-util",
+ "humantime",
  "neon-api",
  "operator",
  "reth-primitives",
