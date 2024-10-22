@@ -64,7 +64,7 @@ impl EthApiServer for EthApiImpl {
 
     /// Returns a list of addresses owned by client.
     fn accounts(&self) -> RpcResult<Vec<Address>> {
-        Ok(self.operators.addresses().copied().collect())
+        Ok(self.operators.addresses())
     }
 
     /// Returns the number of most recent block.

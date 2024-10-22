@@ -21,3 +21,8 @@ solana-sdk.workspace = true
 reth-primitives.workspace = true
 
 solana-cli-config = "1.18"
+arc-swap = "1.7.1"
+futures-util.workspace = true
+humantime = "2.1.0"
+dashmap.workspace = true
+async-channel = "2.3.1"

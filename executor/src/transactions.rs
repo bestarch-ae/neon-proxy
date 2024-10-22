@@ -12,7 +12,6 @@ use alloy_consensus::TxEnvelope;
 use alloy_eips::eip2718::Encodable2718;
 use alloy_rlp::Encodable;
 use anyhow::{bail, Context, Result};
-use arc_swap::access::Access;
 use arc_swap::ArcSwap;
 use ethnum::U256;
 use evm_loader::config::ACCOUNT_SEED_VERSION;
@@ -248,8 +247,8 @@ impl TransactionBuilder {
         self.operator.pubkey()
     }
 
-    pub fn chains(&self) -> impl Access<Vec<ChainInfo>> + '_ {
-        self.evm_config.map(|config: &EvmConfig| &config.chains)
+    pub fn chains(&self) -> Vec<ChainInfo> {
+        self.evm_config.load().chains.clone()
     }
 
     pub fn operator_balance(&self, chain_id: u64) -> Pubkey {
