@@ -28,6 +28,9 @@ pub struct RichLog {
     pub timestamp: i64,
     pub tx_idx: u64,
     pub tx_hash: TxHash,
+    pub sol_signature: Signature,
+    pub sol_ix_idx: u64,
+    pub sol_ix_inner_idx: u64,
     pub event: EventLog,
 }
 
@@ -638,6 +641,9 @@ impl TransactionRepo {
                             timestamp: 0,
                             tx_idx: tx.inner.tx_idx,
                             tx_hash,
+                            sol_signature: tx.inner.sol_signature,
+                            sol_ix_idx: tx.inner.sol_ix_idx,
+                            sol_ix_inner_idx: tx.inner.sol_ix_inner_idx,
                             event: ev,
                         })
                     }))
@@ -908,62 +914,5 @@ impl TryFrom<NeonTransactionLogRow> for EventLog {
             })
         }
         .context("event log")
-    }
-}
-
-#[derive(Debug, FromRow)]
-struct NeonRichLogRow {
-    block_hash: PgSolanaBlockHash,
-    block_slot: i64,
-    block_time: i64,
-
-    // NeonTransactionLogRow
-    address: Option<PgAddress>,
-    tx_hash: Vec<u8>,
-    tx_log_idx: i32,
-    log_idx: i64,
-
-    event_level: i32,
-    event_order: i32,
-
-    log_topic1: Option<Vec<u8>>,
-    log_topic2: Option<Vec<u8>>,
-    log_topic3: Option<Vec<u8>>,
-    log_topic4: Option<Vec<u8>>,
-    log_topic_cnt: i32,
-
-    log_data: String,
-    tx_idx: i64,
-}
-
-impl TryFrom<NeonRichLogRow> for RichLog {
-    type Error = anyhow::Error;
-
-    fn try_from(value: NeonRichLogRow) -> Result<Self, Self::Error> {
-        let log = NeonTransactionLogRow {
-            address: value.address,
-            tx_log_idx: value.tx_log_idx,
-            log_idx: value.log_idx,
-            event_level: value.event_level,
-            event_order: value.event_order,
-            log_topic1: value.log_topic1,
-            log_topic2: value.log_topic2,
-            log_topic3: value.log_topic3,
-            log_topic4: value.log_topic4,
-            log_topic_cnt: value.log_topic_cnt,
-            log_data: value.log_data,
-        };
-
-        let tx_hash = TxHash::try_from(value.tx_hash)
-            .map_err(|_| anyhow::anyhow!("failed to parse tx_hash"))?;
-
-        Ok(RichLog {
-            blockhash: value.block_hash.into(),
-            slot: value.block_slot.try_into().context("block_slot")?,
-            timestamp: value.block_time,
-            tx_idx: value.tx_idx.try_into().context("tx_idx")?,
-            tx_hash,
-            event: log.try_into()?,
-        })
     }
 }

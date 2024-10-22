@@ -19,9 +19,9 @@ use common::neon_lib::types::{BalanceAddress, TxParams};
 use executor::ExecuteRequest;
 use mempool::GasPricesTrait;
 
-use crate::convert::convert_filters;
+use crate::convert::NeonTransactionReceipt;
+use crate::convert::{convert_filters, EthNeonLog};
 use crate::convert::{neon_to_eth, neon_to_eth_receipt};
-use crate::convert::{NeonLog, NeonTransactionReceipt};
 use crate::error::{call_execution_failed, invalid_params, unimplemented, Error};
 use crate::rpc::EthApiImpl;
 
@@ -646,14 +646,17 @@ impl NeonEthApiServer for EthApiImpl {
 #[rpc(server, namespace = "eth")]
 trait NeonFilterApi: EthFilterApiServer {
     #[method(name = "getLogs")]
-    async fn neon_logs(&self, filter: Filter) -> RpcResult<Vec<NeonLog>>;
+    async fn neon_logs(&self, filter: Filter) -> RpcResult<Vec<EthNeonLog>>;
 }
 
 #[async_trait]
 impl NeonFilterApiServer for EthApiImpl {
-    async fn neon_logs(&self, filter: Filter) -> RpcResult<Vec<NeonLog>> {
+    async fn neon_logs(&self, filter: Filter) -> RpcResult<Vec<EthNeonLog>> {
         let logs = <Self as EthFilterApiServer>::logs(self, filter).await?;
-        let logs = logs.into_iter().map(crate::convert::to_neon_log).collect();
+        let logs = logs
+            .into_iter()
+            .map(crate::convert::to_eth_neon_log)
+            .collect();
         Ok(logs)
     }
 }
@@ -664,7 +667,12 @@ impl EthFilterApiServer for EthApiImpl {
     async fn logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
         let filter = self.normalize_filter(filter).await?;
         let filters = convert_filters(filter).map_err(Error::from)?;
-        Ok(self.get_logs(filters).await?)
+        Ok(self
+            .get_logs(filters)
+            .await?
+            .into_iter()
+            .map(|l| l.log)
+            .collect())
     }
 
     /// Creates anew filter and returns its id.
