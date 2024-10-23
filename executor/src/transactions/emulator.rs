@@ -81,7 +81,7 @@ impl Emulator {
 
     pub async fn emulate(&self, tx: &TxEnvelope) -> anyhow::Result<EmulateResponse> {
         let request = get_neon_emulate_request(tx)?;
-        let res = self.neon_api.emulate(request).await.map_err(Into::into);
+        let res = self.neon_api.emulate_raw(request).await.map_err(Into::into);
         tracing::info!(?res, tx_hash = %tx.tx_hash(), "neon emulation result");
         res
     }
