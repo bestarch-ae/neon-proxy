@@ -42,7 +42,7 @@ fn default_kp_path() -> OsString {
         .to_owned()
 }
 
-#[derive(Args)]
+#[derive(Debug, Args, Clone)]
 #[group(id = "OperatorConfig")]
 pub struct Config {
     #[arg(long, default_value_os_t = default_kp_path())]
