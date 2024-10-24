@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 use alloy_consensus::TxEnvelope;
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use neon_lib::commands::emulate::EmulateResponse;
 use neon_lib::commands::simulate_solana::SimulateSolanaTransactionResult;
 use neon_lib::types::TxParams;
@@ -121,7 +121,7 @@ impl Emulator {
             .into_iter()
             .next()
             .context("empty simulation result")?;
-        tracing::info!(%tx_hash, result = ?res, "solana simulation result");
+        tracing::debug!(%tx_hash, result = ?res, "solana simulation result");
 
         if let Some(err) = res.error {
             match err {
@@ -135,10 +135,14 @@ impl Emulator {
                 {
                     Ok(false)
                 }
-                error => Err(anyhow!(
-                    "transaction ({tx_hash}) preflight error: {error}, logs: {:#?}",
-                    res.logs
-                )),
+                // error => Err(anyhow!(
+                //     "transaction ({tx_hash}) preflight error: {error}, logs: {:#?}",
+                //     res.logs
+                // )),
+                error => {
+                    tracing::warn!(%tx_hash, ?error, logs = ?res.logs, "simulation failed");
+                    Ok(true)
+                }
             }
         } else {
             Ok(true)
