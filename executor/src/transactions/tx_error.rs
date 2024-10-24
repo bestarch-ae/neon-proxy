@@ -8,6 +8,7 @@ pub enum TxErrorKind {
     CuMeterExceeded,
     TxSizeExceeded,
     AltFail,
+    BadExternalCall,
 }
 
 impl TxErrorKind {
@@ -33,6 +34,10 @@ impl TxErrorKind {
             .is_some()
         {
             return Some(Self::CuMeterExceeded);
+        }
+
+        if tx.has_external_call_fail() {
+            return Some(Self::BadExternalCall);
         }
 
         None

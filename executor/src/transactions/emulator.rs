@@ -236,7 +236,7 @@ impl Emulator {
         emulate.iterations - self.calculate_exec_iter_cnt(emulate)
     }
 
-    fn default_iter_info(&self, emulate: &EmulateResponse) -> IterInfo {
+    pub fn default_iter_info(&self, emulate: &EmulateResponse) -> IterInfo {
         let steps_per_iteration = self.evm_steps_min.load(Relaxed);
         let iterations =
             self.calculate_exec_iter_cnt(emulate) + self.calculate_wrap_iter_cnt(emulate);
