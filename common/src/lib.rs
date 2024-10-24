@@ -1,5 +1,8 @@
 pub mod convert;
+mod extensions;
 pub mod types;
+
+pub use extensions::EmulateResponseExt;
 
 // ===== Reexports =====
 pub use ethnum;

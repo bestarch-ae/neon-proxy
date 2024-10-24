@@ -32,6 +32,7 @@ use solana_sdk::transaction::Transaction;
 use typed_builder::TypedBuilder;
 
 use common::neon_instruction::tag;
+use common::EmulateResponseExt;
 use neon_api::NeonApi;
 use operator::Operator;
 use solana_api::solana_api::SolanaApi;
@@ -597,7 +598,7 @@ impl TransactionBuilder {
             tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), "fallback to iterative, resize iter count");
             return fallback_iterative(tx_data, alt).await;
         }
-        let tag = if tx_data.emulate.external_solana_call {
+        let tag = if tx_data.emulate.has_external_solana_call() {
             tag::TX_EXEC_FROM_DATA_SOLANA_CALL
         } else {
             tag::TX_EXEC_FROM_DATA
@@ -648,7 +649,7 @@ impl TransactionBuilder {
             tracing::debug!(tx_hash = %tx_data.envelope.tx_hash(), "fallback to iterative, resize iter count");
             return fallback_iterative(tx_data, alt).await;
         }
-        let tag = if tx_data.emulate.external_solana_call {
+        let tag = if tx_data.emulate.has_external_solana_call() {
             tag::TX_EXEC_FROM_DATA_SOLANA_CALL_V13
         } else {
             tag::TX_EXEC_FROM_DATA_DEPRECATED_V13
@@ -809,7 +810,7 @@ impl TransactionBuilder {
             }
             (Some(chain_id), false) => chain_id,
         };
-        let tag = if tx_data.emulate.external_solana_call {
+        let tag = if tx_data.emulate.has_external_solana_call() {
             tag::TX_EXEC_FROM_ACCOUNT_SOLANA_CALL
         } else {
             tag::TX_EXEC_FROM_ACCOUNT
