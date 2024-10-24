@@ -363,7 +363,7 @@ impl TransactionBuilder {
                 self.recovered_step(tx_hash, chain_id, holder, iter_info, accounts)
                     .await
             }
-            TxStage::Final { .. } => Ok(None),
+            TxStage::Final { .. } | TxStage::Cancel { .. } => Ok(None),
         }
     }
 
@@ -448,6 +448,42 @@ impl TransactionBuilder {
                 }
                 stage => unreachable!("only alt stages can fail with AltFail: {stage:?}"),
             },
+            TxErrorKind::BadExternalCall => {
+                let alt = tx.alt().cloned();
+                match tx.disassemble() {
+                    TxStage::DataExecution { tx_data, .. }
+                    | TxStage::Final {
+                        tx_data: Some(tx_data),
+                        holder: None,
+                    } => {
+                        // This will probably result in iterative fallback with cancel
+                        tracing::warn!(?tx_hash, "Data tx retry from Holder");
+                        self.start_holder_execution(tx_data.envelope).await?
+                    }
+                    TxStage::Final {
+                        tx_data: Some(tx_data),
+                        holder: Some(holder),
+                    } => {
+                        tracing::warn!(?tx_hash, "Fallback to iterative");
+                        self.step(None, tx_data, holder, false, alt.clone())
+                            .await?
+                            .expect("always some for first iter")
+                    }
+                    TxStage::IterativeExecution {
+                        tx_data, holder, ..
+                    } => {
+                        tracing::warn!(?tx_hash, "Cancelling transaction");
+                        self.cancel(tx_data, holder, alt)?
+                    }
+                    stage @ TxStage::HolderFill { .. }
+                    | stage @ TxStage::AltFill { .. }
+                    | stage @ TxStage::Final { .. }
+                    | stage @ TxStage::RecoveredHolder { .. }
+                    | stage @ TxStage::Cancel { .. } => {
+                        bail!("{stage:?} cannot fallback to iterative")
+                    }
+                }
+            }
         };
 
         Ok(tx)
@@ -944,6 +980,57 @@ impl TransactionBuilder {
             None, // TODO
         )
         .map(Some)
+    }
+
+    fn cancel(
+        &self,
+        tx_data: TxData,
+        holder: HolderInfo,
+        alt: Option<AltInfo>,
+    ) -> anyhow::Result<OngoingTransaction> {
+        let chain_id =
+            get_chain_id(&tx_data.envelope).unwrap_or(tx_data.envelope.fallback_chain_id);
+        let operator_balance = self.operator_balance(chain_id);
+        let tx_hash = tx_data.envelope.tx_hash();
+
+        tracing::debug!(%tx_hash, chain_id, %operator_balance, ?holder, "cancel transaction");
+
+        let mut accounts = vec![
+            AccountMeta::new(*holder.pubkey(), false),
+            AccountMeta::new(self.operator.pubkey(), true),
+            AccountMeta::new(operator_balance, false),
+            AccountMeta::new_readonly(system_program::ID, false),
+        ];
+        accounts.extend(
+            tx_data
+                .emulate
+                .solana_accounts
+                .iter()
+                .map(|acc| AccountMeta {
+                    pubkey: acc.pubkey,
+                    is_writable: acc.is_writable,
+                    is_signer: false,
+                }),
+        );
+
+        const TX_HASH_IDX: usize = TransactionBuilder::TAG_IDX + mem::size_of::<u8>();
+        const DATA_END: usize = TX_HASH_IDX + 32;
+        let mut data = vec![0; DATA_END];
+
+        data[Self::TAG_IDX] = tag::CANCEL;
+        data[TX_HASH_IDX..DATA_END].copy_from_slice(tx_hash.as_ref());
+
+        let ix = Instruction {
+            program_id: self.program_id,
+            accounts,
+            data,
+        };
+
+        self.build_ongoing(
+            TxStage::cancel(*tx_data.envelope.tx_hash(), holder),
+            &[ix],
+            alt,
+        )
     }
 }
 

@@ -1,6 +1,7 @@
 use alloy_consensus::TxEnvelope;
 use anyhow::Context;
 use borsh::BorshDeserialize;
+use common::EmulateResponseExt;
 use neon_lib::commands::emulate::{EmulateResponse, SolanaAccount};
 use reth_primitives::B256;
 use solana_sdk::address_lookup_table::AddressLookupTableAccount;
@@ -26,6 +27,10 @@ pub(super) struct TxData {
 impl TxData {
     pub fn new(envelope: ExecuteRequest, emulate: EmulateResponse) -> Self {
         Self { envelope, emulate }
+    }
+
+    pub fn has_external_fail(&self) -> bool {
+        self.emulate.has_external_call_fail()
     }
 }
 
@@ -62,9 +67,12 @@ pub(super) enum TxStage {
     },
     Final {
         tx_data: Option<TxData>,
-        #[allow(dead_code)]
         // We need to hold holder occupied until the end
         holder: Option<HolderInfo>,
+    },
+    Cancel {
+        _tx_hash: B256,
+        _holder: HolderInfo,
     },
 }
 
@@ -187,6 +195,10 @@ impl TxStage {
             holder: None,
         }
     }
+
+    pub fn cancel(_tx_hash: B256, _holder: HolderInfo) -> Self {
+        Self::Cancel { _tx_hash, _holder }
+    }
 }
 
 #[derive(Debug)]
@@ -199,6 +211,10 @@ pub struct OngoingTransaction {
 }
 
 impl OngoingTransaction {
+    pub fn alt(&self) -> Option<&AltInfo> {
+        self.alt.as_ref()
+    }
+
     pub fn cu_limit(&self) -> Option<u32> {
         find_compute_budget(&self.instructions).cu_limit
     }
@@ -272,7 +288,25 @@ impl OngoingTransaction {
                 tx_data: Some(TxData { envelope, .. }),
                 ..
             } => Some(&envelope.tx),
-            TxStage::Final { tx_data: None, .. } | TxStage::RecoveredHolder { .. } => None,
+            TxStage::Final { tx_data: None, .. }
+            | TxStage::RecoveredHolder { .. }
+            | TxStage::Cancel { .. } => None,
+        }
+    }
+
+    pub fn has_external_call_fail(&self) -> bool {
+        match &self.stage {
+            TxStage::IterativeExecution { tx_data, .. }
+            | TxStage::AltFill { tx_data, .. }
+            | TxStage::DataExecution { tx_data, .. }
+            | TxStage::Final {
+                tx_data: Some(tx_data),
+                ..
+            } => tx_data.has_external_fail(),
+            TxStage::Final { tx_data: None, .. }
+            | TxStage::Cancel { .. }
+            | TxStage::RecoveredHolder { .. }
+            | TxStage::HolderFill { .. } => false,
         }
     }
 
@@ -308,7 +342,7 @@ impl OngoingTransaction {
             }
             | TxStage::HolderFill { ref tx, .. } => get_chain_id(&tx.tx),
             TxStage::RecoveredHolder { chain_id, .. } => Some(chain_id),
-            TxStage::Final { tx_data: None, .. } => None,
+            TxStage::Final { tx_data: None, .. } | TxStage::Cancel { .. } => None,
         }
     }
 
