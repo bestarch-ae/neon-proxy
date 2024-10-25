@@ -2,7 +2,8 @@ mod alt;
 mod emulator;
 mod holder;
 mod ongoing;
-mod tx_error;
+/// Solana preflight error handling.
+mod preflight_error;
 
 use std::mem;
 use std::sync::Arc;
@@ -44,7 +45,7 @@ use self::ongoing::{TxData, TxStage};
 use crate::ExecuteRequest;
 
 pub use self::ongoing::OngoingTransaction;
-pub use self::tx_error::TxErrorKind;
+pub use self::preflight_error::TxErrorKind;
 
 const CU_IX_SIZE: usize = compiled_ix_size(0, 5 /* serialized data length */);
 // Taken from neon-proxy.py
