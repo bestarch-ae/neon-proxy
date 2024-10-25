@@ -13,6 +13,7 @@ pub enum TxErrorKind {
     TxSizeExceeded,
     AltFail,
     BadExternalCall,
+    Other,
 }
 
 impl TxErrorKind {
@@ -44,7 +45,7 @@ impl TxErrorKind {
             return Some(Self::BadExternalCall);
         }
 
-        None
+        is_preflight(err.kind()).then_some(Self::Other)
     }
 }
 
@@ -61,6 +62,17 @@ fn extract_logs(err: &ClientErrorKind) -> &'_ [String] {
             ..
         }) => logs.as_slice(),
         _ => &[],
+    }
+}
+
+fn is_preflight(err: &ClientErrorKind) -> bool {
+    #[allow(clippy::match_like_matches_macro)] // In this case it's more readable
+    match err {
+        ClientErrorKind::RpcError(request::RpcError::RpcResponseError {
+            data: request::RpcResponseErrorData::SendTransactionPreflightFailure(..),
+            ..
+        }) => true,
+        _ => false,
     }
 }
 
@@ -158,8 +170,11 @@ impl TransactionBuilder {
         }
     }
 
-    /// Retry External call fail error
-    pub(super) async fn handle_ext_call(
+    /// Generic preflight error handling logic.
+    ///
+    /// Fallback to iterative execution first and then proceed to cancel
+    /// in case the error still persist.
+    pub(super) async fn handle_preflight_error(
         &self,
         tx: OngoingTransaction,
     ) -> Result<OngoingTransaction> {
