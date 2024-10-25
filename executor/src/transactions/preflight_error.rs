@@ -1,8 +1,12 @@
+use anyhow::{bail, Context, Result};
+
 use solana_api::solana_api::{ClientError, ClientErrorKind};
 use solana_api::solana_rpc_client_api::{request, response};
 
-use super::OngoingTransaction;
+use super::ongoing::{OngoingTransaction, TxStage};
+use super::{TransactionBuilder, MAX_COMPUTE_UNITS, MAX_HEAP_SIZE};
 
+/// Solana preflight error kind.
 #[derive(Debug)]
 pub enum TxErrorKind {
     CuMeterExceeded,
@@ -59,3 +63,4 @@ fn extract_logs(err: &ClientErrorKind) -> &'_ [String] {
         _ => &[],
     }
 }
+
