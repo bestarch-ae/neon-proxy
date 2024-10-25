@@ -374,120 +374,12 @@ impl TransactionBuilder {
         err: TxErrorKind,
     ) -> Result<OngoingTransaction> {
         tracing::debug!(?tx, ?err, "retry tx");
-        let tx_hash = tx.eth_tx().map(|tx| tx.tx_hash()).copied();
-        let tx = match err {
-            TxErrorKind::CuMeterExceeded
-                if tx.heap_frame().map_or(false, |n| n == MAX_HEAP_SIZE)
-                    && tx.cu_limit().map_or(false, |n| n == MAX_COMPUTE_UNITS) =>
-            {
-                bail!("CU Meter exceeded for transaction with maximum budget")
-            }
-            TxErrorKind::CuMeterExceeded => {
-                let mut tx = tx;
-                if tx.heap_frame().map_or(true, |n| n != MAX_HEAP_SIZE) {
-                    tracing::warn!(?tx_hash, "retry with max heap");
-                    tx = tx
-                        .with_heap_frame(MAX_HEAP_SIZE)
-                        .context("cannot set heap frame")?;
-                }
-
-                if tx.cu_limit().map_or(true, |n| n != MAX_COMPUTE_UNITS) {
-                    tracing::warn!(?tx_hash, "retry with max CU");
-                    tx = tx
-                        .with_cu_limit(MAX_HEAP_SIZE)
-                        .context("cannot set compute units")?;
-                }
-                tx
-            }
-            TxErrorKind::TxSizeExceeded => match tx.disassemble() {
-                TxStage::Final {
-                    tx_data: Some(tx_data),
-                    holder: Some(holder),
-                }
-                | TxStage::DataExecution {
-                    tx_data,
-                    holder,
-                    alt: None,
-                    ..
-                }
-                | TxStage::IterativeExecution {
-                    tx_data,
-                    holder,
-                    alt: None,
-                    ..
-                } => {
-                    tracing::warn!(?tx_hash, "tx retry with ALT");
-                    self.start_from_alt(tx_data, Some(holder)).await?
-                }
-                TxStage::DataExecution {
-                    tx_data,
-                    alt: Some(_),
-                    ..
-                }
-                | TxStage::IterativeExecution {
-                    tx_data,
-                    alt: Some(_),
-                    ..
-                }
-                | TxStage::Final {
-                    tx_data: Some(tx_data),
-                    holder: None,
-                } => {
-                    tracing::warn!(?tx_hash, "Data tx retry from Holder");
-                    self.start_holder_execution(tx_data.envelope).await?
-                }
-                stage => bail!("unretriable transaction: {stage:?}"),
-            },
-            TxErrorKind::AltFail => match tx.disassemble() {
-                TxStage::AltFill {
-                    info,
-                    tx_data,
-                    holder,
-                } => {
-                    let (info, ix) = self.alt_mgr.recreate_alt(info).await?;
-                    TxStage::alt_fill(info, tx_data, holder).ongoing(&[ix], &self.pubkey())
-                }
-                stage => unreachable!("only alt stages can fail with AltFail: {stage:?}"),
-            },
-            TxErrorKind::BadExternalCall => {
-                let alt = tx.alt().cloned();
-                match tx.disassemble() {
-                    TxStage::DataExecution { tx_data, .. }
-                    | TxStage::Final {
-                        tx_data: Some(tx_data),
-                        holder: None,
-                    } => {
-                        // This will probably result in iterative fallback with cancel
-                        tracing::warn!(?tx_hash, "Data tx retry from Holder");
-                        self.start_holder_execution(tx_data.envelope).await?
-                    }
-                    TxStage::Final {
-                        tx_data: Some(tx_data),
-                        holder: Some(holder),
-                    } => {
-                        tracing::warn!(?tx_hash, "Fallback to iterative");
-                        self.step(None, tx_data, holder, false, alt.clone())
-                            .await?
-                            .expect("always some for first iter")
-                    }
-                    TxStage::IterativeExecution {
-                        tx_data, holder, ..
-                    } => {
-                        tracing::warn!(?tx_hash, "Cancelling transaction");
-                        self.cancel(tx_data, holder, alt)?
-                    }
-                    stage @ TxStage::HolderFill { .. }
-                    | stage @ TxStage::AltFill { .. }
-                    | stage @ TxStage::Final { .. }
-                    | stage @ TxStage::RecoveredHolder { .. }
-                    | stage @ TxStage::Cancel { .. } => {
-                        bail!("{stage:?} cannot fallback to iterative")
-                    }
-                }
-            }
-        };
-
-        Ok(tx)
+        match err {
+            TxErrorKind::CuMeterExceeded => self.handle_cu_meter(tx),
+            TxErrorKind::TxSizeExceeded => self.handle_tx_size(tx).await,
+            TxErrorKind::AltFail => self.handle_alt(tx).await,
+            TxErrorKind::BadExternalCall => self.handle_ext_call(tx).await,
+        }
     }
 }
 
