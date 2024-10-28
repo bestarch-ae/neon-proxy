@@ -175,7 +175,7 @@ async fn build_rpc(
     config_key: Pubkey,
 ) -> Result<RpcEnum, NeonError> {
     let mut with_commitment = |commitment| {
-        tracing::info!(?commitment, "creating client with commitment");
+        tracing::debug!(?commitment, "creating client with commitment");
         Ok(RpcEnum::CloneRpcClient(CloneRpcClient {
             rpc: Arc::new(client_builder(commitment)),
             max_retries: 10,
