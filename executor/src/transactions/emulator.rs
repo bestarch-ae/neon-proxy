@@ -178,10 +178,16 @@ impl Emulator {
             let mut iter_info =
                 IterInfo::new(iter_steps as u32, iterations as u32, MAX_COMPUTE_UNITS);
             let txs = f(&mut iter_info)?;
-            let res = self.simulate(&txs, Some(u64::MAX), None).await?;
+            let res = self
+                .simulate(&txs, Some(MAX_COMPUTE_UNITS.into()), Some(MAX_HEAP_SIZE))
+                .await?;
 
-            if res.iter().any(|res| res.error.is_some()) {
-                break;
+            let has_errored = res.iter().any(|res| res.error.is_some());
+            if has_errored {
+                tracing::warn!(%tx_hash, try_idx = retry, "simulation errored");
+                for (tx_idx, res) in res.iter().enumerate() {
+                    tracing::debug!(%tx_hash, tx_idx, try_idx = retry, ?res, "simulation report");
+                }
             }
 
             let used_cu_limit = res
