@@ -122,7 +122,7 @@ impl AltManager {
 
                 let alt = alt();
                 let accounts: VecDeque<_> =
-                    alt.accounts.difference(&new_accounts).copied().collect();
+                    new_accounts.difference(&alt.accounts).copied().collect();
 
                 // WARN: There is a small chance that while we were awaiting on the semaphore
                 //     : this ALT got updated to the point where new accounts no longer fit .

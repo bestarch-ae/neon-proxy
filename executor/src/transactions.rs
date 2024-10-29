@@ -400,7 +400,7 @@ impl TransactionBuilder {
             alt::UpdateProgress::WriteChunk { ix, info } => {
                 tracing::debug!(
                     tx_hash = %tx_data.envelope.tx_hash(), ?info, ?holder,
-                    "creating new ALT"
+                    "extending ALT"
                 );
                 Ok(TxStage::alt_fill(info, tx_data, holder).ongoing(&[ix], &self.pubkey()))
             }
