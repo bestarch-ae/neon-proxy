@@ -243,7 +243,8 @@ impl Executor {
             sender.disarm(ExecuteResult::Error(anyhow!("{err:?}")));
         })?;
 
-        tracing::info!(%signature, ?tx, "sent new transaction");
+        let tx_hash = tx.tx_hash();
+        tracing::info!(%signature, ?tx_hash, "sent new transaction");
         let do_notify = self.pending_transactions.is_empty();
         self.pending_transactions
             .insert(signature, TransactionEntry::new(tx, sender)); // TODO: check none?
@@ -266,29 +267,28 @@ impl Executor {
     }
 
     async fn send_tx_inner(&self, tx: OngoingTransaction) -> anyhow::Result<SendTx> {
+        let tx_hash = tx.tx_hash().copied();
         let mut tx = tx;
-        let sol_tx = self.sign_tx(&tx).await?;
-        tracing::debug!(?sol_tx, "sending transaction");
-        let signature = match self
-            .solana_api
-            .send_transaction(&sol_tx)
-            .await
-            .map_err(|err| (TxErrorKind::from_error(&err, &tx), err))
-        {
-            Ok(sign) => sign,
-            Err((None, err)) => return Err(err.into()),
-            Err((Some(err_kind), err)) => {
-                let tx_hash = tx.eth_tx().map(|tx| tx.tx_hash()).copied();
-                tx = self.builder.retry(tx, err_kind).await.map_err(|new_err| {
-                    anyhow!("Transaction {tx_hash:?} cannot be retried: {new_err}, Initial error: {err}")
-                })?;
-                let sol_tx = self.sign_tx(&tx).await?;
-                tracing::debug!(?sol_tx, "sending transaction");
-                self.solana_api
-                    .send_transaction(&sol_tx)
-                    .await
-                    .context("cannot send retried transaction: {err:?}")?
+        let mut try_counter = 0;
+        let signature = loop {
+            let sol_tx = self.sign_tx(&tx).await?;
+            tracing::debug!(?tx_hash, try_counter, ?sol_tx, ?tx, "sending transaction");
+            match self
+                .solana_api
+                .send_transaction(&sol_tx)
+                .await
+                .map_err(|err| (TxErrorKind::from_error(&err, &tx), err))
+            {
+                Ok(sign) => break sign,
+                Err((None, err)) => return Err(err.into()),
+                Err((Some(err_kind), err)) => {
+                    let tx_hash = tx.eth_tx().map(|tx| tx.tx_hash()).copied();
+                    tx = self.builder.retry(tx, err_kind).await.map_err(|new_err| {
+                        anyhow!("Transaction {tx_hash:?} cannot be retried: {new_err}, Initial error: {err}")
+                    })?;
+                }
             }
+            try_counter += 1;
         };
         Ok(SendTx { tx, signature })
     }

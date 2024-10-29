@@ -371,10 +371,11 @@ impl TransactionBuilder {
     pub async fn retry(
         &self,
         tx: OngoingTransaction,
-        err: TxErrorKind,
+        error: TxErrorKind,
     ) -> Result<OngoingTransaction> {
-        tracing::debug!(?tx, ?err, "retry tx");
-        match err {
+        let tx_hash = tx.tx_hash();
+        tracing::debug!(?tx_hash, ?error, "retry tx");
+        match error {
             TxErrorKind::CuMeterExceeded => self.handle_cu_meter(tx),
             TxErrorKind::TxSizeExceeded => self.handle_tx_size(tx).await,
             TxErrorKind::AltFail => self.handle_alt(tx).await,
