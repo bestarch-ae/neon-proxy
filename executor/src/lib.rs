@@ -1,3 +1,4 @@
+mod entry;
 #[cfg(test)]
 mod tests;
 mod transactions;
@@ -13,7 +14,6 @@ use anyhow::{anyhow, Context};
 use arc_swap::access::Access;
 use clap::Args;
 use dashmap::DashMap;
-use operator::Operator;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 use solana_sdk::transaction::TransactionError;
@@ -24,10 +24,12 @@ use tokio::task::JoinHandle;
 use tokio::time::sleep;
 
 use neon_api::NeonApi;
+use operator::Operator;
 use solana_api::solana_api::SolanaApi;
 use tracing::info;
 use typed_builder::TypedBuilder;
 
+use self::entry::TransactionEntry;
 use self::transactions::{OngoingTransaction, TransactionBuilder, TxErrorKind};
 
 #[derive(Args, Clone)]
@@ -130,12 +132,16 @@ pub struct Executor {
     solana_api: SolanaApi,
 
     builder: TransactionBuilder,
-    pending_transactions: DashMap<Signature, OngoingTransaction>,
-    result_senders: DashMap<Signature, oneshot::Sender<ExecuteResult>>,
+    pending_transactions: DashMap<Signature, TransactionEntry>,
     notify: Notify,
 
     #[cfg(test)]
     test_ext: test_ext::TestExtension,
+}
+
+struct SendTx {
+    tx: OngoingTransaction,
+    signature: Signature,
 }
 
 impl Executor {
@@ -195,7 +201,6 @@ impl Executor {
             solana_api,
             builder,
             pending_transactions: DashMap::new(),
-            result_senders: DashMap::new(),
             notify,
 
             #[cfg(test)]
@@ -216,7 +221,8 @@ impl Executor {
 
         // Recovery
         for tx in this.builder.recover().await? {
-            this.sign_and_send_transaction(tx, None).await?;
+            let tx = TransactionEntry::new(tx, None.into());
+            this.sign_and_send_transaction(tx).await?;
         }
 
         info!(?operator, "finished executor initialization");
@@ -230,13 +236,36 @@ impl Executor {
     /// Sign, send and register transaction to be confirmed.
     /// The only method in this module that can call `send_transaction`
     /// or insert into `pending_transactions` map.
-    async fn sign_and_send_transaction(
-        &self,
-        tx: OngoingTransaction,
-        result_sender: Option<oneshot::Sender<ExecuteResult>>,
-    ) -> anyhow::Result<Signature> {
-        let mut tx = tx;
+    async fn sign_and_send_transaction(&self, tx: TransactionEntry) -> anyhow::Result<Signature> {
+        let (tx, mut sender) = tx.destruct();
+        let SendTx { tx, signature } = self.send_tx_inner(tx).await.inspect_err(|err| {
+            sender.disarm(ExecuteResult::Error(anyhow!("{err:?}")));
+        })?;
 
+        tracing::info!(%signature, ?tx, "sent new transaction");
+        let do_notify = self.pending_transactions.is_empty();
+        self.pending_transactions
+            .insert(signature, TransactionEntry::new(tx, sender)); // TODO: check none?
+        if do_notify {
+            self.notify.notify_waiters();
+        }
+
+        Ok(signature)
+    }
+
+    async fn sign_tx(&self, tx: &OngoingTransaction) -> anyhow::Result<VersionedTransaction> {
+        let blockhash = self
+            .solana_api
+            .get_recent_blockhash()
+            .await
+            .context("could not request blockhash")?; // TODO: force confirmed
+
+        // This will replace bh and clear signatures in case it's a retry
+        tx.sign(&[self.builder.operator()], blockhash)
+    }
+
+    async fn send_tx_inner(&self, tx: OngoingTransaction) -> anyhow::Result<SendTx> {
+        let mut tx = tx;
         let sol_tx = self.sign_tx(&tx).await?;
         tracing::debug!(?sol_tx, "sending transaction");
         let signature = match self
@@ -260,30 +289,7 @@ impl Executor {
                     .context("cannot send retried transaction: {err:?}")?
             }
         };
-
-        if let Some(result_sender) = result_sender {
-            self.result_senders.insert(signature, result_sender);
-        }
-
-        tracing::info!(%signature, ?tx, "sent new transaction");
-        let do_notify = self.pending_transactions.is_empty();
-        self.pending_transactions.insert(signature, tx); // TODO: check none?
-        if do_notify {
-            self.notify.notify_waiters();
-        }
-
-        Ok(signature)
-    }
-
-    async fn sign_tx(&self, tx: &OngoingTransaction) -> anyhow::Result<VersionedTransaction> {
-        let blockhash = self
-            .solana_api
-            .get_recent_blockhash()
-            .await
-            .context("could not request blockhash")?; // TODO: force confirmed
-
-        // This will replace bh and clear signatures in case it's a retry
-        tx.sign(&[self.builder.operator()], blockhash)
+        Ok(SendTx { tx, signature })
     }
 
     async fn run(self: Arc<Self>) -> anyhow::Result<()> {
@@ -347,7 +353,9 @@ impl Executor {
         }
 
         let Some(status) = status else {
-            let hash = *bail_if_absent!(self.pending_transactions.get(&signature)).blockhash();
+            let hash = *bail_if_absent!(self.pending_transactions.get(&signature))
+                .tx()
+                .blockhash();
             let is_valid = self
                 .solana_api
                 .is_blockhash_valid(&hash)
@@ -374,18 +382,17 @@ impl Executor {
         }
     }
 
-    async fn handle_expired_transaction(&self, signature: Signature, tx: OngoingTransaction) {
-        let tx_hash = tx.eth_tx().map(|tx| *tx.tx_hash());
+    async fn handle_expired_transaction(&self, signature: Signature, tx: TransactionEntry) {
+        let tx_hash = tx.tx().tx_hash().copied();
         // TODO: retry counter
         tracing::warn!(?tx_hash, %signature, "transaction blockhash expired, retrying");
-        let result_sender = self.result_senders.remove(&signature).map(|(_, s)| s);
-        if let Err(error) = self.sign_and_send_transaction(tx, result_sender).await {
+        if let Err(error) = self.sign_and_send_transaction(tx).await {
             tracing::error!(?tx_hash, %signature, ?error, "failed retrying transaction");
         }
     }
 
-    async fn handle_success(&self, signature: Signature, tx: OngoingTransaction, slot: u64) {
-        let tx_hash = tx.eth_tx().map(|tx| *tx.tx_hash());
+    async fn handle_success(&self, signature: Signature, tx: TransactionEntry, slot: u64) {
+        let tx_hash = tx.tx().tx_hash().copied();
         // TODO: maybe add Instant to ongoing transaction.
         tracing::info!(?tx_hash, %signature, slot, "transaction was confirmed");
 
@@ -394,27 +401,20 @@ impl Executor {
             return;
         }
 
-        // TODO: follow up transactions
+        let (tx, mut sender) = tx.destruct();
         match self.builder.next_step(tx).await {
             Err(err) => {
                 tracing::error!(?tx_hash, %signature, ?err, "failed executing next transaction step");
-                if let Some((_, sender)) = self.result_senders.remove(&signature) {
-                    let _ = sender.send(ExecuteResult::Error(err));
-                }
+                sender.disarm(ExecuteResult::Error(err));
             }
             Ok(Some(tx)) => {
-                let sender = self.result_senders.remove(&signature).map(|(_, s)| s);
-                if let Err(err) = self.sign_and_send_transaction(tx, sender).await {
+                let tx = TransactionEntry::new(tx, sender);
+                if let Err(err) = self.sign_and_send_transaction(tx).await {
                     tracing::error!(%signature, ?tx_hash, ?err, "failed sending transaction next step");
-                    if let Some((_, sender)) = self.result_senders.remove(&signature) {
-                        let _ = sender.send(ExecuteResult::Error(err));
-                    }
                 }
             }
             Ok(None) => {
-                if let Some((_, sender)) = self.result_senders.remove(&signature) {
-                    let _ = sender.send(ExecuteResult::Success);
-                }
+                sender.disarm(ExecuteResult::Success);
             }
         }
     }
@@ -422,18 +422,17 @@ impl Executor {
     async fn handle_error(
         &self,
         signature: Signature,
-        tx: OngoingTransaction,
+        tx: TransactionEntry,
         slot: u64,
         err: TransactionError,
     ) {
-        let tx_hash = tx.eth_tx().map(|tx| *tx.tx_hash());
+        let mut tx = tx;
+        let tx_hash = tx.tx().tx_hash().copied();
         tracing::warn!(?tx_hash, %signature, slot, ?err, "transaction was confirmed, but failed");
+        tx.disarm(ExecuteResult::TransactionError(err));
 
         // TODO: do we retry?
         // TODO: do we request logs?
-        if let Some((_, sender)) = self.result_senders.remove(&signature) {
-            let _ = sender.send(ExecuteResult::TransactionError(err));
-        }
     }
 
     async fn init_operator_balance(&self, chain_id: u64) -> anyhow::Result<Option<Signature>> {
@@ -452,7 +451,8 @@ impl Executor {
 
         tracing::info!(chain_id, "initializing operator balance");
         let tx = self.builder.init_operator_balance(chain_id);
-        let signature = self.sign_and_send_transaction(tx, None).await?;
+        let tx = TransactionEntry::no_feedback(tx);
+        let signature = self.sign_and_send_transaction(tx).await?;
 
         Ok(Some(signature))
     }
@@ -471,9 +471,8 @@ impl Execute for Executor {
             .await
             .context("cannot init operator balance")?;
 
-        let signature = self
-            .sign_and_send_transaction(ongoing, result_sender)
-            .await?;
+        let tx = TransactionEntry::new(ongoing, result_sender.into());
+        let signature = self.sign_and_send_transaction(tx).await?;
 
         Ok(signature)
     }
