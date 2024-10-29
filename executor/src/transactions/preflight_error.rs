@@ -105,39 +105,27 @@ impl TransactionBuilder {
     }
 
     /// Retry exceeded Transaction size error
+    ///
+    /// First we try to save some tx len using holder and then we resort to using ALTs.
+    // TODO: A better way would be to decide which method to use first depending on the size
+    //     :of the excess, but this would require heavier refactoring which is not an option ATM.
     pub(super) async fn handle_tx_size(
         &self,
         tx: OngoingTransaction,
     ) -> Result<OngoingTransaction> {
         let tx_hash = tx.eth_tx().map(|tx| tx.tx_hash()).copied();
+        let has_alt = tx.alt().is_some();
         match tx.disassemble() {
-            TxStage::Final {
-                tx_data: Some(tx_data),
-                holder: Some(holder),
-            }
-            | TxStage::DataExecution {
-                tx_data,
-                holder,
-                alt: None,
-                ..
-            }
-            | TxStage::IterativeExecution {
-                tx_data,
-                holder,
-                alt: None,
-                ..
-            } => {
-                tracing::warn!(?tx_hash, "tx retry with ALT");
-                self.start_from_alt(tx_data, Some(holder)).await
-            }
+            // Try using holder if not used yet
+            // TODO: Possible optimization is to check whether eth tx data size is greater than
+            //     : sol tx size excess
             TxStage::DataExecution {
                 tx_data,
-                alt: Some(_),
                 ..
             }
             | TxStage::IterativeExecution {
                 tx_data,
-                alt: Some(_),
+                from_data: true,
                 ..
             }
             | TxStage::Final {
@@ -147,9 +135,37 @@ impl TransactionBuilder {
                 tracing::warn!(?tx_hash, "Data tx retry from Holder");
                 self.start_holder_execution(tx_data.envelope).await
             }
+
+            // Switch to ALT strategy if holder does not help
+            TxStage::Final {
+                tx_data: Some(tx_data),
+                holder: Some(holder),
+            } if !has_alt => {
+                tracing::warn!(?tx_hash, "tx retry with ALT");
+                self.start_from_alt(tx_data, Some(holder)).await
+            }
+            TxStage::IterativeExecution {
+                tx_data,
+                holder,
+                alt: None,
+                from_data: false,
+                ..
+            } => {
+                tracing::warn!(?tx_hash, "tx retry with ALT");
+                self.start_from_alt(tx_data, Some(holder)).await
+            }
+
+            // Unrecoverable 
             stage @ TxStage::HolderFill { .. }
             | stage @ TxStage::AltFill { .. }
-            | stage @ TxStage::Final { tx_data: None, .. }
+            // Has both holder and ALT
+            | stage @ TxStage::IterativeExecution {
+                alt: Some(_),
+                from_data: false,
+                ..
+            }
+            | stage @ TxStage::Final { tx_data: None, .. } // Not an ETH tx
+            | stage @ TxStage::Final { tx_data: Some(_), holder: Some(_) } // Has both holder and ALT
             | stage @ TxStage::RecoveredHolder { .. }
             | stage @ TxStage::Cancel { .. } => bail!("cannot shorten tx size: {stage:?}"),
         }
