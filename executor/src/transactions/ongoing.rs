@@ -71,7 +71,7 @@ pub(super) enum TxStage {
         holder: Option<HolderInfo>,
     },
     Cancel {
-        _tx_hash: B256,
+        tx_hash: B256,
         _holder: HolderInfo,
     },
 }
@@ -196,8 +196,8 @@ impl TxStage {
         }
     }
 
-    pub fn cancel(_tx_hash: B256, _holder: HolderInfo) -> Self {
-        Self::Cancel { _tx_hash, _holder }
+    pub fn cancel(tx_hash: B256, _holder: HolderInfo) -> Self {
+        Self::Cancel { tx_hash, _holder }
     }
 }
 
@@ -291,6 +291,32 @@ impl OngoingTransaction {
             TxStage::Final { tx_data: None, .. }
             | TxStage::RecoveredHolder { .. }
             | TxStage::Cancel { .. } => None,
+        }
+    }
+
+    pub fn tx_hash(&self) -> Option<&B256> {
+        match &self.stage {
+            TxStage::HolderFill { tx: envelope, .. }
+            | TxStage::IterativeExecution {
+                tx_data: TxData { envelope, .. },
+                ..
+            }
+            | TxStage::AltFill {
+                tx_data: TxData { envelope, .. },
+                ..
+            }
+            | TxStage::DataExecution {
+                tx_data: TxData { envelope, .. },
+                ..
+            }
+            | TxStage::Final {
+                tx_data: Some(TxData { envelope, .. }),
+                ..
+            } => Some(envelope.tx_hash()),
+            TxStage::RecoveredHolder { tx_hash, .. } | TxStage::Cancel { tx_hash, .. } => {
+                Some(tx_hash)
+            }
+            TxStage::Final { tx_data: None, .. } => None,
         }
     }
 
