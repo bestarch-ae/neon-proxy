@@ -27,6 +27,7 @@ use neon_api::NeonApi;
 use operator::Operator;
 use solana_api::solana_api::SolanaApi;
 use tracing::info;
+use tracing::warn;
 use typed_builder::TypedBuilder;
 
 use self::entry::TransactionEntry;
@@ -428,11 +429,18 @@ impl Executor {
     ) {
         let mut tx = tx;
         let tx_hash = tx.tx().tx_hash().copied();
-        tracing::warn!(?tx_hash, %signature, slot, ?err, "transaction was confirmed, but failed");
+        let meta = self.solana_api
+            .get_transaction(&signature)
+            .await
+            .inspect_err(|error| {
+                warn!(%signature, ?error, "could not request failed transaction for inspection")
+            })
+            .ok()
+            .and_then(|tx| tx.transaction.meta);
+        warn!(?tx_hash, %signature, slot, ?err, ?meta, "transaction was confirmed, but failed");
         tx.disarm(ExecuteResult::TransactionError(err));
 
         // TODO: do we retry?
-        // TODO: do we request logs?
     }
 
     async fn init_operator_balance(&self, chain_id: u64) -> anyhow::Result<Option<Signature>> {
