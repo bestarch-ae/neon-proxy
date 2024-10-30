@@ -19,8 +19,7 @@ use common::neon_lib::types::{BalanceAddress, TxParams};
 use executor::ExecuteRequest;
 use mempool::GasPricesTrait;
 
-use crate::convert::NeonTransactionReceipt;
-use crate::convert::{convert_filters, EthNeonLog};
+use crate::convert::{convert_filters, EthNeonLog, NeonTransactionReceipt};
 use crate::convert::{neon_to_eth, neon_to_eth_receipt};
 use crate::error::{call_execution_failed, invalid_params, unimplemented, Error};
 use crate::rpc::EthApiImpl;
