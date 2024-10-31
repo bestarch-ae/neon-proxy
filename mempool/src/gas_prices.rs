@@ -241,7 +241,8 @@ async fn update_price_models_loop(
     base_token_pkey: Pubkey,
     chain_token_map: HashMap<u64, (Pubkey, String)>,
 ) {
-    let mut price_calculator = GasPriceCalculator::new(calculator_config);
+    let mut calculators = HashMap::new();
+    // let mut price_calculator = GasPriceCalculator::new(calculator_config);
     let refresh_rate = Duration::from_millis(PRICES_REFRESH_RATE_MS);
     let mut interval = tokio::time::interval(refresh_rate);
 
@@ -263,6 +264,9 @@ async fn update_price_models_loop(
                 .get(token_pkey)
                 .map(|p| adjust_scale(p.price as u128, p.expo, TARGET_PREC))
                 .unwrap_or(0);
+            let price_calculator = calculators
+                .entry(chain_id)
+                .or_insert_with(|| GasPriceCalculator::new(calculator_config.clone()));
             if let Some(gas_model) = price_calculator.build_gas_price_model(
                 chain_id,
                 token_name.clone(),
