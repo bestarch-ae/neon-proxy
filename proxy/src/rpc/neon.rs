@@ -5,7 +5,8 @@ use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::types::{ErrorCode, ErrorObjectOwned};
 use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, B256, U256, U64};
-use rpc_api_types::{Filter, Log, Transaction};
+use rpc_api_types::other::OtherFields;
+use rpc_api_types::{Filter, Log, Transaction, WithOtherFields};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
 // use evm_loader::types::{Address as NeonAddress};
@@ -78,6 +79,7 @@ impl From<Vec<Signature>> for SolanaByNeonResponse {
 
 #[serde_as]
 #[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct NeonLog {
     #[serde(flatten)]
     pub log: Log,
@@ -217,7 +219,7 @@ trait NeonCustomApi {
     ) -> RpcResult<Option<Transaction>>;
 
     #[method(name = "getLogs")]
-    async fn logs(&self, request: Filter) -> RpcResult<Vec<NeonLog>>;
+    async fn logs(&self, request: Filter) -> RpcResult<Vec<WithOtherFields<NeonLog>>>;
 
     #[method(name = "getSolanaTransactionByNeonTransaction")]
     async fn solana_by_neon(
@@ -401,11 +403,24 @@ impl NeonCustomApiServer for EthApiImpl {
         Ok(tx)
     }
 
-    async fn logs(&self, filter: Filter) -> RpcResult<Vec<NeonLog>> {
+    async fn logs(&self, filter: Filter) -> RpcResult<Vec<WithOtherFields<NeonLog>>> {
         use crate::convert::convert_filters;
 
+        let filter = self.normalize_filter(filter).await?;
         let filters = convert_filters(filter).map_err(Error::from)?;
-        let logs = self.get_logs(filters).await?;
+        let logs = self
+            .get_logs(filters)
+            .await?
+            .into_iter()
+            .map(|log| {
+                let mut other = OtherFields::default();
+                other.insert(
+                    "address".to_string(),
+                    serde_json::to_value(log.log.inner.address.to_string()).unwrap(),
+                );
+                WithOtherFields { inner: log, other }
+            })
+            .collect();
         Ok(logs)
     }
 
