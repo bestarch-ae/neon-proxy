@@ -155,7 +155,7 @@ impl Emulator {
         emulate: &EmulateResponse,
         f: impl FnMut(&mut IterInfo) -> anyhow::Result<Vec<Transaction>>,
     ) -> anyhow::Result<IterInfo> {
-        const RETRIES: usize = 5;
+        const RETRIES: usize = 10;
 
         let mut f = f;
         let total_steps = emulate.steps_executed;
