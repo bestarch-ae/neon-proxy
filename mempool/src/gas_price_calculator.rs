@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 
 use clap::Args;
 use reth_primitives::{U128, U64};
+use rust_decimal::Decimal;
 
 use crate::gas_prices::{GasPriceModel, PRICES_REFRESH_RATE_MS};
 
@@ -21,7 +22,7 @@ pub struct GasPriceCalculatorConfig {
     pub solana_cu_priority_fee: u128,
     #[arg(long, default_value = "10000")]
     pub solana_simple_cu_priority_fee: u128,
-    #[arg(long, default_value = "100000000000")]
+    #[arg(long, default_value = "1000000000")]
     pub min_wo_chain_id_acceptable_gas_price: u128,
 }
 
@@ -44,7 +45,7 @@ impl GasPriceCalculatorConfig {
 #[derive(Debug, Clone)]
 pub struct GasPriceCalculator {
     pub config: GasPriceCalculatorConfig,
-    net_prices: VecDeque<u128>,
+    net_prices: VecDeque<Decimal>,
 }
 
 impl GasPriceCalculator {
@@ -59,41 +60,53 @@ impl GasPriceCalculator {
         &mut self,
         chain_id: u64,
         token_name: String,
-        base_price_usd: u128,
-        token_price_usd: u128,
+        mut base_price_usd: Decimal,
+        mut token_price_usd: Decimal,
     ) -> Option<GasPriceModel> {
         if let Some(const_gas_price) = self.config.const_gas_price() {
+            base_price_usd.rescale(5);
+            token_price_usd.rescale(5);
             return Some(build_gas_price_model(
                 chain_id,
                 token_name,
                 true,
                 const_gas_price,
                 self.config.min_acceptable_gas_price,
-                base_price_usd,
-                token_price_usd,
+                base_price_usd.mantissa().unsigned_abs(),
+                token_price_usd.mantissa().unsigned_abs(),
                 &self.config,
             ));
         }
 
-        if token_price_usd == 0 {
+        if token_price_usd == Decimal::ZERO {
             return None;
         }
-        let net_price = base_price_usd * 1_000_000_000 / token_price_usd;
+        let net_price = base_price_usd * Decimal::from(1_000_000_000) / token_price_usd;
         self.net_prices.push_back(net_price);
         if self.net_prices.len() > self.config.min_exec_gas_price_cnt() {
             self.net_prices.pop_front();
         }
-        let suggested_gas_price = net_price * (100_000 + self.config.operator_fee) / 100_000;
-        let min_executable_gas_price = self.net_prices.iter().min().copied().unwrap_or(0);
+        let op_fee =
+            Decimal::from(self.config.operator_fee) / Decimal::from(100_000) + Decimal::ONE;
+        let suggested_gas_price = net_price * op_fee;
+        let min_executable_gas_price = self
+            .net_prices
+            .iter()
+            .min()
+            .copied()
+            .unwrap_or(Decimal::ZERO);
 
+        base_price_usd.rescale(5);
+        token_price_usd.rescale(5);
+        // suggested_gas_price.trunc();
         Some(build_gas_price_model(
             chain_id,
             token_name,
             false,
-            suggested_gas_price,
-            min_executable_gas_price,
-            base_price_usd,
-            token_price_usd,
+            suggested_gas_price.trunc().mantissa().unsigned_abs(),
+            min_executable_gas_price.trunc().mantissa().unsigned_abs(),
+            base_price_usd.mantissa().unsigned_abs(),
+            token_price_usd.mantissa().unsigned_abs(),
             &self.config,
         ))
     }
