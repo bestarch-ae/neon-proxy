@@ -30,3 +30,4 @@ tokio-util = { version = "0.7.12", features = ["time"] }
 tracing.workspace = true
 thiserror.workspace = true
 futures-util.workspace = true
+rust_decimal = "1.36.0"

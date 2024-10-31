@@ -3,14 +3,15 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use dashmap::DashMap;
-use neon_api::NeonApi;
 use pyth_sdk_solana::Price;
 use reth_primitives::{U128, U64};
+use rust_decimal::Decimal;
 use serde::Serialize;
-use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use tracing::{error, info, warn};
 
 use common::solana_sdk::pubkey::Pubkey;
+use neon_api::NeonApi;
+use solana_api::solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
 use crate::error::MempoolError;
 use crate::gas_price_calculator::{GasPriceCalculator, GasPriceCalculatorConfig};
@@ -19,7 +20,6 @@ use crate::pyth_price_collector::PythPricesCollector;
 pub type Symbology = HashMap<String, Pubkey>;
 
 const EVM_CONFIG_REFRESH_RATE_SEC: u64 = 60;
-const TARGET_PREC: i32 = -9;
 const ONE_BLOCK_MS: u64 = 400;
 pub const PRICES_REFRESH_RATE_MS: u64 = 16 * ONE_BLOCK_MS;
 
@@ -166,19 +166,6 @@ impl GasPricesTrait for GasPrices {
     }
 }
 
-#[allow(clippy::comparison_chain)]
-fn adjust_scale(n: u128, old_expo: i32, new_expo: i32) -> u128 {
-    if new_expo > old_expo {
-        let factor = 10u128.pow((new_expo - old_expo) as u32);
-        n / factor
-    } else if new_expo < old_expo {
-        let factor = 10u128.pow((old_expo - new_expo) as u32);
-        n * factor
-    } else {
-        n
-    }
-}
-
 async fn update_prices_loop(
     ws_url: String,
     prices: Weak<DashMap<Pubkey, Price>>,
@@ -255,15 +242,17 @@ async fn update_price_models_loop(
             info!("gas_price_models dropped, exiting");
             break;
         };
+
         let base_price_usd = prices
             .get(&base_token_pkey)
-            .map(|p| adjust_scale(p.price as u128, p.expo, TARGET_PREC))
-            .unwrap_or(0);
+            .map(|p| Decimal::new(p.price, p.expo.unsigned_abs()))
+            .unwrap_or(Decimal::ZERO);
+
         for (&chain_id, (token_pkey, token_name)) in chain_token_map.iter() {
             let token_price_usd = prices
                 .get(token_pkey)
-                .map(|p| adjust_scale(p.price as u128, p.expo, TARGET_PREC))
-                .unwrap_or(0);
+                .map(|p| Decimal::new(p.price, p.expo.unsigned_abs()))
+                .unwrap_or(Decimal::ZERO);
             let price_calculator = calculators
                 .entry(chain_id)
                 .or_insert_with(|| GasPriceCalculator::new(calculator_config.clone()));
