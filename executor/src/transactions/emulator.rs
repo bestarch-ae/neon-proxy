@@ -165,15 +165,18 @@ impl Emulator {
             .round()
             .try_into()
             .expect("rounded and fits");
+        let mut exec_iter =
+            (total_steps / iter_steps) + if total_steps % iter_steps > 1 { 1 } else { 0 };
 
         for retry in 0..RETRIES {
             if iter_steps <= self.evm_steps_min.load(Relaxed) {
                 break;
             }
 
-            let exec_iter =
-                (total_steps / iter_steps) + if total_steps % iter_steps > 1 { 1 } else { 0 };
+            // let exec_iter =
+            //     (total_steps / iter_steps) + if total_steps % iter_steps > 1 { 1 } else { 0 };
             let iterations = exec_iter + wrap_iter;
+            tracing::debug!(%tx_hash, iter_steps, total_steps, iterations, "testing iter_info");
 
             let mut iter_info =
                 IterInfo::new(iter_steps as u32, iterations as u32, MAX_COMPUTE_UNITS);
@@ -184,7 +187,7 @@ impl Emulator {
 
             let has_errored = res.iter().any(|res| res.error.is_some());
             if has_errored {
-                tracing::warn!(%tx_hash, try_idx = retry, "simulation errored");
+                tracing::debug!(%tx_hash, try_idx = retry, "simulation errored");
                 for (tx_idx, res) in res.iter().enumerate() {
                     tracing::debug!(%tx_hash, tx_idx, try_idx = retry, ?res, "simulation report");
                 }
@@ -206,15 +209,19 @@ impl Emulator {
                 return Ok(iter_info);
             }
 
-            let ratio = dec!(0.9).min(
-                Decimal::from(max_cu_limit)
-                    .checked_div(used_cu_limit.into())
-                    .unwrap_or(Decimal::MAX),
-            );
-            iter_steps = self
-                .evm_steps_min
-                .load(Relaxed)
-                .max(ratio.saturating_mul(iter_steps.into()).try_into()?);
+            // let ratio = dec!(0.9).min(
+            //     Decimal::from(max_cu_limit)
+            //         .checked_div(used_cu_limit.into())
+            //         .unwrap_or(Decimal::MAX),
+            // );
+            // iter_steps = self
+            //     .evm_steps_min
+            //     .load(Relaxed)
+            //     .max(ratio.saturating_mul(iter_steps.into()).try_into()?);
+            exec_iter += 1;
+            iter_steps =
+                (total_steps / exec_iter) + if total_steps % exec_iter > 0 { 1 } else { 0 };
+            iter_steps = self.evm_steps_min.load(Relaxed).max(iter_steps);
         }
 
         tracing::warn!(%tx_hash, RETRIES, "fallback to default iterations");
