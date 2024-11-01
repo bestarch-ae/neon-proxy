@@ -15,6 +15,7 @@ use common::types::HolderOperation;
 
 pub use alt::AltRepo;
 pub use block::{BlockBy, BlockRepo};
+use common::ethnum::U256;
 pub use reliable_empty_slot::ReliableEmptySlotRepo;
 pub use sqlx::PgPool;
 pub use transaction::{RichLog, RichLogBy, TransactionBy, TransactionRepo, WithBlockhash};
@@ -56,6 +57,40 @@ impl From<PgSolanaBlockHash> for Hash {
 
 pub struct SolanaSignaturesRepo {
     pool: sqlx::PgPool,
+}
+
+fn u256_to_bytes(val: &U256) -> [u8; 32] {
+    let (hi, lo) = val.into_words();
+    let mut buf = [0; 32];
+    buf[0..16].copy_from_slice(&lo.to_le_bytes());
+    buf[16..32].copy_from_slice(&hi.to_le_bytes());
+    buf
+}
+
+#[derive(sqlx::Type, Clone, Debug, Default)]
+#[sqlx(type_name = "U256", transparent)]
+struct PgU256(sqlx::types::BigDecimal);
+
+impl From<sqlx::types::BigDecimal> for PgU256 {
+    fn from(val: sqlx::types::BigDecimal) -> Self {
+        Self(val)
+    }
+}
+
+impl From<U256> for PgU256 {
+    fn from(val: U256) -> Self {
+        let buf = u256_to_bytes(&val);
+        let bigint = num_bigint::BigInt::from_bytes_le(num_bigint::Sign::Plus, &buf);
+
+        PgU256(sqlx::types::BigDecimal::new(bigint, 0))
+    }
+}
+
+impl From<PgU256> for U256 {
+    fn from(value: PgU256) -> Self {
+        use std::str::FromStr;
+        U256::from_str(&value.0.to_string()).unwrap()
+    }
 }
 
 impl SolanaSignaturesRepo {

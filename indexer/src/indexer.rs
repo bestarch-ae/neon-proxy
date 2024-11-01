@@ -242,7 +242,7 @@ impl Indexer {
                             }
                         }
                         tracing::debug!(?tx, "adding transaction");
-                        // all transactions increment tx_log_idx
+                        // all transactions increment tx_log_idx, except hidden logs
                         for log in &mut tx.events {
                             if !log.is_hidden {
                                 log.tx_log_idx = self.tx_log_idx.next(&tx.neon_signature).await;
