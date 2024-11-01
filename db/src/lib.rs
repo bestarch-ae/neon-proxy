@@ -1,15 +1,18 @@
 mod alt;
 mod block;
 mod reliable_empty_slot;
+mod solana_neon_transactions;
 mod transaction;
 
 use std::str::FromStr;
 
 use anyhow::Context;
+use num_traits::ToPrimitive;
 use sqlx::postgres::Postgres;
 use thiserror::Error;
 
 use common::ethnum::U256;
+use common::evm_loader::types::Address;
 use common::solana_sdk::signature::Signature;
 use common::solana_sdk::{hash::Hash, pubkey::Pubkey};
 use common::types::HolderOperation;
@@ -17,6 +20,7 @@ use common::types::HolderOperation;
 pub use alt::AltRepo;
 pub use block::{BlockBy, BlockRepo};
 pub use reliable_empty_slot::ReliableEmptySlotRepo;
+pub use solana_neon_transactions::SolanaNeonTransactionRepo;
 pub use sqlx::PgPool;
 pub use transaction::{RichLog, RichLogBy, TransactionBy, TransactionRepo, WithBlockhash};
 
@@ -69,7 +73,13 @@ fn u256_to_bytes(val: &U256) -> [u8; 32] {
 
 #[derive(sqlx::Type, Clone, Debug, Default)]
 #[sqlx(type_name = "U256", transparent)]
-struct PgU256(sqlx::types::BigDecimal);
+pub struct PgU256(sqlx::types::BigDecimal);
+
+impl PgU256 {
+    pub fn as_u64(&self) -> u64 {
+        self.0.to_u64().expect("value exceeds u64 range")
+    }
+}
 
 impl From<sqlx::types::BigDecimal> for PgU256 {
     fn from(val: sqlx::types::BigDecimal) -> Self {
@@ -106,6 +116,31 @@ impl From<Pubkey> for PgPubkey {
 impl From<PgPubkey> for Pubkey {
     fn from(value: PgPubkey) -> Self {
         value.0.into()
+    }
+}
+
+#[derive(sqlx::Type, Copy, Clone, Debug, Default)]
+#[sqlx(type_name = "Address", transparent, no_pg_array)]
+pub struct PgAddress([u8; 20]);
+
+impl From<Address> for PgAddress {
+    fn from(addr: Address) -> Self {
+        Self(addr.0)
+    }
+}
+
+impl From<PgAddress> for Address {
+    fn from(value: PgAddress) -> Self {
+        Address(value.0)
+    }
+}
+
+impl From<Vec<u8>> for PgAddress {
+    fn from(val: Vec<u8>) -> Self {
+        assert_eq!(val.len(), 20);
+        let mut buf = [0; 20];
+        buf.copy_from_slice(&val);
+        PgAddress(buf)
     }
 }
 

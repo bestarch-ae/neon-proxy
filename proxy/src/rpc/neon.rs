@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use futures_util::stream::TryStreamExt;
+use futures_util::StreamExt;
 use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::types::{ErrorCode, ErrorObjectOwned};
@@ -12,6 +13,7 @@ use serde_with::{serde_as, DisplayFromStr};
 // use evm_loader::types::{Address as NeonAddress};
 
 use common::convert::{ToNeon, ToReth};
+use common::neon_instruction::tag::tag_to_str;
 use common::neon_lib::commands::emulate::{EmulateResponse, SolanaAccount};
 use common::neon_lib::commands::get_balance::BalanceStatus;
 use common::neon_lib::types::{BalanceAddress, SerializedAccount, TxParams};
@@ -20,8 +22,8 @@ use common::solana_sdk::signature::Signature;
 use common::types::EventKind;
 use mempool::GasPriceModel;
 
-use crate::convert::{neon_to_eth, NeonTransactionReceipt};
-use crate::error::{unimplemented, Error};
+use crate::convert::{neon_to_eth, neon_to_eth_receipt, to_neon_receipt, NeonTransactionReceipt};
+use crate::error::{internal_error, Error};
 use crate::rpc::EthApiImpl;
 
 #[serde_as]
@@ -38,18 +40,58 @@ pub struct Token {
 #[serde(rename_all = "camelCase")]
 pub struct NeonReceipt {
     receipt: NeonTransactionReceipt,
-    solana_block_hash: String,
-    solana_complete_transaction_signature: String,
-    solana_complete_instruction_index: u32,
-    solana_complete_inner_instruction_index: u32,
+    solana_block_hash: Option<B256>,
+    solana_complete_transaction_signature: Signature,
+    solana_complete_instruction_index: u64,
+    solana_complete_inner_instruction_index: Option<u64>,
     neon_raw_transaction: Bytes,
     neon_is_completed: bool,
     neon_is_canceled: bool,
-    solana_transactions: Vec<()>,
-    neon_costs: Vec<()>,
+    solana_transactions: Vec<SolanaTransaction>,
+    neon_costs: Vec<NeonCost>,
 }
 
-#[derive(Deserialize, Debug, Clone, Copy)]
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct NeonCost {
+    neon_operator_address: Address,
+    solana_lamport_expense: i64,
+    neon_alan_income: u64,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SolanaTransaction {
+    #[serde(skip)]
+    sol_sig: Vec<u8>,
+    solana_transaction_is_success: bool,
+    solana_block_slot: u64,
+    solana_lamport_expense: u64,
+    neon_operator_address: Address,
+    solana_instructions: Vec<SolanaInstruction>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SolanaInstruction {
+    solana_program: String,
+    solana_instruction_index: u64,
+    solana_inner_instruction_index: Option<u64>,
+    svm_heap_size_limit: u64,
+    svm_cycles_limit: u64,
+    svm_cycles_used: u64,
+    neon_instruction_code: u64,
+    neon_instruction_name: String,
+    neon_evm_steps: u64,
+    neon_total_evm_steps: u64,
+    neon_gas_used: u64,
+    neon_total_gas_used: u64,
+    neon_transaction_fee: u64,
+    neon_miner: Option<Address>,
+    neon_logs: Vec<NeonLog>,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ReceiptDetail {
     Ethereum,
@@ -229,7 +271,11 @@ trait NeonCustomApi {
     ) -> RpcResult<SolanaByNeonResponse>;
 
     #[method(name = "getTransactionReceipt")]
-    async fn transaction_receipt(&self, hash: B256, detail: ReceiptDetail) -> RpcResult<()>;
+    async fn transaction_receipt(
+        &self,
+        hash: B256,
+        detail: ReceiptDetail,
+    ) -> RpcResult<Option<NeonReceipt>>;
 
     #[method(name = "getNativeTokenList")]
     async fn native_token_list(&self) -> RpcResult<Vec<Token>>;
@@ -436,8 +482,128 @@ impl NeonCustomApiServer for EthApiImpl {
         Ok(SolanaByNeonResponse::from(signatures))
     }
 
-    async fn transaction_receipt(&self, _hash: B256, _detail: ReceiptDetail) -> RpcResult<()> {
-        unimplemented()
+    async fn transaction_receipt(
+        &self,
+        hash: B256,
+        detail: ReceiptDetail,
+    ) -> RpcResult<Option<NeonReceipt>> {
+        use crate::convert::convert_filters;
+        use common::evm_loader::types::Address as EvmAddress;
+
+        let Some(tx_info) = self
+            .get_transaction(db::TransactionBy::Hash(hash.0.into()))
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        let log_filter = Filter::new().select(hash);
+        let log_filters = convert_filters(log_filter).map_err(Error::from)?;
+        let logs = self.get_logs(log_filters).await?;
+
+        let mut neon_costs_draft = HashMap::new();
+        let mut sol_txs: Vec<SolanaTransaction> = vec![];
+        if detail == ReceiptDetail::SolanaTransactionList {
+            let mut sol_tx_ixs = self
+                .sol_neon_transactions
+                .fetch_with_costs(hash.0.into())
+                .await;
+
+            while let Some(result) = sol_tx_ixs.next().await {
+                let sol_tx_ix = result.map_err(Error::from)?;
+                let sol_sig = &sol_tx_ix.transaction.sol_sig;
+                let neon_operator_address =
+                    Address::new(EvmAddress::from(sol_tx_ix.cost.operator).0);
+
+                if sol_txs.last().map_or(true, |last| last.sol_sig != *sol_sig) {
+                    sol_txs.push(SolanaTransaction {
+                        sol_sig: sol_sig.clone(),
+                        solana_transaction_is_success: sol_tx_ix.transaction.is_success,
+                        solana_block_slot: sol_tx_ix.transaction.block_slot as u64,
+                        solana_lamport_expense: sol_tx_ix.cost.sol_spent as u64,
+                        neon_operator_address,
+                        solana_instructions: vec![],
+                    });
+                }
+
+                let neon_transaction_fee = sol_tx_ix.transaction.neon_gas_used.as_u64()
+                    * tx_info.inner.transaction.gas_price().as_u64();
+                let cost = neon_costs_draft
+                    .entry(neon_operator_address)
+                    .or_insert(NeonCost {
+                        neon_operator_address,
+                        solana_lamport_expense: 0,
+                        neon_alan_income: 0,
+                    });
+                cost.solana_lamport_expense += sol_tx_ix.cost.sol_spent;
+                cost.neon_alan_income += neon_transaction_fee;
+
+                let sol_tx = sol_txs.last_mut().unwrap();
+
+                let sol_tx_ix_sig = common::solana_sdk::signature::Signature::from(
+                    <[u8; 64]>::try_from(sol_tx_ix.transaction.sol_sig.clone())
+                        .map_err(|_| internal_error("failed to parse tx signature"))?,
+                );
+
+                let sol_ix_logs = logs
+                    .iter()
+                    .filter(|log| {
+                        log.solana_transaction_signature == sol_tx_ix_sig
+                            && log.solana_instruction_index == sol_tx_ix.transaction.idx as u64
+                            && log.solana_inner_instruction_index
+                                == sol_tx_ix.transaction.inner_idx.map(|v| v as u64)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+
+                let sol_ix = SolanaInstruction {
+                    solana_program: "NeonEVM".to_owned(),
+                    solana_instruction_index: sol_tx_ix.transaction.idx as u64,
+                    solana_inner_instruction_index: sol_tx_ix
+                        .transaction
+                        .inner_idx
+                        .map(|v| v as u64),
+                    svm_heap_size_limit: sol_tx_ix.transaction.used_heap_size as u64,
+                    svm_cycles_limit: sol_tx_ix.transaction.max_bpf_cycle_cnt as u64,
+                    svm_cycles_used: sol_tx_ix.transaction.used_bpf_cycle_cnt as u64,
+                    neon_instruction_code: sol_tx_ix.transaction.ix_code as u64,
+                    neon_instruction_name: tag_to_str(sol_tx_ix.transaction.ix_code as u8)
+                        .to_owned(),
+                    neon_total_evm_steps: sol_tx_ix.transaction.neon_step_cnt as u64,
+                    neon_evm_steps: sol_tx_ix.transaction.neon_step_cnt as u64,
+                    neon_gas_used: sol_tx_ix.transaction.neon_gas_used.as_u64(),
+                    neon_total_gas_used: sol_tx_ix.transaction.neon_total_gas_used.as_u64(),
+                    neon_transaction_fee,
+                    neon_miner: None, // todo:
+                    neon_logs: sol_ix_logs,
+                };
+                sol_tx.solana_instructions.push(sol_ix);
+            }
+        }
+
+        let solana_complete_transaction_signature = tx_info.inner.sol_signature;
+        let solana_complete_instruction_index = tx_info.inner.sol_ix_idx;
+        let solana_complete_inner_instruction_index = tx_info.inner.sol_ix_inner_idx;
+        let neon_is_completed = tx_info.inner.is_completed;
+        let eth_receipt =
+            neon_to_eth_receipt(tx_info.inner, tx_info.blockhash).map_err(Error::from)?;
+        let neon_receipt = to_neon_receipt(eth_receipt);
+        let solana_block_hash = neon_receipt.block_hash;
+
+        let receipt = NeonReceipt {
+            receipt: neon_receipt,
+            solana_block_hash,
+            solana_complete_transaction_signature,
+            solana_complete_instruction_index,
+            solana_complete_inner_instruction_index,
+            neon_raw_transaction: Bytes::default(), // TODO: ???
+            neon_is_completed,
+            neon_is_canceled: false, // TODO: ???
+            solana_transactions: sol_txs,
+            neon_costs: neon_costs_draft.values().cloned().collect(),
+        };
+
+        Ok(Some(receipt))
     }
 
     async fn native_token_list(&self) -> RpcResult<Vec<Token>> {

@@ -13,7 +13,7 @@ use common::types::{
     CanceledNeonTxInfo, EventKind, EventLog, NeonTxInfo, TxHash, SOLANA_MAX_HEAP_SIZE,
 };
 
-use crate::{u256_to_bytes, PgPubkey, PgSolanaBlockHash, PgU256};
+use crate::{u256_to_bytes, PgAddress, PgPubkey, PgSolanaBlockHash, PgU256};
 
 use super::Error;
 
@@ -41,31 +41,6 @@ pub struct RichLog {
 pub enum RichLogBy {
     Hash([u8; 32]),
     SlotRange { from: Option<u64>, to: Option<u64> },
-}
-
-#[derive(sqlx::Type, Copy, Clone, Debug, Default)]
-#[sqlx(type_name = "Address", transparent, no_pg_array)]
-struct PgAddress([u8; 20]);
-
-impl From<Address> for PgAddress {
-    fn from(addr: Address) -> Self {
-        Self(addr.0)
-    }
-}
-
-impl From<PgAddress> for Address {
-    fn from(value: PgAddress) -> Self {
-        Address(value.0)
-    }
-}
-
-impl From<Vec<u8>> for PgAddress {
-    fn from(val: Vec<u8>) -> Self {
-        assert_eq!(val.len(), 20);
-        let mut buf = [0; 20];
-        buf.copy_from_slice(&val);
-        PgAddress(buf)
-    }
 }
 
 #[test]

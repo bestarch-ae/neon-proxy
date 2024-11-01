@@ -33,6 +33,7 @@ mod web3;
 pub struct EthApiImpl {
     transactions: ::db::TransactionRepo,
     blocks: ::db::BlockRepo,
+    sol_neon_transactions: ::db::SolanaNeonTransactionRepo,
     neon_api: NeonApi,
     chain_id: u64,
     default_chain_id: u64,
@@ -56,10 +57,12 @@ impl EthApiImpl {
     ) -> Self {
         let transactions = ::db::TransactionRepo::new(pool.clone());
         let blocks = ::db::BlockRepo::new(pool.clone());
+        let solana_transactions = ::db::SolanaNeonTransactionRepo::new(pool.clone());
 
         Self {
             transactions,
             blocks,
+            sol_neon_transactions: solana_transactions,
             neon_api,
             mempool,
             chain_id,

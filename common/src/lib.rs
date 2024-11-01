@@ -47,6 +47,40 @@ pub mod neon_instruction {
         pub const TX_STEP_FROM_DATA_DEPRECATED: u8 = 0x20;
         pub const TX_STEP_FROM_ACCOUNT_DEPRECATED: u8 = 0x21;
         pub const TX_STEP_FROM_ACCOUNT_NO_CHAINID_DEPRECATED: u8 = 0x22;
+
+        pub fn tag_to_str(tag: u8) -> &'static str {
+            match tag {
+                COLLECT_TREASURE => "CollectTreasure",
+                HOLDER_CREATE => "HolderCreate",
+                HOLDER_DELETE => "HolderDelete",
+                HOLDER_WRITE => "HolderWrite",
+                CREATE_MAIN_TREASURY => "CreateMainTreasury",
+                ACCOUNT_CREATE_BALANCE => "AccountCreateBalance",
+                DEPOSIT => "Deposit",
+                TX_EXEC_FROM_DATA => "TxExecFromData",
+                TX_EXEC_FROM_ACCOUNT => "TxExecFromAccount",
+                TX_STEP_FROM_DATA => "TxStepFromData",
+                TX_STEP_FROM_ACCOUNT => "TxStepFromAccount",
+                TX_STEP_FROM_ACCOUNT_NO_CHAINID => "TxStepFromAccountNoChainId",
+                CANCEL => "Cancel",
+                TX_EXEC_FROM_DATA_SOLANA_CALL => "TxExecFromDataSolanaCall",
+                TX_EXEC_FROM_ACCOUNT_SOLANA_CALL => "TxExecFromAccountSolanaCall",
+                OPERATOR_BALANCE_CREATE => "OperatorBalanceCreate",
+                OPERATOR_BALANCE_DELETE => "OperatorBalanceDelete",
+                OPERATOR_BALANCE_WITHDRAW => "OperatorBalanceWithdraw",
+                TX_EXEC_FROM_DATA_DEPRECATED_V13 => "TxExecFromDataDeprecatedV13",
+                TX_EXEC_FROM_DATA_SOLANA_CALL_V13 => "TxExecFromDataSolanaCallV13",
+                DEPOSIT_DEPRECATED => "DepositDeprecated",
+                TX_EXEC_FROM_DATA_DEPRECATED => "TxExecFromDataDeprecated",
+                TX_EXEC_FROM_ACCOUNT_DEPRECATED => "TxExecFromAccountDeprecated",
+                TX_STEP_FROM_DATA_DEPRECATED => "TxStepFromDataDeprecated",
+                TX_STEP_FROM_ACCOUNT_DEPRECATED => "TxStepFromAccountDeprecated",
+                TX_STEP_FROM_ACCOUNT_NO_CHAINID_DEPRECATED => {
+                    "TxStepFromAccountNoChainIdDeprecated"
+                }
+                _ => "UnknownTag",
+            }
+        }
     }
 }
 
