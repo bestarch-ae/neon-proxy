@@ -429,7 +429,9 @@ impl Executor {
     ) {
         let mut tx = tx;
         let tx_hash = tx.tx().tx_hash().copied();
-        let meta = self.solana_api
+
+        if !cfg!(test) {
+            let meta = self.solana_api
             .get_transaction(&signature)
             .await
             .inspect_err(|error| {
@@ -437,7 +439,8 @@ impl Executor {
             })
             .ok()
             .and_then(|tx| tx.transaction.meta);
-        warn!(?tx_hash, %signature, slot, ?err, ?meta, "transaction was confirmed, but failed");
+            warn!(?tx_hash, %signature, slot, ?err, ?meta, "transaction was confirmed, but failed");
+        }
         tx.disarm(ExecuteResult::TransactionError(err));
 
         // TODO: do we retry?
