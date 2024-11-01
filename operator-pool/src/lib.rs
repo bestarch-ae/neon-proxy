@@ -60,6 +60,10 @@ pub struct Config {
     #[arg(long, default_value_t = u8::MAX)]
     /// Maximum holder accounts
     pub max_holders: u8,
+
+    #[arg(long, default_value_t = false)]
+    /// Create all holders on service start
+    pub init_holder: bool,
 }
 
 #[derive(Debug)]
