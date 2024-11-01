@@ -222,6 +222,28 @@ impl HolderManager {
         output
     }
 
+    pub async fn create_all_remaining(&mut self) -> anyhow::Result<Vec<AcquireHolder>> {
+        let mut result = Vec::new();
+        while self.counter.load(SeqCst) < self.max_holders {
+            let idx = self.counter.load(SeqCst);
+            let pubkey = self.holder_key(idx);
+            if self.solana_api.get_account(&pubkey).await?.is_some() {
+                debug!(%self.operator, idx, %pubkey, "skipping");
+                assert_eq!(self.counter.fetch_add(1, SeqCst,), idx);
+                continue;
+            }
+
+            let info = self.new_holder_info(None);
+            let ixs = self.create_holder(&info).await?;
+            result.push(AcquireHolder {
+                info,
+                create_ixs: Some(ixs),
+            })
+        }
+
+        Ok(result)
+    }
+
     async fn try_recover_holder(&self, idx: u8) -> anyhow::Result<Option<RecoveredHolder>> {
         use common::evm_loader::account::{self, legacy, tag};
 
@@ -320,11 +342,15 @@ impl HolderManager {
         ))
     }
 
+    fn holder_key(&self, idx: u8) -> Pubkey {
+        let seed = holder_seed(idx);
+        Pubkey::create_with_seed(&self.operator, &seed, &self.program_id)
+            .expect("cannot create holder address")
+    }
+
     fn new_holder_info(&self, tx: Option<&TxEnvelope>) -> HolderInfo {
         let idx = self.counter.fetch_add(1, SeqCst);
-        let seed = holder_seed(idx);
-        let pubkey = Pubkey::create_with_seed(&self.operator, &seed, &self.program_id)
-            .expect("cannot create holder address");
+        let pubkey = self.holder_key(idx);
 
         self.attach_info(HolderMeta { idx, pubkey }, tx)
     }

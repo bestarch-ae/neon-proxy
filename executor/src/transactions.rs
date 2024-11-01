@@ -173,7 +173,7 @@ impl TransactionBuilder {
         Ok(())
     }
 
-    pub async fn recover(&mut self) -> anyhow::Result<Vec<OngoingTransaction>> {
+    pub async fn recover(&mut self, init_holders: bool) -> anyhow::Result<Vec<OngoingTransaction>> {
         let mut output = Vec::new();
         let holders = self.holder_mgr.recover().await;
 
@@ -226,6 +226,17 @@ impl TransactionBuilder {
             );
         }
 
+        if init_holders {
+            for holder in self.holder_mgr.create_all_remaining().await? {
+                let ixs = holder.create_ixs.expect("must exist for create");
+                let tx = TxStage::Final {
+                    tx_data: None,
+                    holder: Some(holder.info),
+                }
+                .ongoing(&ixs, &self.operator.pubkey());
+                output.push(tx);
+            }
+        }
         Ok(output)
     }
 

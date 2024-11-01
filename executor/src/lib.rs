@@ -110,6 +110,8 @@ pub struct ExecutorBuilder {
     neon_pubkey: Pubkey,
     init_operator_balance: bool,
     max_holders: u8,
+    #[builder(default = false)]
+    init_holders: bool,
 
     operator: Arc<Operator>,
     neon_api: NeonApi,
@@ -157,6 +159,7 @@ impl Executor {
             neon_pubkey,
             init_operator_balance,
             max_holders,
+            init_holders,
             operator,
             neon_api,
             solana_api,
@@ -176,6 +179,7 @@ impl Executor {
             solana_api,
             tx_builder_config,
             init_operator_balance,
+            init_holders,
         )
         .await?;
         let this = Arc::new(this);
@@ -188,6 +192,7 @@ impl Executor {
         solana_api: SolanaApi,
         config: transactions::Config,
         init_balances: bool,
+        init_holders: bool,
     ) -> anyhow::Result<Self> {
         let operator = config.operator.clone();
         info!(?operator, "started executor initialization");
@@ -221,7 +226,7 @@ impl Executor {
         }
 
         // Recovery
-        for tx in this.builder.recover().await? {
+        for tx in this.builder.recover(init_holders).await? {
             let tx = TransactionEntry::new(tx, None.into());
             this.sign_and_send_transaction(tx).await?;
         }
