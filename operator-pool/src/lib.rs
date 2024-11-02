@@ -63,7 +63,7 @@ pub struct Config {
 
     #[arg(long, default_value_t = false)]
     /// Create all holders on service start
-    pub init_holder: bool,
+    pub init_holders: bool,
 }
 
 #[derive(Debug)]
@@ -105,6 +105,7 @@ impl OperatorPool {
                 .pg_pool(pg_pool.clone())
                 .init_operator_balance(config.init_operator_balance)
                 .max_holders(config.max_holders)
+                .init_holders(config.init_holders)
                 .prepare()
                 .start()
                 .await
