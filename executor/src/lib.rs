@@ -23,7 +23,7 @@ use tokio::sync::{oneshot, Notify};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use typed_builder::TypedBuilder;
 
 use neon_api::NeonApi;
@@ -309,7 +309,7 @@ impl Executor {
 
         info!(operator = %self.builder.pubkey(), "started executor task");
         let mut signatures = Vec::new();
-        loop {
+        'main: loop {
             if self.pending_transactions.is_empty() {
                 #[cfg(test)]
                 self.test_ext.notify.notify_waiters();
@@ -329,18 +329,20 @@ impl Executor {
             }
 
             // TODO: request finalized
-            let result = match self.solana_api.get_signature_statuses(&signatures).await {
-                Err(err) => {
-                    tracing::warn!(?err, "could not request signature statuses");
-                    continue;
+            const MAX_SIGNATURES_FOR_REQUEST: usize = 256;
+            for subsignatures in signatures.chunks(MAX_SIGNATURES_FOR_REQUEST) {
+                let result = match self.solana_api.get_signature_statuses(subsignatures).await {
+                    Err(err) => {
+                        warn!(operator = %self.builder.pubkey(), ?err, "could not request signature statuses");
+                        continue 'main;
+                    }
+                    Ok(res) => res,
+                };
+
+                for (signature, status) in subsignatures.iter().zip(result) {
+                    self.handle_signature_status(*signature, status).await;
                 }
-                Ok(res) => res,
-            };
-
-            for (signature, status) in signatures.drain(..).zip(result) {
-                self.handle_signature_status(signature, status).await;
             }
-
             #[cfg(test)]
             if self.check_stop_after() {
                 return Ok(());
@@ -358,7 +360,10 @@ impl Executor {
                 if let Some(value) = $kv {
                     value
                 } else {
-                    tracing::error!(%signature, "missing pending transaction data");
+                    error!(
+                        operator = %self.builder.pubkey(), expr = stringify!($expr), %signature,
+                        "missing pending transaction data"
+                    );
                     return;
                 }
             }
@@ -372,7 +377,12 @@ impl Executor {
                 .solana_api
                 .is_blockhash_valid(&hash)
                 .await
-                .inspect_err(|err| tracing::warn!(?err, "could not check blockhash validity"))
+                .inspect_err(|err| {
+                    warn!(
+                        operator = %self.builder.pubkey(), ?err,
+                        "could not check blockhash validity"
+                    )
+                })
                 .unwrap_or(true);
             if !is_valid {
                 let (_, tx) = bail_if_absent!(self.pending_transactions.remove(&signature));
