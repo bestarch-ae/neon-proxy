@@ -265,7 +265,7 @@ impl TransactionRepo {
 
         for log in &tx.events {
             /* not a real eth event */
-            if log.topic_list.is_empty() {
+            if log.is_hidden || log.topic_list.is_empty() {
                 continue;
             }
 
@@ -363,21 +363,6 @@ impl TransactionRepo {
                 used_bpf_cycle_cnt
             )
             VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-            ON CONFLICT (sol_sig)
-            DO UPDATE SET
-               block_slot = $2,
-               idx = $3,
-               inner_idx = $4,
-               ix_code = $5,
-               is_success = $6,
-               neon_sig = $7,
-               neon_step_cnt = $8,
-               neon_gas_used = $9,
-               neon_total_gas_used = $10,
-               max_heap_size = $11,
-               used_heap_size = $12,
-               max_bpf_cycle_cnt = $13,
-               used_bpf_cycle_cnt = $14
             "#,
             sol_sig.as_ref(),
             block_slot,
@@ -430,6 +415,18 @@ impl TransactionRepo {
                    $7, $8, $9, $10, $11, $12,
                    $13, $14, $15, $16, $17, $18,
                    $19, $20, $21, $22, $23, $24, $25, $26)
+            ON CONFLICT (neon_sig)
+            DO UPDATE SET
+               block_slot = $7,
+               is_completed = $19,
+               is_canceled = $18,
+               status = $17,
+               tx_idx = $8,
+               sol_ix_idx = $5,
+               sol_ix_inner_idx = $6,
+               gas_used = $13,
+               sum_gas_used = $14,
+               neon_step_cnt = $26
             "#,
             tx_hash.as_slice(),                                                // 1
             tx.tx_type as i32,                                                 // 2
