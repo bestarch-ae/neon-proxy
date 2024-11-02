@@ -194,7 +194,7 @@ impl From<NeonTxInfo> for DbRow {
             from_addr: val.from.to_string(),
             sol_sig: String::new(),
             sol_ix_idx: val.sol_ix_idx,
-            sol_ix_inner_idx: Some(val.sol_ix_inner_idx),
+            sol_ix_inner_idx: val.sol_ix_inner_idx,
             block_slot: val.sol_slot,
             tx_idx: val.tx_idx,
             nonce: format!("{:#0x}", val.transaction.nonce()),
@@ -252,9 +252,9 @@ impl From<EncodedTransactionWithStatusMeta> for Wrapped<SolanaTransaction> {
             loaded_addresses,
             status: meta.status,
             log_messages,
-            inner_instructions: Vec::new(),
             compute_units_consumed: 0,
             fee: 0,
+            sol_expense: 0,
         })
     }
 }

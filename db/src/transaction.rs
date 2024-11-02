@@ -7,10 +7,13 @@ use common::ethnum::U256;
 use common::evm_loader::types::vector::{VectorVecExt, VectorVecSlowExt};
 use common::evm_loader::types::{AccessListTx, Address, LegacyTx, Transaction, TransactionPayload};
 use common::solana_sdk::hash::Hash;
+use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
-use common::types::{CanceledNeonTxInfo, EventKind, EventLog, NeonTxInfo, TxHash};
+use common::types::{
+    CanceledNeonTxInfo, EventKind, EventLog, NeonTxInfo, TxHash, SOLANA_MAX_HEAP_SIZE,
+};
 
-use crate::PgSolanaBlockHash;
+use crate::{u256_to_bytes, PgPubkey, PgSolanaBlockHash, PgU256};
 
 use super::Error;
 
@@ -30,7 +33,7 @@ pub struct RichLog {
     pub tx_hash: TxHash,
     pub sol_signature: Signature,
     pub sol_ix_idx: u64,
-    pub sol_ix_inner_idx: u64,
+    pub sol_ix_inner_idx: Option<u64>,
     pub event: EventLog,
 }
 
@@ -62,40 +65,6 @@ impl From<Vec<u8>> for PgAddress {
         let mut buf = [0; 20];
         buf.copy_from_slice(&val);
         PgAddress(buf)
-    }
-}
-
-fn u256_to_bytes(val: &U256) -> [u8; 32] {
-    let (hi, lo) = val.into_words();
-    let mut buf = [0; 32];
-    buf[0..16].copy_from_slice(&lo.to_le_bytes());
-    buf[16..32].copy_from_slice(&hi.to_le_bytes());
-    buf
-}
-
-#[derive(sqlx::Type, Clone, Debug, Default)]
-#[sqlx(type_name = "U256", transparent)]
-struct PgU256(sqlx::types::BigDecimal);
-
-impl From<sqlx::types::BigDecimal> for PgU256 {
-    fn from(val: sqlx::types::BigDecimal) -> Self {
-        Self(val)
-    }
-}
-
-impl From<U256> for PgU256 {
-    fn from(val: U256) -> Self {
-        let buf = u256_to_bytes(&val);
-        let bigint = num_bigint::BigInt::from_bytes_le(num_bigint::Sign::Plus, &buf);
-
-        PgU256(sqlx::types::BigDecimal::new(bigint, 0))
-    }
-}
-
-impl From<PgU256> for U256 {
-    fn from(value: PgU256) -> Self {
-        use std::str::FromStr;
-        U256::from_str(&value.0.to_string()).unwrap()
     }
 }
 
@@ -249,10 +218,11 @@ impl TransactionRepo {
         let tx_idx = tx.tx_idx as i32;
         let sol_sig = &tx.sol_signature;
         let sol_idx = tx.sol_ix_idx as i32;
-        let sol_inner_idx = tx.sol_ix_inner_idx as i32;
+        let sol_inner_idx = tx.sol_ix_inner_idx.map(|x| x as i32);
         let neon_step_cnt = tx.neon_steps as i64;
         let total_gas_used = tx.sum_gas_used;
         let has_step_reset = tx.events.iter().any(|ev| ev.event_type.is_reset());
+        let sol_signer = tx.sol_signer;
 
         let v = match &tx.transaction.transaction {
             TransactionPayload::Legacy(legacy) => legacy.v,
@@ -353,6 +323,77 @@ impl TransactionRepo {
 
         sqlx::query!(
             r#"
+            INSERT INTO solana_transaction_costs
+            (
+                sol_sig,
+                block_slot,
+                operator,
+                sol_spent
+            )
+            VALUES($1, $2, $3, $4)
+            ON CONFLICT (sol_sig)
+            DO UPDATE SET
+                block_slot = $2,
+                operator = $3,
+                sol_spent = $4
+            "#,
+            sol_sig.as_ref(),
+            block_slot,
+            PgPubkey::from(sol_signer) as PgPubkey,
+            tx.sol_expense as i64,
+        )
+        .execute(&mut **txn)
+        .await?;
+
+        sqlx::query!(
+            r#"
+            INSERT INTO solana_neon_transactions
+            (
+                sol_sig,
+                block_slot,
+                idx,
+                inner_idx,
+                ix_code,
+                is_success,
+                neon_sig,
+                neon_step_cnt,
+                neon_gas_used,
+                neon_total_gas_used,
+                max_heap_size,
+                used_heap_size,
+                max_bpf_cycle_cnt,
+                used_bpf_cycle_cnt
+            )
+            VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            "#,
+            sol_sig.as_ref(),
+            block_slot,
+            sol_idx,
+            sol_inner_idx,
+            tx.neon_ix_code as i32,
+            tx.sol_is_success,
+            tx_hash.as_slice(),
+            neon_step_cnt,
+            PgU256::from(tx.gas_used) as PgU256,
+            PgU256::from(tx.sum_gas_used) as PgU256,
+            SOLANA_MAX_HEAP_SIZE as i32,
+            tx.sol_tx_cu_info.heap_size as i32,
+            tx.sol_tx_cu_info.cu_limit as i32,
+            tx.sol_tx_cu_info.cu_limit as i32, // TODO: either log or info?
+        )
+        .execute(&mut **txn)
+        .await?;
+
+        let logs_data = match serde_json::to_vec(&tx.events) {
+            Ok(logs_data) => logs_data,
+            Err(err) => {
+                tracing::warn!(?err, ?tx, "failed to serialize logs");
+                vec![]
+            }
+        };
+
+        sqlx::query!(
+            r#"
             INSERT INTO neon_transactions
             (
                 neon_sig,
@@ -402,7 +443,7 @@ impl TransactionRepo {
             PgAddress::from(tx.from) as PgAddress,                             // 3
             sol_sig.as_ref(),                                                  // 4
             tx.sol_ix_idx as i64,                                              // 5
-            tx.sol_ix_inner_idx as i64,                                        // 6
+            tx.sol_ix_inner_idx.map(|x| x as i32),                             // 6
             block_slot,                                                        // 7
             tx.tx_idx as i64,                                                  // 8
             tx.transaction.nonce() as i64,                                     // 9
@@ -421,7 +462,7 @@ impl TransactionRepo {
             PgU256::from(tx.transaction.s()) as PgU256,                        // 22
             chain_id.map(|x| x as i64),                                        // 23
             tx.transaction.call_data(),                                        // 24
-            &[],                                                               /* 25 logs */
+            logs_data,                                                         /* 25 logs */
             neon_step_cnt                                                      // 26
         )
         .execute(&mut **txn)
@@ -680,7 +721,7 @@ struct NeonTransactionRow {
 
     sol_sig: Vec<u8>,
     sol_ix_idx: i32,
-    sol_ix_inner_idx: i32,
+    sol_ix_inner_idx: Option<i32>,
     block_slot: i64,
     tx_idx: i32,
 
@@ -730,7 +771,9 @@ impl FromRow<'_, PgRow> for NeonTransactionRowWithLogs {
 
 impl NeonTransactionRowWithLogs {
     fn with_logs(self) -> anyhow::Result<WithBlockhash<NeonTxInfo>> {
-        let mut tx = self.transaction.neon_tx_info_with_empty_logs()?;
+        let mut tx = self
+            .transaction
+            .neon_tx_info_with_empty_logs_and_default_cu()?;
         if !tx.inner.is_cancelled {
             if let Some(log) = self.log {
                 tx.inner.events.push(log.try_into()?);
@@ -817,7 +860,9 @@ impl NeonTransactionRow {
         })
     }
 
-    fn neon_tx_info_with_empty_logs(self) -> anyhow::Result<WithBlockhash<NeonTxInfo>> {
+    fn neon_tx_info_with_empty_logs_and_default_cu(
+        self,
+    ) -> anyhow::Result<WithBlockhash<NeonTxInfo>> {
         let transaction = self.transaction()?;
         let tx_type = match transaction.transaction {
             TransactionPayload::Legacy(..) => 0x00,
@@ -832,6 +877,7 @@ impl NeonTransactionRow {
                 .map_err(|_| anyhow::anyhow!("neon signature"))?,
             from: Address::from(self.from_addr),
             contract: self.contract.map(Address::from),
+            sol_signer: Pubkey::default(),
             transaction,
             events: Vec::new(),
             gas_used: U256::from(self.gas_used),
@@ -844,12 +890,16 @@ impl NeonTransactionRow {
             sol_ix_idx: self.sol_ix_idx.try_into().context("sol_ix_idx")?,
             sol_ix_inner_idx: self
                 .sol_ix_inner_idx
-                .try_into()
-                .context("sol_ix_inner_idx")?,
+                .map(|x| x.try_into().context("sol_ix_inner_idx"))
+                .transpose()?,
             status: self.status as u8,
             is_completed: self.is_completed,
             is_cancelled: self.is_canceled,
             neon_steps: self.neon_step_cnt as u64,
+            sol_expense: 0,
+            neon_ix_code: 0,
+            sol_is_success: true,
+            sol_tx_cu_info: Default::default(),
         };
 
         Ok(WithBlockhash {

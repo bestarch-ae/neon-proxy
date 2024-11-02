@@ -9,6 +9,7 @@ use anyhow::Context;
 use sqlx::postgres::Postgres;
 use thiserror::Error;
 
+use common::ethnum::U256;
 use common::solana_sdk::signature::Signature;
 use common::solana_sdk::{hash::Hash, pubkey::Pubkey};
 use common::types::HolderOperation;
@@ -56,6 +57,56 @@ impl From<PgSolanaBlockHash> for Hash {
 
 pub struct SolanaSignaturesRepo {
     pool: sqlx::PgPool,
+}
+
+fn u256_to_bytes(val: &U256) -> [u8; 32] {
+    let (hi, lo) = val.into_words();
+    let mut buf = [0; 32];
+    buf[0..16].copy_from_slice(&lo.to_le_bytes());
+    buf[16..32].copy_from_slice(&hi.to_le_bytes());
+    buf
+}
+
+#[derive(sqlx::Type, Clone, Debug, Default)]
+#[sqlx(type_name = "U256", transparent)]
+struct PgU256(sqlx::types::BigDecimal);
+
+impl From<sqlx::types::BigDecimal> for PgU256 {
+    fn from(val: sqlx::types::BigDecimal) -> Self {
+        Self(val)
+    }
+}
+
+impl From<U256> for PgU256 {
+    fn from(val: U256) -> Self {
+        let buf = u256_to_bytes(&val);
+        let bigint = num_bigint::BigInt::from_bytes_le(num_bigint::Sign::Plus, &buf);
+
+        PgU256(sqlx::types::BigDecimal::new(bigint, 0))
+    }
+}
+
+impl From<PgU256> for U256 {
+    fn from(value: PgU256) -> Self {
+        use std::str::FromStr;
+        U256::from_str(&value.0.to_string()).unwrap()
+    }
+}
+
+#[derive(sqlx::Type, Copy, Clone, Debug, Default)]
+#[sqlx(type_name = "Pubkey", transparent, no_pg_array)]
+pub struct PgPubkey([u8; 32]);
+
+impl From<Pubkey> for PgPubkey {
+    fn from(pubkey: Pubkey) -> Self {
+        Self(pubkey.to_bytes())
+    }
+}
+
+impl From<PgPubkey> for Pubkey {
+    fn from(value: PgPubkey) -> Self {
+        value.0.into()
+    }
 }
 
 impl SolanaSignaturesRepo {
