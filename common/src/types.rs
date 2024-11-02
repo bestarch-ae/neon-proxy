@@ -4,15 +4,19 @@ use ethnum::U256;
 use evm_loader::types::{Address, Transaction};
 use serde::Serialize;
 use solana_sdk::clock::UnixTimestamp;
+use solana_sdk::entrypoint::HEAP_LENGTH;
 use solana_sdk::hash::Hash;
 use solana_sdk::message::{v0::LoadedAddresses, AccountKeys};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 use solana_sdk::slot_history::Slot;
 use solana_sdk::transaction::{Result as TransactionResult, VersionedTransaction};
-use solana_transaction_status::InnerInstructions;
 #[cfg(feature = "reth")]
 pub use tx_envelope_ext::TxEnvelopeExt;
+
+pub const SOLANA_MAX_HEAP_SIZE: u32 = 256 * 1024;
+pub const SOLANA_DEFAULT_CU_LIMIT: u32 = 200_000;
+pub const SOLANA_MAX_CU_LIMIT: u32 = 1_400_000;
 
 #[cfg(feature = "reth")]
 mod tx_envelope_ext {
@@ -151,9 +155,9 @@ pub struct SolanaTransaction {
     pub loaded_addresses: LoadedAddresses,
     pub status: TransactionResult<()>,
     pub log_messages: Vec<String>,
-    pub inner_instructions: Vec<InnerInstructions>, // Do we really need this
     pub compute_units_consumed: u64,
     pub fee: u64,
+    pub sol_expense: i64,
 }
 
 impl SolanaTransaction {
@@ -185,7 +189,24 @@ pub struct NeonIxReceipt {
     pub used_bpf_cycle_cnt: u64,
 }
 
-/// Neon Transaction. Not yet sure if represents a single contract invocation or a completed transation.
+#[derive(Debug, Clone)]
+pub struct SolTxCuInfo {
+    pub heap_size: u32,
+    pub cu_limit: u32,
+    pub cu_price: u64,
+}
+
+impl Default for SolTxCuInfo {
+    fn default() -> Self {
+        Self {
+            heap_size: HEAP_LENGTH as u32,
+            cu_limit: SOLANA_DEFAULT_CU_LIMIT,
+            cu_price: 0,
+        }
+    }
+}
+
+/// Neon Transaction. Not yet sure if represents a single contract invocation or a completed transaction.
 /// Inserted into `neon_transactions` table. Lacks `Clone` due to `evm-loader` implementation.
 #[derive(Debug)]
 pub struct NeonTxInfo {
@@ -193,7 +214,7 @@ pub struct NeonTxInfo {
     pub tx_type: u8,
     pub neon_signature: TxHash,
     pub from: Address,
-    // TODO: This migth be a method
+    // TODO: This might be a method
     pub contract: Option<Address>,
     pub transaction: Transaction, // TODO: Clone
     pub events: Vec<EventLog>,
@@ -203,17 +224,23 @@ pub struct NeonTxInfo {
     pub neon_steps: u64,
 
     // Solana index
+    // pub neon_ix_receipt: NeonIxReceipt,
     // TODO: Should probably be Arc-ed or Bytes
-    // TODO 2: Should probably be replaced by a ref to corresponding `NeonIxReceeipt`
+    // TODO 2: Should probably be replaced by a ref to corresponding `NeonIxReceipt`
     pub sol_signature: Signature,
+    pub neon_ix_code: u8,
     pub sol_slot: u64,
     pub tx_idx: u64,
     pub sol_ix_idx: u64,
-    pub sol_ix_inner_idx: u64,
+    pub sol_ix_inner_idx: Option<u64>,
+    pub sol_is_success: bool,
 
     pub status: u8,
     pub is_completed: bool,
     pub is_cancelled: bool,
+
+    pub sol_expense: i64,
+    pub sol_tx_cu_info: SolTxCuInfo,
 }
 
 #[derive(Debug)]

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO solana_transaction_costs\n            (\n                sol_sig,\n                block_slot,\n                operator,\n                sol_spent\n            )\n            VALUES($1, $2, $3, $4)\n            ON CONFLICT (sol_sig)\n            DO UPDATE SET\n                block_slot = $2,\n                operator = $3,\n                sol_spent = $4\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Int8",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6b338c68afad8bfbe949c43798ecabfa074158e801f11c5f4bc50f0e83c27d4b"
+}

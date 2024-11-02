@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO solana_neon_transactions\n            (\n                sol_sig,\n                block_slot,\n                idx,\n                inner_idx,\n                ix_code,\n                is_success,\n                neon_sig,\n                neon_step_cnt,\n                neon_gas_used,\n                neon_total_gas_used,\n                max_heap_size,\n                used_heap_size,\n                max_bpf_cycle_cnt,\n                used_bpf_cycle_cnt\n            )\n            VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)\n            ON CONFLICT (sol_sig)\n            DO UPDATE SET\n               block_slot = $2,\n               idx = $3,\n               inner_idx = $4,\n               ix_code = $5,\n               is_success = $6,\n               neon_sig = $7,\n               neon_step_cnt = $8,\n               neon_gas_used = $9,\n               neon_total_gas_used = $10,\n               max_heap_size = $11,\n               used_heap_size = $12,\n               max_bpf_cycle_cnt = $13,\n               used_bpf_cycle_cnt = $14\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Int8",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Bool",
+        "Bytea",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7cb049825ec3ee01399331c1d58214557461b4cff8b558d09fc16a8ba1a0818b"
+}
