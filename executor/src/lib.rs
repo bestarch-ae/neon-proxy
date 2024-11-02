@@ -23,12 +23,12 @@ use tokio::sync::{oneshot, Notify};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 
+use tracing::{info, warn};
+use typed_builder::TypedBuilder;
+
 use neon_api::NeonApi;
 use operator::Operator;
 use solana_api::solana_api::SolanaApi;
-use tracing::info;
-use tracing::warn;
-use typed_builder::TypedBuilder;
 
 use self::entry::TransactionEntry;
 use self::transactions::{OngoingTransaction, TransactionBuilder, TxErrorKind};
@@ -214,8 +214,14 @@ impl Executor {
         };
 
         if init_balances {
+            const BALANCE_RETRY_DELAY: Duration = Duration::from_secs(1);
+            while this.solana_api.get_balance(&operator.pubkey()).await? == 0 {
+                info!(?operator, "waiting for operator balance to become positive");
+                sleep(BALANCE_RETRY_DELAY).await;
+            }
+
             for chain in this.builder.chains().load().deref() {
-                tracing::info!(
+                info!(
                     ?operator,
                     name = chain.name,
                     id = chain.id,
@@ -460,7 +466,7 @@ impl Executor {
             .context("cannot request balance acc")?
         {
             if acc.owner != self.program_id {
-                anyhow::bail!("operator balance account ({addr}) exists, but hash invalid owner");
+                anyhow::bail!("operator balance account ({addr}) exists, but has invalid owner");
             }
             return Ok(None);
         }

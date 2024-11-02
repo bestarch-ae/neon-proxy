@@ -198,6 +198,18 @@ impl SolanaApi {
             .await
             .map(|response| response.value)
     }
+
+    pub async fn get_balance(&self, key: &Pubkey) -> ClientResult<u64> {
+        self.client
+            .get_balance_with_commitment(
+                key,
+                CommitmentConfig {
+                    commitment: self.commitment,
+                },
+            )
+            .await
+            .map(|response| response.value)
+    }
 }
 
 struct LoggedSender(HttpSender);
