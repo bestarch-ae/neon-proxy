@@ -1,6 +1,6 @@
+use common::solana_sdk::hash::ParseHashError;
 use thiserror::Error;
 
-use common::solana_sdk::hash::ParseHashError;
 use common::solana_sdk::message::v0::LoadedAddresses;
 use common::solana_sdk::pubkey::{ParsePubkeyError, Pubkey};
 use common::solana_transaction_status::option_serializer::OptionSerializer;
@@ -61,9 +61,6 @@ pub fn decode_ui_transaction(
         return Err(TxDecodeError::InvalidEncoding(transaction));
     };
 
-    let pre_balance = meta.pre_balances.first().copied().unwrap_or(0);
-    let post_balance = meta.post_balances.first().copied().unwrap_or(0);
-
     let result = SolanaTransaction {
         slot,
 
@@ -78,9 +75,9 @@ pub fn decode_ui_transaction(
             .unwrap_or_default(),
         status: meta.err.map_or(Ok(()), Err),
         log_messages: meta.log_messages.opt().ok_or(TxDecodeError::MissingLogs)?,
+        inner_instructions: Vec::new(),
         compute_units_consumed: meta.compute_units_consumed.opt().unwrap_or(0),
         fee: meta.fee,
-        sol_expense: pre_balance as i64 - post_balance as i64,
     };
 
     Ok(result)
@@ -110,3 +107,25 @@ fn decode_loaded_addresses(
             .collect::<Result<Vec<Pubkey>, _>>()?,
     })
 }
+
+// TODO
+// fn decode_inner_instructions(inner_ixs: UiInnerInstructions) -> InnerInstructions {
+//     let UiInnerInstructions {
+//         index,
+//         instructions,
+//     } = inner_ixs;
+
+//     InnerInstructions {
+//         index,
+//         instructions: instructions
+//             .into_iter()
+//             .map(|ix| InnerInstruction {
+//                 instruction: CompiledInstruction {
+//                     program_id_index: ix.program_id_index,
+//                     accounts: ix.accounts,
+//                     data: ix.data.into_bytes(), // TODO: b64?
+//                 },
+//             })
+//             .collect(),
+//     }
+// }

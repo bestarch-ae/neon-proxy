@@ -13,7 +13,6 @@ thiserror.workspace = true
 tracing.workspace = true
 
 base64 = "0.21"
-borsh = "1.5.1"
 arrayref = "0.3"
 either = "1"
 
