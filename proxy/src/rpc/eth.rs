@@ -112,10 +112,13 @@ impl EthApiServer for EthApiImpl {
         use common::solana_sdk::hash::Hash;
 
         let hash = Hash::new_from_array(hash.0);
-        self.get_block(db::BlockBy::Hash(hash), false, false)
-            .await
-            .map(|block| block.map(|block| U256::from(block.transactions.len())))
-            .map_err(Into::into)
+        Ok(Some(
+            self.get_block(db::BlockBy::Hash(hash), false, false)
+                .await
+                .map(|block| block.map(|block| U256::from(block.transactions.len())))
+                .map_err(Error::from)?
+                .unwrap_or(U256::ZERO),
+        ))
     }
 
     /// Returns the number of transactions in a block matching the given block number.
@@ -124,16 +127,19 @@ impl EthApiServer for EthApiImpl {
         number: BlockNumberOrTag,
     ) -> RpcResult<Option<U256>> {
         let slot = self.find_slot(number).await?;
-        self.get_block(db::BlockBy::Slot(slot), false, number.is_pending())
-            .await
-            .map(|block| {
-                Some(
-                    block
-                        .map(|block| U256::from(block.transactions.len()))
-                        .unwrap_or(U256::ZERO),
-                )
-            })
-            .map_err(Into::into)
+        Ok(Some(
+            self.get_block(db::BlockBy::Slot(slot), false, number.is_pending())
+                .await
+                .map(|block| {
+                    Some(
+                        block
+                            .map(|block| U256::from(block.transactions.len()))
+                            .unwrap_or(U256::ZERO),
+                    )
+                })
+                .map_err(Error::from)?
+                .unwrap_or(U256::ZERO),
+        ))
     }
 
     /// Returns the number of uncles in a block from a block matching the given block hash.
