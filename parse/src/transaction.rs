@@ -33,13 +33,7 @@ pub enum BalanceOperation {
 }
 
 #[derive(Debug)]
-pub struct ParseResult {
-    pub tag: u8,
-    pub kind: ParseResultKind,
-}
-
-#[derive(Debug)]
-pub enum ParseResultKind {
+pub enum ParseResult {
     TransactionExecuted(Transaction),
     TransactionStep(Option<Transaction>),
     TransactionCancel(TxHash),
@@ -59,34 +53,34 @@ pub fn parse(
     neon_pubkey: Pubkey,
 ) -> Result<ParseResult, Error> {
     let tag = bytes.first().ok_or_else(|| Error::InvalidInstruction)?;
-    let kind = match *tag {
+    let res = match *tag {
         tag::COLLECT_TREASURE => {
             tracing::info!("found collect treasure instruction");
-            ParseResultKind::CollectTreasure
+            ParseResult::CollectTreasure
         }
         tag::CREATE_MAIN_TREASURY => {
             tracing::info!("found create main treasury instruction");
-            ParseResultKind::CreateMainTreasury
+            ParseResult::CreateMainTreasury
         }
         tag::ACCOUNT_CREATE_BALANCE => {
             tracing::info!("found account create balance instruction");
-            ParseResultKind::AccountCreateBalance
+            ParseResult::AccountCreateBalance
         }
         tag::DEPOSIT => {
             tracing::info!("found deposit instruction");
-            ParseResultKind::Deposit
+            ParseResult::Deposit
         }
         tag::OPERATOR_BALANCE_CREATE => {
             tracing::info!("found operator balance create instruction");
-            ParseResultKind::OperatorOperation(BalanceOperation::Create)
+            ParseResult::OperatorOperation(BalanceOperation::Create)
         }
         tag::OPERATOR_BALANCE_DELETE => {
             tracing::info!("found operator balance delete instruction");
-            ParseResultKind::OperatorOperation(BalanceOperation::Delete)
+            ParseResult::OperatorOperation(BalanceOperation::Delete)
         }
         tag::OPERATOR_BALANCE_WITHDRAW => {
             tracing::info!("found operator balance withdraw instruction");
-            ParseResultKind::OperatorOperation(BalanceOperation::Withdraw)
+            ParseResult::OperatorOperation(BalanceOperation::Withdraw)
         }
         tag::TX_EXEC_FROM_DATA | tag::TX_EXEC_FROM_DATA_DEPRECATED_V13 => {
             tracing::debug!(%tag, "found tx exec from data");
@@ -95,7 +89,7 @@ pub fn parse(
                 tx = hex::encode(tx.hash),
                 "non-iterative execution from instruction data"
             );
-            ParseResultKind::TransactionExecuted(tx)
+            ParseResult::TransactionExecuted(tx)
         }
         tag::TX_EXEC_FROM_DATA_SOLANA_CALL | tag::TX_EXEC_FROM_DATA_SOLANA_CALL_V13 => {
             tracing::debug!(%tag, "found tx exec from data with solana call");
@@ -104,7 +98,7 @@ pub fn parse(
                 tx = hex::encode(tx.hash),
                 "non-iterative execution from instruction data (solana call)"
             );
-            ParseResultKind::TransactionExecuted(tx)
+            ParseResult::TransactionExecuted(tx)
         }
         tag::TX_STEP_FROM_DATA => {
             tracing::debug!("found tx step from data");
@@ -113,7 +107,7 @@ pub fn parse(
                 tx = hex::encode(tx.hash),
                 "iterative execution from instruction data"
             );
-            ParseResultKind::TransactionStep(Some(tx))
+            ParseResult::TransactionStep(Some(tx))
         }
         tag::TX_STEP_FROM_ACCOUNT
         | tag::TX_STEP_FROM_ACCOUNT_NO_CHAINID
@@ -143,7 +137,7 @@ pub fn parse(
                 tx = tx.as_ref().map(|tx| hex::encode(tx.hash)),
                 "iterative execution from holder account"
             );
-            ParseResultKind::TransactionStep(tx)
+            ParseResult::TransactionStep(tx)
         }
         tag::TX_EXEC_FROM_ACCOUNT => {
             tracing::debug!("found tx exec from account");
@@ -152,12 +146,12 @@ pub fn parse(
                 tx = hex::encode(tx.hash),
                 "non-iterative execution from holder account"
             );
-            ParseResultKind::TransactionExecuted(tx)
+            ParseResult::TransactionExecuted(tx)
         }
         tag::TX_EXEC_FROM_ACCOUNT_DEPRECATED => {
             tracing::info!("found deprecated tx exec from account");
             let tx = decode_exec_from_account(&bytes[1..], accounts, adb, neon_pubkey)?;
-            ParseResultKind::TransactionExecuted(tx)
+            ParseResult::TransactionExecuted(tx)
         }
         tag::TX_EXEC_FROM_ACCOUNT_SOLANA_CALL => {
             tracing::debug!("found tx exec from account with solana call");
@@ -166,50 +160,50 @@ pub fn parse(
                 tx = hex::encode(tx.hash),
                 "non-iterative execution from holder account (solana call)"
             );
-            ParseResultKind::TransactionExecuted(tx)
+            ParseResult::TransactionExecuted(tx)
         }
         tag::HOLDER_CREATE => {
             tracing::info!("found holder create instruction");
             let op = decode_holder_create(&bytes[1..], accounts, adb, neon_pubkey)?;
-            ParseResultKind::HolderOperation(op)
+            ParseResult::HolderOperation(op)
         }
         tag::HOLDER_DELETE => {
             tracing::info!("found holder delete instruction");
             let op = decode_holder_delete(&bytes[1..], accounts, adb, neon_pubkey)?;
-            ParseResultKind::HolderOperation(op)
+            ParseResult::HolderOperation(op)
         }
         tag::HOLDER_WRITE => {
             tracing::info!("found holder write instruction");
             let op = decode_holder_write(&bytes[1..], accounts, adb, neon_pubkey)?;
-            ParseResultKind::HolderOperation(op)
+            ParseResult::HolderOperation(op)
         }
         /* old: currently uses the same code, but potentially may change */
         tag::DEPOSIT_DEPRECATED => {
             tracing::info!("found deprecated deposit instruction");
-            ParseResultKind::Deposit
+            ParseResult::Deposit
         }
         tag::TX_EXEC_FROM_DATA_DEPRECATED => {
             tracing::info!("found deprecated tx exec from data");
             let tx = decode_execute_from_ix(&bytes[1..])?;
-            ParseResultKind::TransactionExecuted(tx)
+            ParseResult::TransactionExecuted(tx)
         }
         tag::TX_STEP_FROM_DATA_DEPRECATED => {
             tracing::info!("found deprecated tx step from data");
             let tx = decode_step_from_ix(&bytes[1..])?;
-            ParseResultKind::TransactionStep(Some(tx))
+            ParseResult::TransactionStep(Some(tx))
         }
 
         tag::CANCEL => {
             tracing::info!("found cancel instruction");
             let hash = decode_cancel(&bytes[1..], accounts, adb)?;
-            ParseResultKind::TransactionCancel(hash)
+            ParseResult::TransactionCancel(hash)
         }
         _ => {
             tracing::warn!("not implemented tag: 0x{:x}", tag);
             return Err(Error::UnknownTag(*tag));
         }
     };
-    Ok(ParseResult { tag: *tag, kind })
+    Ok(res)
 }
 
 fn decode_holder_create(

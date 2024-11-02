@@ -5019,7 +5019,6 @@ version = "0.1.0"
 dependencies = [
  "arrayref",
  "base64 0.21.7",
- "borsh 1.5.1",
  "either",
  "hex",
  "neon-proxy-common",

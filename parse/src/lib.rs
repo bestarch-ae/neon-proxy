@@ -1,20 +1,17 @@
-use borsh::de::BorshDeserialize;
 use either::Either;
 use thiserror::Error;
 
 use common::evm_loader::types::{Address, Transaction};
 use common::solana_sdk::account_info::AccountInfo;
-use common::solana_sdk::compute_budget;
 use common::solana_sdk::message::v0::LoadedAddresses;
 use common::solana_sdk::message::AccountKeys;
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
 use common::solana_sdk::transaction::VersionedTransaction;
-use common::types::{HolderOperation, NeonTxInfo, SolTxCuInfo, SolanaTransaction, TxHash};
+use common::types::{HolderOperation, NeonTxInfo, SolanaTransaction, TxHash};
 
 use self::log::NeonLogInfo;
 use common::ethnum::U256;
-use common::solana_sdk::compute_budget::ComputeBudgetInstruction;
 
 mod log;
 mod transaction;
@@ -68,39 +65,8 @@ struct SolTxMetaInfo {
 struct TransactionMeta {
     neon_transaction: Transaction,
     sol_ix_idx: usize,
-    sol_ix_inner_idx: Option<u64>,
-    neon_ix_code: u8, // TODO: Check,
-
     is_cancelled: bool,
     is_completed: bool,
-}
-
-fn parse_cu_info(tx: &VersionedTransaction, loaded: &LoadedAddresses) -> SolTxCuInfo {
-    let pubkeys = AccountKeys::new(tx.message.static_account_keys(), Some(loaded));
-    let cu_idx = pubkeys.iter().position(|x| *x == compute_budget::id());
-
-    let mut sol_tx_cu_info = SolTxCuInfo::default();
-
-    for ix in tx.message.instructions() {
-        if let Some(cu_idx) = cu_idx {
-            if ix.program_id_index as usize == cu_idx {
-                match ComputeBudgetInstruction::try_from_slice(&ix.data) {
-                    Ok(ComputeBudgetInstruction::RequestHeapFrame(value)) => {
-                        sol_tx_cu_info.heap_size = value
-                    }
-                    Ok(ComputeBudgetInstruction::SetComputeUnitLimit(value)) => {
-                        sol_tx_cu_info.cu_limit = value
-                    }
-                    Ok(ComputeBudgetInstruction::SetComputeUnitPrice(value)) => {
-                        sol_tx_cu_info.cu_price = value
-                    }
-                    Ok(_) => {}
-                    Err(err) => tracing::error!(%err, ?ix, ?tx, "failed to parse cu instruction"),
-                }
-            }
-        }
-    }
-    sol_tx_cu_info
 }
 
 fn parse_transactions(
@@ -111,7 +77,7 @@ fn parse_transactions(
     neon_sig: Option<TxHash>,
     neon_pubkey: Pubkey,
 ) -> Result<Vec<Action<TransactionMeta>>, Error> {
-    use transaction::ParseResultKind;
+    use transaction::ParseResult;
 
     tracing::debug!("parsing tx {:?} with loaded addresses: {:?}", tx, loaded);
     tracing::debug!(
@@ -154,21 +120,19 @@ fn parse_transactions(
         }
         let res = transaction::parse(&ix.data, &pubkeys_for_ix, accountsdb, neon_pubkey)?;
         tracing::debug!("parse result: {:?}", res);
-        match res.kind {
-            ParseResultKind::TransactionExecuted(neon_tx) => {
+        match res {
+            ParseResult::TransactionExecuted(neon_tx) => {
                 let parsed_hash = TxHash::from(neon_tx.hash);
                 check_hash(parsed_hash)?;
 
                 actions.push(Action::AddTransaction(TransactionMeta {
                     neon_transaction: neon_tx,
                     sol_ix_idx: idx,
-                    sol_ix_inner_idx: None,
-                    neon_ix_code: res.tag,
                     is_cancelled: false,
                     is_completed: true,
                 }));
             }
-            ParseResultKind::TransactionStep(Some(neon_tx)) => {
+            ParseResult::TransactionStep(Some(neon_tx)) => {
                 let parsed_hash = TxHash::from(neon_tx.hash);
                 let neon_tx = if check_hash(parsed_hash).is_err() {
                     neon_sig
@@ -181,26 +145,22 @@ fn parse_transactions(
                 actions.push(Action::AddTransaction(TransactionMeta {
                     neon_transaction: neon_tx,
                     sol_ix_idx: idx,
-                    sol_ix_inner_idx: None,
-                    neon_ix_code: res.tag,
                     is_cancelled: false,
                     is_completed: false,
                 }));
             }
-            ParseResultKind::TransactionStep(None) => {
+            ParseResult::TransactionStep(None) => {
                 let neon_tx = neon_sig
                     .and_then(|sig| txsdb.get_by_hash(sig))
                     .ok_or(Error::InvalidStep)?;
                 actions.push(Action::AddTransaction(TransactionMeta {
                     neon_transaction: neon_tx,
                     sol_ix_idx: idx,
-                    sol_ix_inner_idx: None,
-                    neon_ix_code: res.tag,
                     is_cancelled: false,
                     is_completed: false,
                 }));
             }
-            ParseResultKind::TransactionCancel(hash) => {
+            ParseResult::TransactionCancel(hash) => {
                 check_hash(hash)?;
 
                 actions.push(Action::CancelTransaction {
@@ -208,7 +168,7 @@ fn parse_transactions(
                     total_gas: U256::ZERO,
                 });
             }
-            ParseResultKind::HolderOperation(op) => actions.push(Action::WriteHolder(op)),
+            ParseResult::HolderOperation(op) => actions.push(Action::WriteHolder(op)),
             res => {
                 tracing::debug!("unhandled parse result: {:?}", res);
             }
@@ -217,19 +177,10 @@ fn parse_transactions(
     Ok(actions)
 }
 
-fn add_log_and_cu(
-    meta: TransactionMeta,
-    log_info: &NeonLogInfo,
-    sol_tx_cu_info: SolTxCuInfo,
-    slot: u64,
-    sol_expense: i64,
-    sol_is_success: bool,
-) -> NeonTxInfo {
+fn add_log(meta: TransactionMeta, log_info: &NeonLogInfo, slot: u64) -> NeonTxInfo {
     let TransactionMeta {
         neon_transaction: tx,
         sol_ix_idx,
-        sol_ix_inner_idx,
-        neon_ix_code,
         is_cancelled,
         is_completed,
     } = meta;
@@ -278,15 +229,11 @@ fn add_log_and_cu(
         sol_slot: slot,
         tx_idx: 0, /* set later */
         sol_ix_idx: sol_ix_idx as u64,
-        sol_ix_inner_idx, // TODO: what is this?
-        neon_ix_code,
-        sol_is_success,
+        sol_ix_inner_idx: 0, // TODO: what is this?
         status: log_info.ret.as_ref().map(|r| r.status).unwrap_or_default(), // TODO
         is_cancelled,
         is_completed: is_completed || has_returned,
         neon_steps: steps,
-        sol_expense,
-        sol_tx_cu_info,
     }
 }
 
@@ -339,7 +286,6 @@ pub fn parse(
     let log_info = log::parse(transaction.log_messages, neon_pubkey)?;
     tracing::info!(tx_hash = ?log_info.sig, steps = ?log_info.steps, "log");
 
-    let sol_tx_cu_info = parse_cu_info(&tx, loaded);
     let actions = parse_transactions(tx, accountsdb, txsdb, loaded, log_info.sig, neon_pubkey)?;
 
     // it's empty if transaction is not a neon transaction
@@ -349,21 +295,9 @@ pub fn parse(
         return Ok(Either::Left(std::iter::empty()));
     }
 
-    let sol_expense = transaction.sol_expense;
-    let sol_is_success = transaction.status.is_ok();
-
     let iter = actions.into_iter().map(move |action| {
         action
-            .map_transaction(|tx| {
-                add_log_and_cu(
-                    tx,
-                    &log_info,
-                    sol_tx_cu_info.clone(),
-                    slot,
-                    sol_expense,
-                    sol_is_success,
-                )
-            })
+            .map_transaction(|tx| add_log(tx, &log_info, slot))
             .set_canceled_gas(
                 log_info
                     .ix
@@ -662,11 +596,7 @@ mod tests {
 
         let neon_tx_infos = actions
             .into_iter()
-            .map(move |action| {
-                action.map_transaction(|tx| {
-                    add_log_and_cu(tx, &logs, SolTxCuInfo::default(), 0, 0, true)
-                })
-            })
+            .map(move |action| action.map_transaction(|tx| add_log(tx, &logs, 0)))
             .filter_map(|action| match action {
                 Action::AddTransaction(tx) => Some(tx),
                 _ => None,
