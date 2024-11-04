@@ -5,12 +5,12 @@ use futures_util::StreamExt;
 use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::types::{ErrorCode, ErrorObjectOwned};
+use reth_primitives::revm_primitives::bitvec::macros::internal::funty::Fundamental;
 use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, B256, U256, U64};
 use rpc_api_types::other::OtherFields;
 use rpc_api_types::{Filter, Log, Transaction, WithOtherFields};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
-// use evm_loader::types::{Address as NeonAddress};
 
 use common::convert::{ToNeon, ToReth};
 use common::neon_instruction::tag::tag_to_str;
@@ -39,6 +39,7 @@ pub struct Token {
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct NeonReceipt {
+    #[serde(flatten)]
     receipt: NeonTransactionReceipt,
     solana_block_hash: Option<B256>,
     solana_complete_transaction_signature: Signature,
@@ -54,7 +55,7 @@ pub struct NeonReceipt {
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct NeonCost {
-    neon_operator_address: Address,
+    neon_operator_address: Pubkey,
     solana_lamport_expense: i64,
     neon_alan_income: u64,
 }
@@ -67,7 +68,7 @@ pub struct SolanaTransaction {
     solana_transaction_is_success: bool,
     solana_block_slot: u64,
     solana_lamport_expense: u64,
-    neon_operator_address: Address,
+    neon_operator_address: Pubkey,
     solana_instructions: Vec<SolanaInstruction>,
 }
 
@@ -91,11 +92,12 @@ pub struct SolanaInstruction {
     neon_logs: Vec<NeonLog>,
 }
 
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum ReceiptDetail {
     Ethereum,
     Neon,
+    #[default]
     SolanaTransactionList,
 }
 
@@ -274,7 +276,7 @@ trait NeonCustomApi {
     async fn transaction_receipt(
         &self,
         hash: B256,
-        detail: ReceiptDetail,
+        detail: Option<ReceiptDetail>,
     ) -> RpcResult<Option<NeonReceipt>>;
 
     #[method(name = "getNativeTokenList")]
@@ -485,10 +487,13 @@ impl NeonCustomApiServer for EthApiImpl {
     async fn transaction_receipt(
         &self,
         hash: B256,
-        detail: ReceiptDetail,
+        detail: Option<ReceiptDetail>,
     ) -> RpcResult<Option<NeonReceipt>> {
         use crate::convert::convert_filters;
-        use common::evm_loader::types::Address as EvmAddress;
+
+        let detail = detail.unwrap_or_default();
+
+        tracing::info!(%hash, ?detail, "transaction_receipt"); // TODO: downgrade to debug
 
         let Some(tx_info) = self
             .get_transaction(db::TransactionBy::Hash(hash.0.into()))
@@ -497,6 +502,8 @@ impl NeonCustomApiServer for EthApiImpl {
             return Ok(None);
         };
 
+        tracing::info!(?tx_info, "transaction_receipt found transaction"); // TODO: remove
+
         let log_filter = Filter::new().select(hash);
         let log_filters = convert_filters(log_filter).map_err(Error::from)?;
         let logs = self.get_logs(log_filters).await?;
@@ -504,6 +511,7 @@ impl NeonCustomApiServer for EthApiImpl {
         let mut neon_costs_draft = HashMap::new();
         let mut sol_txs: Vec<SolanaTransaction> = vec![];
         if detail == ReceiptDetail::SolanaTransactionList {
+            tracing::info!(%hash, "fetching sol tx ixs"); // TODO: remove
             let mut sol_tx_ixs = self
                 .sol_neon_transactions
                 .fetch_with_costs(hash.0.into())
@@ -511,9 +519,9 @@ impl NeonCustomApiServer for EthApiImpl {
 
             while let Some(result) = sol_tx_ixs.next().await {
                 let sol_tx_ix = result.map_err(Error::from)?;
+                tracing::info!(?sol_tx_ix, "fetched sol_tx_ix"); // TODO: remove
                 let sol_sig = &sol_tx_ix.transaction.sol_sig;
-                let neon_operator_address =
-                    Address::new(EvmAddress::from(sol_tx_ix.cost.operator).0);
+                let neon_operator_address = sol_tx_ix.cost.operator.into();
 
                 if sol_txs.last().map_or(true, |last| last.sol_sig != *sol_sig) {
                     sol_txs.push(SolanaTransaction {
@@ -574,7 +582,7 @@ impl NeonCustomApiServer for EthApiImpl {
                     neon_gas_used: sol_tx_ix.transaction.neon_gas_used.as_u64(),
                     neon_total_gas_used: sol_tx_ix.transaction.neon_total_gas_used.as_u64(),
                     neon_transaction_fee,
-                    neon_miner: None, // todo:
+                    neon_miner: None, // todo: ???
                     neon_logs: sol_ix_logs,
                 };
                 sol_tx.solana_instructions.push(sol_ix);
