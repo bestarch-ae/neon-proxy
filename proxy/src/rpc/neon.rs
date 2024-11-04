@@ -5,11 +5,13 @@ use futures_util::StreamExt;
 use jsonrpsee::core::{async_trait, RpcResult};
 use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::types::{ErrorCode, ErrorObjectOwned};
+use reth_primitives::hex::ToHexExt;
 use reth_primitives::revm_primitives::bitvec::macros::internal::funty::Fundamental;
+use reth_primitives::revm_primitives::bitvec::view::AsBits;
 use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, B256, U256, U64};
 use rpc_api_types::other::OtherFields;
 use rpc_api_types::{Filter, Log, Transaction, WithOtherFields};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_with::{serde_as, DisplayFromStr};
 
 use common::convert::{ToNeon, ToReth};
@@ -36,12 +38,21 @@ pub struct Token {
     token_chain_id: U64,
 }
 
+pub fn serialize_signature<S>(signature: &Signature, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let hex = signature.encode_hex();
+    serializer.serialize_str(&hex)
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct NeonReceipt {
     #[serde(flatten)]
     receipt: NeonTransactionReceipt,
     solana_block_hash: Option<B256>,
+    #[serde(serialize_with = "serialize_signature")]
     solana_complete_transaction_signature: Signature,
     solana_complete_instruction_index: u64,
     solana_complete_inner_instruction_index: Option<u64>,
@@ -55,7 +66,7 @@ pub struct NeonReceipt {
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct NeonCost {
-    neon_operator_address: Pubkey,
+    neon_operator_address: B256,
     solana_lamport_expense: i64,
     neon_alan_income: u64,
 }
@@ -68,7 +79,7 @@ pub struct SolanaTransaction {
     solana_transaction_is_success: bool,
     solana_block_slot: u64,
     solana_lamport_expense: u64,
-    neon_operator_address: Pubkey,
+    neon_operator_address: B256,
     solana_instructions: Vec<SolanaInstruction>,
 }
 
@@ -521,7 +532,8 @@ impl NeonCustomApiServer for EthApiImpl {
                 let sol_tx_ix = result.map_err(Error::from)?;
                 tracing::info!(?sol_tx_ix, "fetched sol_tx_ix"); // TODO: remove
                 let sol_sig = &sol_tx_ix.transaction.sol_sig;
-                let neon_operator_address = sol_tx_ix.cost.operator.into();
+                let operator_pubkey: Pubkey = sol_tx_ix.cost.operator.into();
+                let neon_operator_address = B256::from(operator_pubkey.to_bytes());
 
                 if sol_txs.last().map_or(true, |last| last.sol_sig != *sol_sig) {
                     sol_txs.push(SolanaTransaction {
