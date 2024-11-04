@@ -4,7 +4,7 @@ use sqlx::FromRow;
 
 use common::types::TxHash;
 
-use crate::{Error, PgPubkey, PgU256};
+use crate::{Error, PgPubkey};
 
 #[derive(Debug, Clone)]
 pub struct SolanaNeonTransactionRepo {
