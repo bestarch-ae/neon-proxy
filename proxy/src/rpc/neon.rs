@@ -7,7 +7,6 @@ use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::types::{ErrorCode, ErrorObjectOwned};
 use reth_primitives::hex::ToHexExt;
 use reth_primitives::revm_primitives::bitvec::macros::internal::funty::Fundamental;
-use reth_primitives::revm_primitives::bitvec::view::AsBits;
 use reth_primitives::{Address, BlockId, BlockNumberOrTag, Bytes, B256, U256, U64};
 use rpc_api_types::other::OtherFields;
 use rpc_api_types::{Filter, Log, Transaction, WithOtherFields};
