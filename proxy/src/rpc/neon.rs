@@ -610,7 +610,6 @@ impl NeonCustomApiServer for EthApiImpl {
         let neon_is_completed = tx_info.inner.is_completed;
         let eth_receipt =
             neon_to_eth_receipt(tx_info.inner, tx_info.blockhash).map_err(Error::from)?;
-        println!("LOGS LEN: {logs:?}");
         let neon_receipt = to_neon_receipt_v2(eth_receipt, logs2);
         let solana_block_hash = neon_receipt.block_hash;
 
