@@ -18,6 +18,8 @@ use crate::rpc::NeonLog;
 
 pub type NeonTransactionReceipt =
     WithOtherFields<TransactionReceipt<AnyReceiptEnvelope<Log<NeonLogData>>>>;
+pub type NeonTransactionReceiptV2 =
+    WithOtherFields<TransactionReceipt<AnyReceiptEnvelope<NeonLog>>>;
 pub type NeonLogData = WithOtherFields<LogData>;
 pub type EthNeonLog = Log<NeonLogData>;
 
@@ -26,6 +28,17 @@ pub fn to_neon_receipt(rec: AnyTransactionReceipt) -> NeonTransactionReceipt {
     WithOtherFields {
         other,
         inner: inner.map_inner(to_neon_envelope),
+    }
+}
+
+pub fn to_neon_receipt_v2(
+    rec: AnyTransactionReceipt,
+    logs: Vec<NeonLog>,
+) -> NeonTransactionReceiptV2 {
+    let WithOtherFields { inner, other } = rec;
+    WithOtherFields {
+        other,
+        inner: inner.map_inner(|x| to_neon_envelope_v2(x, logs.clone())),
     }
 }
 
@@ -41,6 +54,24 @@ fn to_neon_envelope(env: AnyReceiptEnvelope<Log>) -> AnyReceiptEnvelope<Log<Neon
         status: env.inner.receipt.status,
         cumulative_gas_used: env.inner.receipt.cumulative_gas_used,
         logs: inner,
+    };
+    AnyReceiptEnvelope {
+        inner: ReceiptWithBloom {
+            receipt,
+            logs_bloom: env.inner.logs_bloom,
+        },
+        r#type: env.r#type,
+    }
+}
+
+fn to_neon_envelope_v2(
+    env: AnyReceiptEnvelope<Log>,
+    logs: Vec<NeonLog>,
+) -> AnyReceiptEnvelope<NeonLog> {
+    let receipt = Receipt {
+        status: env.inner.receipt.status,
+        cumulative_gas_used: env.inner.receipt.cumulative_gas_used,
+        logs,
     };
     AnyReceiptEnvelope {
         inner: ReceiptWithBloom {

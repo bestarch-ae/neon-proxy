@@ -23,7 +23,9 @@ use common::solana_sdk::signature::Signature;
 use common::types::EventKind;
 use mempool::GasPriceModel;
 
-use crate::convert::{neon_to_eth, neon_to_eth_receipt, to_neon_receipt, NeonTransactionReceipt};
+use crate::convert::{
+    neon_to_eth, neon_to_eth_receipt, to_neon_receipt_v2, NeonTransactionReceiptV2,
+};
 use crate::error::{internal_error, Error};
 use crate::rpc::EthApiImpl;
 
@@ -49,7 +51,7 @@ where
 #[serde(rename_all = "camelCase")]
 pub struct NeonReceipt {
     #[serde(flatten)]
-    receipt: NeonTransactionReceipt,
+    receipt: NeonTransactionReceiptV2,
     solana_block_hash: Option<B256>,
     #[serde(serialize_with = "serialize_signature")]
     solana_complete_transaction_signature: Signature,
@@ -518,6 +520,7 @@ impl NeonCustomApiServer for EthApiImpl {
         let log_filter = Filter::new().select(hash);
         let log_filters = convert_filters(log_filter).map_err(Error::from)?;
         let logs = self.get_logs(log_filters).await?;
+        let logs2 = logs.clone();
 
         let mut neon_costs_draft = HashMap::new();
         let mut sol_txs: Vec<SolanaTransaction> = vec![];
@@ -607,7 +610,8 @@ impl NeonCustomApiServer for EthApiImpl {
         let neon_is_completed = tx_info.inner.is_completed;
         let eth_receipt =
             neon_to_eth_receipt(tx_info.inner, tx_info.blockhash).map_err(Error::from)?;
-        let neon_receipt = to_neon_receipt(eth_receipt);
+        println!("LOGS LEN: {logs:?}");
+        let neon_receipt = to_neon_receipt_v2(eth_receipt, logs2);
         let solana_block_hash = neon_receipt.block_hash;
 
         let receipt = NeonReceipt {
@@ -616,9 +620,9 @@ impl NeonCustomApiServer for EthApiImpl {
             solana_complete_transaction_signature,
             solana_complete_instruction_index,
             solana_complete_inner_instruction_index,
-            neon_raw_transaction: Bytes::default(), // TODO: ???
+            neon_raw_transaction: Bytes::default(),
             neon_is_completed,
-            neon_is_canceled: false, // TODO: ???
+            neon_is_canceled: false,
             solana_transactions: sol_txs,
             neon_costs: neon_costs_draft.values().cloned().collect(),
         };
