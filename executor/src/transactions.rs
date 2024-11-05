@@ -393,6 +393,7 @@ impl TransactionBuilder {
             TxErrorKind::BadExternalCall | TxErrorKind::Other => {
                 self.handle_preflight_error(tx).await
             }
+            TxErrorKind::AlreadyProcessed => bail!("must be handled before"),
         }
     }
 }
