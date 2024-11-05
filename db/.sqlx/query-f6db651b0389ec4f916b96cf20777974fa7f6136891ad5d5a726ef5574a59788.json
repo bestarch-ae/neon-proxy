@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT sol_sig as \"sol_sig!\"\n               FROM solana_neon_transactions\n               WHERE neon_sig = $1 ORDER BY block_slot, idx",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sol_sig!",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "f6db651b0389ec4f916b96cf20777974fa7f6136891ad5d5a726ef5574a59788"
+}

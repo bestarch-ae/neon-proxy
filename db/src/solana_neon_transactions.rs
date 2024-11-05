@@ -2,6 +2,7 @@ use futures_util::{Stream, StreamExt};
 use sqlx::postgres::PgRow;
 use sqlx::FromRow;
 
+use common::solana_sdk::signature::Signature;
 use common::types::TxHash;
 
 use crate::{Error, PgPubkey};
@@ -54,6 +55,21 @@ impl SolanaNeonTransactionRepo {
         .bind(tx_hash_array)
         .fetch(&self.pool)
         .map(|row| row.map_err(Error::from))
+    }
+
+    pub fn fetch_solana_signatures(
+        &self,
+        hash: [u8; 32],
+    ) -> impl Stream<Item = Result<Signature, Error>> + '_ {
+        sqlx::query!(
+            r#"SELECT sol_sig as "sol_sig!"
+               FROM solana_neon_transactions
+               WHERE neon_sig = $1 ORDER BY block_slot, idx"#,
+            &hash,
+        )
+        .map(|row| Signature::try_from(row.sol_sig.as_slice()).map_err(anyhow::Error::from))
+        .fetch(&self.pool)
+        .map(|result| result?.map_err(Error::from))
     }
 }
 

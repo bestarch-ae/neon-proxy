@@ -487,10 +487,11 @@ impl NeonCustomApiServer for EthApiImpl {
         hash: B256,
         _full: Option<bool>,
     ) -> RpcResult<SolanaByNeonResponse> {
-        let stream = self.transactions.fetch_solana_signatures(hash.0);
-        let signatures: Vec<_> = stream.try_collect().await.map_err(|err| {
-            ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
-        })?;
+        let stream = self.sol_neon_transactions.fetch_solana_signatures(hash.0);
+        let signatures: Vec<_> = stream
+            .try_collect()
+            .await
+            .map_err(|err| internal_error(err.to_string()))?;
         Ok(SolanaByNeonResponse::from(signatures))
     }
 

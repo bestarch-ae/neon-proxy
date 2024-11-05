@@ -7,7 +7,7 @@
       "Left": [
         "Bytea",
         "Int8",
-        "Text",
+        "Bytea",
         "Int8"
       ]
     },
