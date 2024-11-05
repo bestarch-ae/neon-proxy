@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 
 use solana_api::solana_api::{ClientError, ClientErrorKind};
 use solana_api::solana_rpc_client_api::{request, response};
+use solana_sdk::transaction::TransactionError;
 
 use super::ongoing::{OngoingTransaction, TxStage};
 use super::{TransactionBuilder, MAX_COMPUTE_UNITS, MAX_HEAP_SIZE};
@@ -13,6 +14,7 @@ pub enum TxErrorKind {
     TxSizeExceeded,
     AltFail,
     BadExternalCall,
+    AlreadyProcessed,
     Other,
 }
 
@@ -28,6 +30,13 @@ impl TxErrorKind {
             }
             _ => (),
         };
+
+        if matches!(
+            extract_transaction_err(&err.kind),
+            Some(TransactionError::AlreadyProcessed)
+        ) {
+            return Some(Self::AlreadyProcessed);
+        }
 
         if tx.is_alt() {
             return Some(Self::AltFail);
@@ -46,6 +55,19 @@ impl TxErrorKind {
         }
 
         is_preflight(err.kind()).then_some(Self::Other)
+    }
+}
+
+fn extract_transaction_err(err: &ClientErrorKind) -> Option<&TransactionError> {
+    match err {
+        ClientErrorKind::RpcError(request::RpcError::RpcResponseError {
+            data:
+                request::RpcResponseErrorData::SendTransactionPreflightFailure(
+                    response::RpcSimulateTransactionResult { err, .. },
+                ),
+            ..
+        }) => err.as_ref(),
+        _ => None,
     }
 }
 

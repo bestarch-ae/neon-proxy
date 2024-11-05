@@ -23,6 +23,7 @@ use tokio::sync::{oneshot, Notify};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 
+use tracing::debug;
 use tracing::{error, info, warn};
 use typed_builder::TypedBuilder;
 
@@ -292,6 +293,11 @@ impl Executor {
             {
                 Ok(sign) => break sign,
                 Err((None, err)) => return Err(err.into()),
+                Err((Some(TxErrorKind::AlreadyProcessed), err)) => {
+                    let sign = *sol_tx.signatures.first().context("missing tx signature")?;
+                    debug!(operator = %self.builder.pubkey(), ?sign, ?tx_hash, ?err, "already processed");
+                    break sign;
+                }
                 Err((Some(err_kind), err)) => {
                     let tx_hash = tx.eth_tx().map(|tx| tx.tx_hash()).copied();
                     tx = self.builder.retry(tx, err_kind).await.map_err(|new_err| {
