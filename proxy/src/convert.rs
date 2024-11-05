@@ -333,7 +333,7 @@ pub fn convert_rich_log(log: RichLog) -> Result<NeonLog, Error> {
         removed: false,
         solana_transaction_signature: log.sol_signature,
         solana_instruction_index: log.sol_ix_idx,
-        solana_inner_instruction_index: Some(log.sol_ix_inner_idx),
+        solana_inner_instruction_index: log.sol_ix_inner_idx,
         solana_address: None, //log.event.address,
         neon_event_type: log.event.event_type,
         neon_event_level: log.event.level,

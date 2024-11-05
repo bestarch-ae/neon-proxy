@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO solana_neon_transactions\n            (\n                sol_sig,\n                block_slot,\n                idx,\n                inner_idx,\n                ix_code,\n                is_success,\n                neon_sig,\n                neon_step_cnt,\n                neon_gas_used,\n                neon_total_gas_used,\n                max_heap_size,\n                used_heap_size,\n                max_bpf_cycle_cnt,\n                used_bpf_cycle_cnt\n            )\n            VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Int8",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Bool",
+        "Bytea",
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "df9070f7ac83409acd49490d3832a41e44f998fe4c0bd7ab1ed174037360d8bb"
+}
