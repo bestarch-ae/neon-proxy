@@ -604,33 +604,6 @@ impl TransactionRepo {
         .map(|row| row.log_idx)
     }
 
-    pub fn fetch_solana_signatures(
-        &self,
-        hash: [u8; 32],
-    ) -> impl Stream<Item = Result<Signature, Error>> + '_ {
-        struct Row {
-            sol_sig: Option<Vec<u8>>,
-        }
-        sqlx::query_as!(
-            Row,
-            r#"SELECT sol_sig
-               FROM neon_transactions
-               WHERE neon_sig = $1 ORDER BY block_slot,tx_idx"#,
-            &hash,
-        )
-        .map(|row| {
-            let sol_sig = row
-                .sol_sig
-                .ok_or_else(|| anyhow::anyhow!("missing sol_sig"))?;
-            let sol_sig = Signature::from(
-                <[u8; 64]>::try_from(sol_sig).map_err(|_| anyhow::anyhow!("bad signature"))?,
-            );
-            Ok::<_, Error>(sol_sig)
-        })
-        .fetch(&self.pool)
-        .map(|res| res?)
-    }
-
     pub fn fetch_rich_logs(
         &self,
         by: RichLogBy,
