@@ -532,9 +532,11 @@ impl EthApiServer for EthApiImpl {
     /// `sendRawTransaction.`
     async fn sign_transaction(&self, request: TransactionRequest) -> RpcResult<Bytes> {
         tracing::info!(?request, "sign transaction");
+        let mut request = request;
         let address = request
             .from
             .ok_or_else(|| invalid_params("Missing sender"))?;
+        self.enrich_tx_request(address, &mut request).await?;
         let transaction = request.build_typed_tx().map_err(|request| {
             tracing::debug!(?request, "cannot build transaction from request");
             invalid_params("Invalid transaction request")
@@ -548,38 +550,13 @@ impl EthApiServer for EthApiImpl {
     /// Sends transaction will block waiting for signer to return the
     /// transaction hash.
     async fn send_transaction(&self, request: TransactionRequest) -> RpcResult<B256> {
-        use common::evm_loader::types::Address;
-
         let mut request = request;
         tracing::info!(?request, "send transaction");
         let address = request
             .from
             .ok_or_else(|| invalid_params("Missing sender"))?;
 
-        if request.to.is_none() {
-            tracing::debug!("setting to to Create");
-            request.to = Some(TxKind::Create);
-        }
-
-        if request.nonce.is_none() {
-            let balance_address = BalanceAddress {
-                address: Address::from(<[u8; 20]>::from(address.0)),
-                chain_id: self.chain_id,
-            };
-            let nonce = self
-                .neon_api
-                .get_transaction_count(balance_address, Some(BlockNumberOrTag::Pending))
-                .await?;
-            tracing::debug!(?nonce, "setting nonce");
-            request = request.nonce(nonce);
-        }
-
-        if request.gas.is_none() {
-            let tx = request_to_tx_params(request.clone(), self.chain_id);
-            let gas = self.neon_api.estimate_gas(tx, None).await?;
-            tracing::debug!(?gas, "setting gas_limit");
-            request = request.gas_limit(gas.as_u128());
-        }
+        self.enrich_tx_request(address, &mut request).await?;
 
         let transaction = request.build_typed_tx().map_err(|request| {
             tracing::debug!(?request, "cannot build transaction from request");

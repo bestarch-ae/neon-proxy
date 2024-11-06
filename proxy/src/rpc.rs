@@ -2,12 +2,13 @@ use std::sync::Arc;
 
 use alloy_consensus::{SignableTransaction, TxEnvelope, TypedTransaction};
 use anyhow::anyhow;
+use common::neon_lib::types::BalanceAddress;
 use futures_util::{StreamExt, TryStreamExt};
 use operator::Operator;
-use reth_primitives::Address;
+use reth_primitives::{Address, TxKind};
 use reth_primitives::{BlockId, BlockNumberOrTag, B256};
-use rpc_api_types::RichBlock;
 use rpc_api_types::{Filter, FilterBlockOption};
+use rpc_api_types::{RichBlock, TransactionRequest};
 
 use sqlx::PgPool;
 
@@ -18,7 +19,7 @@ use mempool::{GasPrices, Mempool, PreFlightValidator};
 use neon_api::NeonApi;
 use operator_pool::OperatorPool;
 
-use crate::convert::build_block;
+use crate::convert::{build_block, request_to_tx_params};
 use crate::convert::{convert_rich_log, LogFilters};
 use crate::error::Error;
 pub use crate::rpc::eth::{NeonEthApiServer, NeonFilterApiServer};
@@ -175,6 +176,39 @@ impl EthApiImpl {
         let config = self.neon_api.get_config().await?;
         let version = format!("Neon-EVM/v{}-{}", config.version, config.revision);
         Ok(version)
+    }
+
+    async fn enrich_tx_request(
+        &self,
+        from: Address,
+        request: &mut TransactionRequest,
+    ) -> Result<(), Error> {
+        if request.to.is_none() {
+            tracing::debug!("setting to to Create");
+            request.to = Some(TxKind::Create);
+        }
+
+        if request.nonce.is_none() {
+            let balance_address = BalanceAddress {
+                address: from.0 .0.into(),
+                chain_id: self.chain_id,
+            };
+            let nonce = self
+                .neon_api
+                .get_transaction_count(balance_address, Some(BlockNumberOrTag::Pending))
+                .await?;
+            tracing::debug!(?nonce, "setting nonce");
+            request.nonce = Some(nonce);
+        }
+
+        if request.gas.is_none() {
+            let tx = request_to_tx_params(request.clone(), self.chain_id);
+            let gas = self.neon_api.estimate_gas(tx, None).await?;
+            tracing::debug!(?gas, "setting gas_limit");
+            request.gas = Some(gas.as_u128());
+        }
+
+        Ok(())
     }
 
     async fn send_transaction(&self, request: ExecuteRequest) -> Result<B256, Error> {
