@@ -183,8 +183,11 @@ impl EthApiImpl {
         from: Address,
         request: &mut TransactionRequest,
     ) -> Result<(), Error> {
+        if request.chain_id.is_none() {
+            request.chain_id = Some(self.chain_id);
+        }
+
         if request.to.is_none() {
-            tracing::debug!("setting to to Create");
             request.to = Some(TxKind::Create);
         }
 
