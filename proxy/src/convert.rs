@@ -1,18 +1,23 @@
 use anyhow::{anyhow, Context, Error};
-use common::evm_loader::types::{Address as NeonAddress, TransactionPayload};
-use common::solana_sdk::hash::Hash;
-use common::types::{EventLog, NeonTxInfo, SolanaBlock};
-use db::{RichLog, RichLogBy};
 use hex_literal::hex;
 use reth_primitives::revm_primitives::LogData;
 use reth_primitives::trie::EMPTY_ROOT_HASH;
-use reth_primitives::{Address, Bloom, Bytes, Log as PrimitiveLog, B256, B64, U256};
+use reth_primitives::{
+    Address, Bloom, Bytes, ChainId, Log as PrimitiveLog, TxKind, B256, B64, U256,
+};
 use rpc_api_types::other::OtherFields;
 use rpc_api_types::{
     AnyReceiptEnvelope, AnyTransactionReceipt, Block, BlockNumberOrTag, BlockTransactions, Filter,
     FilterBlockOption, FilterSet, Header, Log, Receipt, ReceiptWithBloom, Transaction,
-    TransactionReceipt, ValueOrArray, WithOtherFields,
+    TransactionReceipt, TransactionRequest, ValueOrArray, WithOtherFields,
 };
+
+use common::convert::ToNeon;
+use common::evm_loader::types::{Address as NeonAddress, TransactionPayload};
+use common::neon_lib::types::TxParams;
+use common::solana_sdk::hash::Hash;
+use common::types::{EventLog, NeonTxInfo, SolanaBlock};
+use db::{RichLog, RichLogBy};
 
 use crate::rpc::NeonLog;
 
@@ -420,4 +425,25 @@ pub fn convert_filters(filters: Filter) -> Result<LogFilters, Error> {
         address,
         topics,
     })
+}
+
+pub fn request_to_tx_params(request: TransactionRequest, chain_id: ChainId) -> TxParams {
+    TxParams {
+        nonce: request.nonce,
+        from: request.from.map(ToNeon::to_neon).unwrap_or_default(),
+        to: match request.to {
+            Some(TxKind::Call(addr)) => Some(ToNeon::to_neon(addr)),
+            Some(TxKind::Create) => None,
+            None => None,
+        },
+        data: request.input.data.map(|data| data.to_vec()),
+        value: request.value.map(ToNeon::to_neon),
+        gas_limit: request.gas.map(U256::from).map(ToNeon::to_neon),
+        gas_price: request.gas_price.map(U256::from).map(ToNeon::to_neon),
+        access_list: request
+            .access_list
+            .map(|list| list.0.into_iter().map(ToNeon::to_neon).collect()),
+        actual_gas_used: None,
+        chain_id: Some(chain_id),
+    }
 }
