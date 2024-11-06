@@ -216,7 +216,9 @@ impl EthApiImpl {
             TypedTransaction::Eip1559(ref mut tx) => tx,
             TypedTransaction::Eip4844(ref mut tx) => tx,
         };
-        let signature = operator.sign_eth_transaction(signable)?;
+        let signature = operator
+            .sign_eth_transaction(signable)?
+            .with_chain_id(self.chain_id);
         // TODO: Remove this nonsense when reth gets updated
         let envelope: TxEnvelope = match tx {
             TypedTransaction::Legacy(tx) => tx.into_signed(signature).into(),
