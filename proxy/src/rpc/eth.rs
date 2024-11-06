@@ -19,7 +19,7 @@ use common::neon_lib::types::{BalanceAddress, TxParams};
 use executor::ExecuteRequest;
 use mempool::GasPricesTrait;
 
-use crate::convert::{convert_filters, EthNeonLog, NeonTransactionReceipt};
+use crate::convert::{convert_filters, request_to_tx_params, EthNeonLog, NeonTransactionReceipt};
 use crate::convert::{neon_to_eth, neon_to_eth_receipt};
 use crate::error::{call_execution_failed, invalid_params, unimplemented, Error};
 use crate::rpc::EthApiImpl;
@@ -445,24 +445,7 @@ impl EthApiServer for EthApiImpl {
         _state_override: Option<StateOverride>,
     ) -> RpcResult<U256> {
         tracing::info!(?block_number, "estimate_gas {request:?}");
-        let tx = TxParams {
-            nonce: request.nonce,
-            from: request.from.map(ToNeon::to_neon).unwrap_or_default(),
-            to: match request.to {
-                Some(TxKind::Call(addr)) => Some(ToNeon::to_neon(addr)),
-                Some(TxKind::Create) => None,
-                None => None,
-            },
-            data: request.input.data.map(|data| data.to_vec()),
-            value: request.value.map(ToNeon::to_neon),
-            gas_limit: request.gas.map(U256::from).map(ToNeon::to_neon),
-            gas_price: request.gas_price.map(U256::from).map(ToNeon::to_neon),
-            access_list: request
-                .access_list
-                .map(|list| list.0.into_iter().map(ToNeon::to_neon).collect()),
-            actual_gas_used: None,
-            chain_id: Some(self.chain_id),
-        };
+        let tx = request_to_tx_params(request, self.chain_id);
 
         let tag = if let Some(block_number) = block_number {
             Some(self.get_tag_by_block_id(block_number).await?)
@@ -589,6 +572,13 @@ impl EthApiServer for EthApiImpl {
                 .await?;
             tracing::debug!(?nonce, "setting nonce");
             request = request.nonce(nonce);
+        }
+
+        if request.gas.is_none() {
+            let tx = request_to_tx_params(request.clone(), self.chain_id);
+            let gas = self.neon_api.estimate_gas(tx, None).await?;
+            tracing::debug!(?gas, "setting gas_limit");
+            request = request.gas_limit(gas.as_u128());
         }
 
         let transaction = request.build_typed_tx().map_err(|request| {
