@@ -21,6 +21,15 @@ pub enum SenderPoolState {
     Processing(TxNonce),
 }
 
+impl SenderPoolState {
+    fn nonce(&self) -> Option<TxNonce> {
+        match self {
+            Self::Idle => None,
+            Self::Queued(nonce) | Self::Processing(nonce) => Some(*nonce),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct SenderPool {
     /// Chain id of the sender pool. (useful for debug/logging)
@@ -73,7 +82,8 @@ impl SenderPool {
             .peek_max()
             .map(|x| *x.1)
             .unwrap_or(0);
-        Some(max(queue_nonce, self.tx_count))
+        let state_nonce = self.state.nonce().unwrap_or(0);
+        Some(max(queue_nonce, self.tx_count).max(state_nonce))
     }
 
     pub fn get_by_nonce(&self, nonce: TxNonce) -> Option<&QueueRecord> {
