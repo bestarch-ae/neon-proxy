@@ -570,12 +570,12 @@ impl<E: Execute, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C> {
         execution_result: ExecutionResult,
     ) -> Result<(), MempoolError> {
         let Some((_tx_hash, record)) = self.txs.remove(&execution_result.tx_hash) else {
-            tracing::error!(chain_id = %execution_result.chain_id, "tx not found in the registry");
+            tracing::error!(?execution_result, "tx not found in the registry");
             return Ok(());
         };
 
         let Some(sender_pool) = self.sender_pools.get_mut(&record.sender) else {
-            tracing::error!(chain_id = %execution_result.chain_id, sebser = ?record.sender, "sender pool not found");
+            tracing::error!(?execution_result, sender = ?record.sender, "sender pool not found");
             return Ok(());
         };
 
@@ -585,7 +585,10 @@ impl<E: Execute, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C> {
             let sender = sender_pool.sender;
             self.remove_sender_pool(&sender);
         } else {
-            self.queue_new_tx(&record.sender, true).await?;
+            // Tx count is updated when state transitions into Proccesing, there is no point in
+            // updating it again.
+            self.queue_new_tx(&record.sender, !execution_result.success)
+                .await?;
         }
 
         Ok(())
