@@ -61,6 +61,10 @@ impl IterInfo {
     pub fn cu_limit(&self) -> u32 {
         self.cu_limit
     }
+
+    pub fn unique_idx(&self) -> u32 {
+        self.unique_idx
+    }
 }
 
 #[derive(Debug)]

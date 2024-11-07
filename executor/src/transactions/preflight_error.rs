@@ -1,8 +1,13 @@
 use anyhow::{bail, Context, Result};
 
+use neon_lib::commands::emulate::SolanaAccount;
 use solana_api::solana_api::{ClientError, ClientErrorKind};
 use solana_api::solana_rpc_client_api::{request, response};
+use solana_sdk::pubkey::Pubkey;
 use solana_sdk::transaction::TransactionError;
+
+use crate::transactions::emulator::get_chain_id;
+use crate::transactions::ongoing::TxData;
 
 use super::ongoing::{OngoingTransaction, TxStage};
 use super::{TransactionBuilder, MAX_COMPUTE_UNITS, MAX_HEAP_SIZE};
@@ -15,6 +20,7 @@ pub enum TxErrorKind {
     AltFail,
     BadExternalCall,
     AlreadyProcessed,
+    MissingAccount(Pubkey),
     Other,
 }
 
@@ -42,12 +48,16 @@ impl TxErrorKind {
             return Some(Self::AltFail);
         }
 
-        if extract_logs(&err.kind)
-            .iter()
-            .rfind(|log| log.contains("exceeded CUs meter at BPF instruction"))
-            .is_some()
-        {
-            return Some(Self::CuMeterExceeded);
+        if let Some(error) = extract_logs(&err.kind).iter().rev().find_map(|log| {
+            if log.contains("exceeded CUs meter at BPF instruction") {
+                return Some(Self::CuMeterExceeded);
+            }
+            if let Some(key) = try_extract_missing_account(log) {
+                return Some(Self::MissingAccount(key));
+            }
+            None
+        }) {
+            return Some(error);
         }
 
         if tx.has_external_call_fail() {
@@ -69,6 +79,12 @@ fn extract_transaction_err(err: &ClientErrorKind) -> Option<&TransactionError> {
         }) => err.as_ref(),
         _ => None,
     }
+}
+
+fn try_extract_missing_account(log: &str) -> Option<Pubkey> {
+    let log = log.strip_prefix("Program log: panicked at 'address ")?;
+    let end = log.find(" must be present in the transaction'")?;
+    log[0..end].parse().ok()
 }
 
 fn extract_logs(err: &ClientErrorKind) -> &'_ [String] {
@@ -208,6 +224,78 @@ impl TransactionBuilder {
         }
     }
 
+    /// Retry from emulate stage
+    pub(super) async fn retry_with_account(
+        &self,
+        tx: OngoingTransaction,
+        pubkey: Pubkey,
+    ) -> Result<OngoingTransaction> {
+        let add_account = |tx_data: &mut TxData| {
+            tx_data.emulate.solana_accounts.push(SolanaAccount {
+                pubkey,
+                is_writable: true,
+                is_legacy: false,
+            })
+        };
+        let tx_hash = tx.eth_tx().map(|tx| tx.tx_hash()).copied();
+        tracing::warn!(?tx_hash, "reemulate attempt");
+        let alt = tx.alt().cloned();
+        match tx.disassemble() {
+            TxStage::Final {
+                tx_data: Some(mut tx_data),
+                holder: None,
+            } => {
+                add_account(&mut tx_data);
+                if let Some(chain_id) = get_chain_id(&tx_data.envelope) {
+                    self.dispatch_data_execution_by_version(tx_data, chain_id, alt)
+                        .await
+                } else {
+                    // This is probably unreachable but still exists just in case
+                    self.start_holder_execution(tx_data.envelope).await
+                }
+            }
+            TxStage::IterativeExecution {
+                mut tx_data,
+                holder,
+                iter_info: Some(iter_info),
+                from_data,
+                ..
+            } if iter_info.unique_idx() == 1 => {
+                add_account(&mut tx_data);
+                if let Some(chain_id) = from_data.then(|| get_chain_id(&tx_data.envelope)).flatten()
+                {
+                    self.dispatch_data_execution_by_version(tx_data, chain_id, alt)
+                        .await
+                } else if from_data {
+                    // This is probably unreachable but still exists just in case
+                    self.start_holder_execution(tx_data.envelope).await
+                } else {
+                    self.execute_from_holder_emulated(holder, tx_data, alt)
+                        .await
+                }
+            }
+            TxStage::IterativeExecution {
+                tx_data,
+                holder,
+                iter_info: Some(_),
+                alt,
+                ..
+            } => {
+                tracing::warn!(?tx_hash, "cancelling transaction");
+                self.cancel(tx_data, holder, alt)
+            }
+            TxStage::Final {
+                tx_data: Some(mut tx_data),
+                holder: Some(holder),
+            } => {
+                add_account(&mut tx_data);
+                self.execute_from_holder_emulated(holder, tx_data, alt)
+                    .await
+            }
+            stage => bail!("invalid stage for reemulation: {stage:?}"),
+        }
+    }
+
     /// Generic preflight error handling logic.
     ///
     /// Fallback to iterative execution first and then proceed to cancel
@@ -244,7 +332,7 @@ impl TransactionBuilder {
             TxStage::IterativeExecution {
                 tx_data, holder, ..
             } => {
-                tracing::warn!(?tx_hash, "Cancelling transaction");
+                tracing::warn!(?tx_hash, "cancelling transaction");
                 self.cancel(tx_data, holder, alt)
             }
             stage @ TxStage::HolderFill { .. }
