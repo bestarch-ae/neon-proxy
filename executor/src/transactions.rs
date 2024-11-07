@@ -389,6 +389,8 @@ impl TransactionBuilder {
             TxErrorKind::CuMeterExceeded => self.handle_cu_meter(tx),
             TxErrorKind::TxSizeExceeded => self.handle_tx_size(tx).await,
             TxErrorKind::AltFail => self.handle_alt(tx).await,
+            TxErrorKind::MissingAccount(key) => self.retry_with_account(tx, key).await,
+
             TxErrorKind::BadExternalCall | TxErrorKind::Other => {
                 self.handle_preflight_error(tx).await
             }
