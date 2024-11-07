@@ -126,6 +126,14 @@ pub struct Mempool {
     // pub todo: pick a default value
     #[arg(long, env, default_value = "3600")]
     pub mp_eviction_timeout_sec: u64,
+
+    /// Evicted sender transaction count cache size. Disabled by default.
+    #[arg(long, env, default_value = "0")]
+    pub mp_tx_count_cache_size: usize,
+
+    /// Executed transaction cache size. Disabled by default.
+    #[arg(long, env, default_value = "0")]
+    pub mp_tx_cache_size: usize,
 }
 
 #[derive(Debug, Args)]
