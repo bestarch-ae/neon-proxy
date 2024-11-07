@@ -31,3 +31,4 @@ tracing.workspace = true
 thiserror.workspace = true
 futures-util.workspace = true
 rust_decimal = "1.36.0"
+lru = "0.12.5"

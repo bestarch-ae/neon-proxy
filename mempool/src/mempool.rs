@@ -28,6 +28,8 @@ pub struct Config {
     pub capacity: usize,
     pub capacity_high_watermark: f64,
     pub eviction_timeout_sec: u64,
+    pub tx_cache_size: usize,
+    pub tx_count_cache_size: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -246,6 +248,8 @@ impl<E: Execute, G: GasPricesTrait> Mempool<E, G> {
                 capacity: self.config.capacity,
                 capacity_high_watermark: self.config.capacity_high_watermark,
                 eviction_timeout_sec: self.config.eviction_timeout_sec,
+                tx_cache_size: self.config.tx_cache_size,
+                tx_count_cache_size: self.config.tx_count_cache_size,
             };
             ChainPool::create_and_start(
                 config,

@@ -1,11 +1,13 @@
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::future::Future;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
 use dashmap::DashMap;
 use futures_util::StreamExt;
+use lru::LruCache;
 use priority_queue::PriorityQueue;
 use reth_primitives::alloy_primitives::TxNonce;
 use reth_primitives::{Address, BlockNumberOrTag, ChainId};
@@ -56,6 +58,8 @@ pub struct Config {
     pub capacity: usize,
     pub capacity_high_watermark: f64,
     pub eviction_timeout_sec: u64,
+    pub tx_cache_size: usize,
+    pub tx_count_cache_size: usize,
 }
 
 struct HeartBeatTask {
@@ -93,6 +97,8 @@ pub struct ChainPool<E: Execute, G: GasPricesTrait, C: GetTxCountTrait> {
     txs: Arc<DashMap<EthTxHash, TxRecord>>,
     /// Timeout for evicting sender pools from the mempool
     eviction_timeout_sec: u64,
+    tx_count_cache: Option<LruCache<Address, u64>>,
+    tx_cache: Option<LruCache<EthTxHash, ()>>,
 }
 
 impl<E: Execute, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C> {
@@ -120,6 +126,8 @@ impl<E: Execute, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C> {
             executor,
             txs,
             eviction_timeout_sec: config.eviction_timeout_sec,
+            tx_count_cache: init_cache(config.tx_count_cache_size),
+            tx_cache: init_cache(config.tx_cache_size),
         }
     }
 
@@ -210,7 +218,11 @@ impl<E: Execute, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C> {
                 if let Some(sender_pool) = self.sender_pools.get(&addr) {
                     result_tx.send(sender_pool.get_pending_tx_count()).unwrap();
                 } else {
-                    result_tx.send(None).unwrap();
+                    let count = self
+                        .tx_count_cache
+                        .as_mut()
+                        .and_then(|cache| cache.get(&addr).copied());
+                    result_tx.send(count).unwrap();
                 }
             }
             Command::GetTxHash(addr, nonce, result_tx) => {
@@ -293,6 +305,24 @@ impl<E: Execute, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C> {
         tracing::debug!(tx_hash = %tx.tx_hash(), "schedule tx command");
         let chain_id = tx.chain_id();
         let sender = tx.sender;
+
+        if self
+            .tx_count_cache
+            .as_mut()
+            .and_then(|cache| cache.get(&sender))
+            .map_or(false, |&count| count > tx.nonce)
+        {
+            return Err(MempoolError::NonceTooLow);
+        }
+
+        if self
+            .tx_cache
+            .as_mut()
+            .and_then(|cache| cache.get(tx.tx_hash()))
+            .is_some()
+        {
+            return Err(MempoolError::AlreadyKnown);
+        }
 
         let (sender_pool, created) = self.get_or_create_sender_pool(&sender).await;
         // Clone necessary data from sender_pool to avoid mutable borrow later
@@ -569,10 +599,16 @@ impl<E: Execute, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C> {
         &mut self,
         execution_result: ExecutionResult,
     ) -> Result<(), MempoolError> {
-        let Some((_tx_hash, record)) = self.txs.remove(&execution_result.tx_hash) else {
+        let Some((tx_hash, record)) = self.txs.remove(&execution_result.tx_hash) else {
             tracing::error!(?execution_result, "tx not found in the registry");
             return Ok(());
         };
+
+        if execution_result.success {
+            if let Some(cache) = self.tx_cache.as_mut() {
+                cache.push(tx_hash, ());
+            }
+        }
 
         let Some(sender_pool) = self.sender_pools.get_mut(&record.sender) else {
             tracing::error!(?execution_result, sender = ?record.sender, "sender pool not found");
@@ -670,6 +706,9 @@ impl<E: Execute, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C> {
             self.sender_pools.insert(*sender, sender_pool);
             return;
         }
+        if let Some(cache) = self.tx_count_cache.as_mut() {
+            cache.push(sender_pool.sender, sender_pool.tx_count);
+        }
 
         if sender_pool.is_empty() {
             return;
@@ -717,6 +756,14 @@ impl<E: Execute, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C> {
 
         (self.sender_pools.get(sender).unwrap(), created)
     }
+}
+
+fn init_cache<K, V>(size: usize) -> Option<LruCache<K, V>>
+where
+    K: std::hash::Hash + std::cmp::Eq,
+{
+    let size = NonZeroUsize::new(size)?;
+    Some(LruCache::new(size))
 }
 
 #[cfg(test)]
@@ -780,6 +827,8 @@ mod tests {
             capacity: 10,
             capacity_high_watermark: 0.8,
             eviction_timeout_sec: 60,
+            tx_cache_size: 0,
+            tx_count_cache_size: 0,
         };
         ChainPool::new(
             config,

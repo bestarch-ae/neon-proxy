@@ -101,6 +101,8 @@ async fn main() -> anyhow::Result<()> {
             capacity: opts.mempool.mp_capacity,
             capacity_high_watermark: opts.mempool.mp_capacity_high_watermark,
             eviction_timeout_sec: opts.mempool.mp_eviction_timeout_sec,
+            tx_cache_size: opts.mempool.mp_tx_cache_size,
+            tx_count_cache_size: opts.mempool.mp_tx_count_cache_size,
         };
         let mut mempool = Mempool::<_, GasPrices>::new(
             mp_config,
