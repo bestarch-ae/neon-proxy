@@ -262,7 +262,7 @@ impl<E: Execute, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C> {
                 };
                 let tx_count = match self
                     .tx_count_api
-                    .get_transaction_count(sender_balance_addr, None)
+                    .get_transaction_count(sender_balance_addr, Some(BlockNumberOrTag::Safe))
                     .await
                 {
                     Ok(tx_count) => tx_count,

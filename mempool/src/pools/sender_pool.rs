@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use priority_queue::DoublePriorityQueue;
 use reth_primitives::alloy_primitives::TxNonce;
-use reth_primitives::{Address, ChainId};
+use reth_primitives::{Address, BlockNumberOrTag, ChainId};
 
 use common::neon_lib::types::BalanceAddress;
 
@@ -282,7 +282,7 @@ impl SenderPool {
             address: Address::from(<[u8; 20]>::from(self.sender.0)),
         };
         let tx_count = tx_count_api
-            .get_transaction_count(balance_addr, None)
+            .get_transaction_count(balance_addr, Some(BlockNumberOrTag::Safe))
             .await?;
         Ok(self.set_tx_count(tx_count))
     }
