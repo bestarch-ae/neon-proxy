@@ -289,13 +289,17 @@ impl<E: Execute, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C> {
             }
             HeartBeatTaskKind::Evict => {
                 // consider to remove the task from the pool when changing state to processing
-                if matches!(sender_pool.state, SenderPoolState::Processing(_)) {
+                if matches!(
+                    sender_pool.state,
+                    SenderPoolState::Processing(_) | SenderPoolState::Queued(_)
+                ) {
                     let key = self
                         .heartbeat_queue
                         .insert(task, Duration::from_secs(self.eviction_timeout_sec));
                     self.heartbeat_map.insert(sender_addr, key);
                     return;
                 }
+                tracing::debug!(%sender_addr, "evicting sender pool");
                 self.remove_sender_pool(&sender_addr);
             }
         }
