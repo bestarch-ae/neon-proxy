@@ -711,8 +711,11 @@ impl<E: Execute, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C> {
         }
 
         if sender_pool.is_empty() {
+            tracing::debug!(%sender, "sender pool is empty and now removed");
             return;
         }
+
+        tracing::debug!(%sender, sender_pool_state = ?sender_pool.state, "removing sender pool: clearing queues");
 
         if let SenderPoolState::Queued(queued_nonce) = sender_pool.state {
             if let Some(record) = sender_pool.get_by_nonce(queued_nonce) {
