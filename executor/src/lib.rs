@@ -267,7 +267,7 @@ impl Executor {
         Ok(signature)
     }
 
-    async fn sign_tx(&self, tx: &OngoingTransaction) -> anyhow::Result<VersionedTransaction> {
+    async fn sign_tx(&self, tx: &mut OngoingTransaction) -> anyhow::Result<VersionedTransaction> {
         let blockhash = self
             .solana_api
             .get_recent_blockhash()
@@ -283,7 +283,7 @@ impl Executor {
         let mut tx = tx;
         let mut try_counter = 0;
         let signature = loop {
-            let sol_tx = self.sign_tx(&tx).await?;
+            let sol_tx = self.sign_tx(&mut tx).await?;
             tracing::debug!(?tx_hash, try_counter, ?sol_tx, ?tx, "sending transaction");
             match self
                 .solana_api
