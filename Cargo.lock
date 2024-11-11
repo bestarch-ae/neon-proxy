@@ -2196,6 +2196,7 @@ dependencies = [
  "neon-proxy-common",
  "num-bigint 0.4.4",
  "num-traits",
+ "serde",
  "serde_json",
  "sqlx",
  "thiserror",

@@ -24,7 +24,8 @@ use common::types::EventKind;
 use mempool::GasPriceModel;
 
 use crate::convert::{
-    neon_to_eth, neon_to_eth_receipt, to_neon_receipt_v2, NeonTransactionReceiptV2,
+    convert_rich_log, neon_to_eth, neon_to_eth_receipt, to_neon_receipt_v2,
+    NeonTransactionReceiptV2,
 };
 use crate::error::{internal_error, Error};
 use crate::rpc::EthApiImpl;
@@ -47,7 +48,7 @@ where
     serializer.serialize_str(&hex)
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct NeonReceipt {
     #[serde(flatten)]
@@ -64,7 +65,7 @@ pub struct NeonReceipt {
     neon_costs: Vec<NeonCost>,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct NeonCost {
     neon_operator_address: B256,
@@ -72,7 +73,7 @@ pub struct NeonCost {
     neon_alan_income: u64,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct SolanaTransaction {
     #[serde(skip)]
@@ -84,7 +85,7 @@ pub struct SolanaTransaction {
     solana_instructions: Vec<SolanaInstruction>,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct SolanaInstruction {
     solana_program: String,
@@ -506,16 +507,16 @@ impl NeonCustomApiServer for EthApiImpl {
 
         let detail = detail.unwrap_or_default();
 
-        tracing::info!(%hash, ?detail, "transaction_receipt"); // TODO: downgrade to debug
+        tracing::debug!(%hash, ?detail, "transaction_receipt");
 
         let Some(tx_info) = self
-            .get_transaction(db::TransactionBy::Hash(hash.0.into()))
-            .await?
+            .transactions
+            .fetch_neon_tx_info(hash.0.into())
+            .await
+            .map_err(Error::from)?
         else {
             return Ok(None);
         };
-
-        tracing::info!(?tx_info, "transaction_receipt found transaction"); // TODO: remove
 
         let log_filter = Filter::new().select(hash);
         let log_filters = convert_filters(log_filter).map_err(Error::from)?;
@@ -525,7 +526,6 @@ impl NeonCustomApiServer for EthApiImpl {
         let mut neon_costs_draft = HashMap::new();
         let mut sol_txs: Vec<SolanaTransaction> = vec![];
         if detail == ReceiptDetail::SolanaTransactionList {
-            tracing::info!(%hash, "fetching sol tx ixs"); // TODO: remove
             let mut sol_tx_ixs = self
                 .sol_neon_transactions
                 .fetch_with_costs(hash.0.into())
@@ -533,7 +533,6 @@ impl NeonCustomApiServer for EthApiImpl {
 
             while let Some(result) = sol_tx_ixs.next().await {
                 let sol_tx_ix = result.map_err(Error::from)?;
-                tracing::info!(?sol_tx_ix, "fetched sol_tx_ix"); // TODO: remove
                 let sol_sig = &sol_tx_ix.transaction.sol_sig;
                 let operator_pubkey: Pubkey = sol_tx_ix.cost.operator.into();
                 let neon_operator_address = B256::from(operator_pubkey.to_bytes());
@@ -568,16 +567,19 @@ impl NeonCustomApiServer for EthApiImpl {
                         .map_err(|_| internal_error("failed to parse tx signature"))?,
                 );
 
-                let sol_ix_logs = logs
+                let sol_ix_logs = tx_info
+                    .inner
+                    .rich_logs
                     .iter()
-                    .filter(|log| {
-                        log.solana_transaction_signature == sol_tx_ix_sig
-                            && log.solana_instruction_index == sol_tx_ix.transaction.idx as u64
-                            && log.solana_inner_instruction_index
+                    .filter(|rich_log| {
+                        rich_log.sol_signature == sol_tx_ix_sig
+                            && rich_log.sol_ix_idx == sol_tx_ix.transaction.idx as u64
+                            && rich_log.sol_ix_inner_idx
                                 == sol_tx_ix.transaction.inner_idx.map(|v| v as u64)
                     })
-                    .cloned()
-                    .collect::<Vec<_>>();
+                    .map(|rich_log| convert_rich_log(rich_log.clone()))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(Error::from)?;
 
                 let sol_ix = SolanaInstruction {
                     solana_program: "NeonEVM".to_owned(),
@@ -625,6 +627,8 @@ impl NeonCustomApiServer for EthApiImpl {
             solana_transactions: sol_txs,
             neon_costs: neon_costs_draft.values().cloned().collect(),
         };
+
+        tracing::debug!(?receipt, "neon_receipt");
 
         Ok(Some(receipt))
     }

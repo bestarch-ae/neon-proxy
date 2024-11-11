@@ -16,8 +16,8 @@ use common::convert::ToNeon;
 use common::evm_loader::types::{Address as NeonAddress, TransactionPayload};
 use common::neon_lib::types::TxParams;
 use common::solana_sdk::hash::Hash;
-use common::types::{EventLog, NeonTxInfo, SolanaBlock};
-use db::{RichLog, RichLogBy};
+use common::types::{EventLog, NeonTxInfo, RichLog, SolanaBlock};
+use db::RichLogBy;
 
 use crate::rpc::NeonLog;
 
