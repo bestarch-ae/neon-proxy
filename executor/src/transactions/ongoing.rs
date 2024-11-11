@@ -373,12 +373,12 @@ impl OngoingTransaction {
     }
 
     pub fn sign(
-        &self,
+        &mut self,
         signers: &[&impl Signer],
         blockhash: Hash,
     ) -> anyhow::Result<VersionedTransaction> {
-        let mut message = self.message.clone();
-        message.set_recent_blockhash(blockhash);
+        self.message.set_recent_blockhash(blockhash);
+        let message = self.message.clone();
         VersionedTransaction::try_new(message, signers).context("could not sign transactions")
     }
 
