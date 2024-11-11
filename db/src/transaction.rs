@@ -8,33 +8,17 @@ use common::evm_loader::types::vector::{VectorVecExt, VectorVecSlowExt};
 use common::evm_loader::types::{AccessListTx, Address, LegacyTx, Transaction, TransactionPayload};
 use common::solana_sdk::hash::Hash;
 use common::solana_sdk::pubkey::Pubkey;
-use common::solana_sdk::signature::Signature;
 use common::types::{
-    CanceledNeonTxInfo, EventKind, EventLog, NeonTxInfo, TxHash, SOLANA_MAX_HEAP_SIZE,
+    CanceledNeonTxInfo, EventKind, EventLog, NeonTxInfo, RichLog, TxHash, SOLANA_MAX_HEAP_SIZE,
 };
 
-use crate::{u256_to_bytes, PgAddress, PgPubkey, PgSolanaBlockHash, PgU256};
-
 use super::Error;
+use crate::{u256_to_bytes, PgAddress, PgPubkey, PgSolanaBlockHash, PgU256};
 
 #[derive(Debug, Clone)]
 struct EventFilter<'a> {
     address: &'a [Address],
     topics: [&'a [Vec<u8>]; 4],
-}
-
-#[derive(Debug, Clone)]
-/// [`EventLog`] with additional block and transaction data
-pub struct RichLog {
-    pub blockhash: Hash,
-    pub slot: u64,
-    pub timestamp: i64,
-    pub tx_idx: u64,
-    pub tx_hash: TxHash,
-    pub sol_signature: Signature,
-    pub sol_ix_idx: u64,
-    pub sol_ix_inner_idx: Option<u64>,
-    pub event: EventLog,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -185,6 +169,7 @@ impl TransactionRepo {
 
     pub async fn insert(
         &self,
+        block_hash: Hash,
         tx: &NeonTxInfo,
         txn: &mut sqlx::Transaction<'_, Postgres>,
     ) -> Result<(), sqlx::Error> {
@@ -359,13 +344,31 @@ impl TransactionRepo {
         .execute(&mut **txn)
         .await?;
 
-        let logs_data = match serde_json::to_vec(&tx.events) {
-            Ok(logs_data) => logs_data,
-            Err(err) => {
-                tracing::warn!(?err, ?tx, "failed to serialize logs");
-                vec![]
+        let mut parsed_logs = match sqlx::query!(
+            r#"
+            SELECT logs
+            FROM neon_transactions
+            WHERE neon_sig = $1
+        "#,
+            tx_hash.as_slice()
+        )
+        .fetch_optional(&mut **txn)
+        .await?
+        {
+            None => Vec::new(),
+            Some(existing_logs_raw) => {
+                serde_json::from_slice::<Vec<RichLog>>(&existing_logs_raw.logs)
+                    .inspect_err(|err| {
+                        tracing::warn!(?err, ?tx, "failed to deserialize existing logs")
+                    })
+                    .unwrap_or_default()
             }
         };
+
+        parsed_logs.extend(tx.generate_rich_logs(block_hash));
+        let logs_data = serde_json::to_vec(&parsed_logs)
+            .inspect_err(|err| tracing::warn!(?err, ?tx, "failed to serialize logs"))
+            .unwrap_or_default();
 
         sqlx::query!(
             r#"
@@ -452,7 +455,54 @@ impl TransactionRepo {
         self.fetch_with_events_inner(by, None, true)
     }
 
-    /// Do not filters out incomplete transactions
+    pub async fn fetch_neon_tx_info(
+        &self,
+        tx_hash: TxHash,
+    ) -> Result<Option<WithBlockhash<NeonTxInfo>>, Error> {
+        tracing::info!(%tx_hash, "fetching transactions with raw events");
+        let row = sqlx::query_as::<_, NeonTransactionRow>(
+            r#"
+                    SELECT
+                        neon_sig,
+                        tx_type,
+                        from_addr,
+                        sol_sig,
+                        sol_ix_idx,
+                        sol_ix_inner_idx,
+                        block_slot,
+                        tx_idx,
+                        nonce,
+                        gas_price,
+                        gas_limit,
+                        value,
+                        gas_used,
+                        sum_gas_used,
+                        to_addr,
+                        contract,
+                        status,
+                        is_canceled,
+                        is_completed,
+                        v,
+                        r,
+                        s,
+                        chain_id,
+                        calldata,
+                        logs,
+                        neon_step_cnt,
+                        NULL as block_hash
+                    FROM neon_transactions T
+                    WHERE neon_sig = $1
+           "#,
+        )
+        .bind(*tx_hash.as_array())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let tx_info = row.map(|r| r.neon_tx_info_with_default_cu()).transpose()?;
+        Ok(tx_info)
+    }
+
+    /// Does not filter out incomplete transactions
     pub fn fetch_with_events_maybe_incomplete(
         &self,
         by: TransactionBy,
@@ -508,6 +558,7 @@ impl TransactionRepo {
                       v, r, s, chain_id,
                       calldata, neon_step_cnt,
                       B.block_hash,
+                      NULL as logs,
 
                       L.address, L.tx_log_idx,
                       (row_number() OVER (
@@ -662,7 +713,7 @@ impl TransactionRepo {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
-struct NeonTransactionRow {
+pub struct NeonTransactionRow {
     neon_sig: Vec<u8>,
     tx_type: i32,
     from_addr: PgAddress,
@@ -686,6 +737,8 @@ struct NeonTransactionRow {
     status: i16,
     is_canceled: bool,
     is_completed: bool,
+
+    logs: Option<Vec<u8>>,
 
     v: PgU256,
     r: PgU256,
@@ -808,6 +861,17 @@ impl NeonTransactionRow {
         })
     }
 
+    fn parse_logs(&self) -> Vec<RichLog> {
+        serde_json::from_slice(self.logs.as_deref().unwrap_or_default()).unwrap_or_default()
+    }
+
+    fn neon_tx_info_with_default_cu(self) -> anyhow::Result<WithBlockhash<NeonTxInfo>> {
+        let rich_logs = self.parse_logs();
+        let mut info = self.neon_tx_info_with_empty_logs_and_default_cu()?;
+        info.inner.rich_logs = rich_logs;
+        Ok(info)
+    }
+
     fn neon_tx_info_with_empty_logs_and_default_cu(
         self,
     ) -> anyhow::Result<WithBlockhash<NeonTxInfo>> {
@@ -828,6 +892,7 @@ impl NeonTransactionRow {
             sol_signer: Pubkey::default(),
             transaction,
             events: Vec::new(),
+            rich_logs: Vec::new(),
             gas_used: U256::from(self.gas_used),
             sum_gas_used: U256::from(self.sum_gas_used),
             sol_signature: common::solana_sdk::signature::Signature::from(

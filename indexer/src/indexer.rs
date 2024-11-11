@@ -96,7 +96,7 @@ impl Indexer {
         let slot = block.block.slot;
         for tx in &block.txs {
             self.tx_repo
-                .insert(tx, &mut txn)
+                .insert(block.block.hash, tx, &mut txn)
                 .await
                 .context("failed to save neon transaction")?;
             metrics().neon_transactions_saved.inc();

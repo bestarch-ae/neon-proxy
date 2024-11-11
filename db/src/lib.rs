@@ -22,7 +22,7 @@ pub use block::{BlockBy, BlockRepo};
 pub use reliable_empty_slot::ReliableEmptySlotRepo;
 pub use solana_neon_transactions::SolanaNeonTransactionRepo;
 pub use sqlx::PgPool;
-pub use transaction::{RichLog, RichLogBy, TransactionBy, TransactionRepo, WithBlockhash};
+pub use transaction::{RichLogBy, TransactionBy, TransactionRepo, WithBlockhash};
 
 pub async fn connect(url: &str) -> Result<PgPool, sqlx::Error> {
     tracing::info!(%url, "connecting to database");

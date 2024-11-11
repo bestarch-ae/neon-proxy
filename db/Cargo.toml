@@ -19,3 +19,4 @@ futures-util.workspace = true
 num-bigint = "0.4"
 num-traits = "0.2.19"
 serde_json = "1.0.125"
+serde = { version = "1.0.208", features = ["derive"] }

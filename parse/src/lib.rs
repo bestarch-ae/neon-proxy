@@ -274,6 +274,7 @@ fn add_log_and_meta(
         contract,
         transaction: tx,
         events: log_info.event_list.clone(), // TODO
+        rich_logs: Vec::new(),
         gas_used,
         sum_gas_used: Default::default(),    /* set later */
         sol_signature: Signature::default(), // TODO: should be in input?

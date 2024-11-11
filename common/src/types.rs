@@ -96,7 +96,8 @@ mod tx_envelope_ext {
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(into = "U256", from = "U256")]
 pub struct TxHash([u8; 32]);
 
 impl TxHash {
@@ -132,6 +133,19 @@ impl Display for TxHash {
 impl std::fmt::Debug for TxHash {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", hex::encode(self.0))
+    }
+}
+
+impl From<TxHash> for U256 {
+    fn from(tx_hash: TxHash) -> Self {
+        U256::from_be_bytes(tx_hash.0)
+    }
+}
+
+impl From<U256> for TxHash {
+    fn from(value: U256) -> Self {
+        let bytes: [u8; 32] = value.to_be_bytes();
+        TxHash(bytes)
     }
 }
 
@@ -210,6 +224,21 @@ impl Default for SolTxCuInfo {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// [`EventLog`] with additional block and transaction data
+pub struct RichLog {
+    pub blockhash: Hash,
+    pub slot: u64,
+    pub timestamp: i64,
+    pub tx_idx: u64,
+    pub tx_hash: TxHash,
+    pub sol_signature: Signature,
+    pub sol_ix_idx: u64,
+    pub sol_ix_inner_idx: Option<u64>,
+    #[serde(flatten)]
+    pub event: EventLog,
+}
+
 /// Neon Transaction. Not yet sure if represents a single contract invocation or a completed transaction.
 /// Inserted into `neon_transactions` table. Lacks `Clone` due to `evm-loader` implementation.
 #[derive(Debug)]
@@ -223,6 +252,7 @@ pub struct NeonTxInfo {
     pub contract: Option<Address>,
     pub transaction: Transaction, // TODO: Clone
     pub events: Vec<EventLog>,
+    pub rich_logs: Vec<RichLog>,
 
     pub gas_used: U256,
     pub sum_gas_used: U256, // TODO: What is this?
@@ -246,6 +276,25 @@ pub struct NeonTxInfo {
 
     pub sol_expense: i64,
     pub sol_tx_cu_info: SolTxCuInfo,
+}
+
+impl NeonTxInfo {
+    pub fn generate_rich_logs(&self, blockhash: Hash) -> Vec<RichLog> {
+        self.events
+            .iter()
+            .map(|event| RichLog {
+                blockhash,
+                slot: self.sol_slot,
+                timestamp: 0,
+                tx_idx: self.tx_idx,
+                tx_hash: self.neon_signature,
+                sol_signature: self.sol_signature,
+                sol_ix_idx: self.sol_ix_idx,
+                sol_ix_inner_idx: self.sol_ix_inner_idx,
+                event: event.clone(),
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug)]
