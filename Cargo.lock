@@ -4940,6 +4940,7 @@ dependencies = [
  "solana-sdk",
  "thiserror",
  "tokio",
+ "tokio-util 0.7.12",
  "tracing",
 ]
 

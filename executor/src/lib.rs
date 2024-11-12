@@ -152,6 +152,10 @@ impl Executor {
         ExecutorBuilder::builder()
     }
 
+    pub fn pubkey(&self) -> Pubkey {
+        self.builder.pubkey()
+    }
+
     async fn initialize_and_start(
         params: ExecutorBuilder,
     ) -> anyhow::Result<(Arc<Self>, impl Future<Output = anyhow::Result<()>>)> {
