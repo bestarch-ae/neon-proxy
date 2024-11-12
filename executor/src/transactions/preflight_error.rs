@@ -136,7 +136,7 @@ impl TransactionBuilder {
         if tx.cu_limit().map_or(true, |n| n != MAX_COMPUTE_UNITS) {
             tracing::warn!(?tx_hash, "retry with max CU");
             tx = tx
-                .with_cu_limit(MAX_HEAP_SIZE)
+                .with_cu_limit(MAX_COMPUTE_UNITS)
                 .context("cannot set compute units")?;
         }
         Ok(tx)
