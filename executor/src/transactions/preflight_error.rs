@@ -81,7 +81,7 @@ fn extract_transaction_err(err: &ClientErrorKind) -> Option<&TransactionError> {
     }
 }
 
-fn try_extract_missing_account(log: &str) -> Option<Pubkey> {
+pub fn try_extract_missing_account(log: &str) -> Option<Pubkey> {
     let log = log.strip_prefix("Program log: panicked at 'address ")?;
     let end = log.find(" must be present in the transaction'")?;
     log[0..end].parse().ok()

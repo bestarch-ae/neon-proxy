@@ -11,11 +11,22 @@ use rust_decimal_macros::dec;
 use solana_sdk::instruction::{Instruction, InstructionError};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::transaction::{Transaction, TransactionError};
+use thiserror::Error;
 
 use common::convert::ToNeon;
 use neon_api::{NeonApi, SimulateConfig};
 
+use crate::transactions::preflight_error::try_extract_missing_account;
+
 use super::{MAX_COMPUTE_UNITS, MAX_HEAP_SIZE};
+
+#[derive(Debug, Error)]
+pub(super) enum Error {
+    #[error("missing account: {0}")]
+    MissingAccount(Pubkey),
+    #[error("{0}")]
+    Other(#[from] anyhow::Error),
+}
 
 #[derive(Clone, Debug)]
 pub(super) struct IterInfo {
@@ -158,7 +169,7 @@ impl Emulator {
         tx_hash: &B256,
         emulate: &EmulateResponse,
         f: impl FnMut(&mut IterInfo) -> anyhow::Result<Vec<Transaction>>,
-    ) -> anyhow::Result<IterInfo> {
+    ) -> Result<IterInfo, Error> {
         const RETRIES: usize = 10;
 
         let mut f = f;
@@ -177,8 +188,6 @@ impl Emulator {
                 break;
             }
 
-            // let exec_iter =
-            //     (total_steps / iter_steps) + if total_steps % iter_steps > 1 { 1 } else { 0 };
             let iterations = exec_iter + wrap_iter;
             tracing::debug!(%tx_hash, iter_steps, total_steps, iterations, "testing iter_info");
 
@@ -194,6 +203,14 @@ impl Emulator {
                 tracing::debug!(%tx_hash, try_idx = retry, "simulation errored");
                 for (tx_idx, res) in res.iter().enumerate() {
                     tracing::debug!(%tx_hash, tx_idx, try_idx = retry, ?res, "simulation report");
+                    if let Some(key) = res
+                        .logs
+                        .iter()
+                        .rev()
+                        .find_map(|log| try_extract_missing_account(log))
+                    {
+                        return Err(Error::MissingAccount(key));
+                    }
                 }
             }
 
@@ -213,15 +230,6 @@ impl Emulator {
                 return Ok(iter_info);
             }
 
-            // let ratio = dec!(0.9).min(
-            //     Decimal::from(max_cu_limit)
-            //         .checked_div(used_cu_limit.into())
-            //         .unwrap_or(Decimal::MAX),
-            // );
-            // iter_steps = self
-            //     .evm_steps_min
-            //     .load(Relaxed)
-            //     .max(ratio.saturating_mul(iter_steps.into()).try_into()?);
             exec_iter += 1;
             iter_steps =
                 (total_steps / exec_iter) + if total_steps % exec_iter > 0 { 1 } else { 0 };
