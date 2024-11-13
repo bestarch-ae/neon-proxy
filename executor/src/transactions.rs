@@ -809,7 +809,8 @@ impl TransactionBuilder {
         alt: Option<AltInfo>,
     ) -> anyhow::Result<Option<OngoingTransaction>> {
         let chain_id = get_chain_id(&tx_data.envelope.tx);
-        let tx_hash = tx_data.envelope.tx_hash();
+        let tx_hash = *tx_data.envelope.tx_hash();
+        let mut tx_data = tx_data;
         let mut iter_info = match iter_info {
             Some(iter_info) if iter_info.is_finished() => {
                 tracing::debug!(%tx_hash, "iterations finished");
@@ -817,25 +818,7 @@ impl TransactionBuilder {
             }
             Some(info) => info,
             None => {
-                let build_tx = |iter_info: &mut IterInfo| {
-                    let mut txs = Vec::new();
-                    while !iter_info.is_finished() {
-                        let ix = self.build_step(BuildStep::collect(
-                            from_data,
-                            iter_info,
-                            &tx_data,
-                            *holder.pubkey(),
-                        ))?;
-                        txs.push(Transaction::new_with_payer(
-                            &with_budget(ix, MAX_COMPUTE_UNITS),
-                            Some(&self.pubkey()),
-                        ));
-                    }
-                    Ok(txs)
-                };
-
-                self.emulator
-                    .calculate_iterations(tx_hash, &tx_data.emulate, build_tx)
+                self.prepare_iterations(&mut tx_data, *holder.pubkey(), from_data)
                     .await?
             }
         };
@@ -858,6 +841,56 @@ impl TransactionBuilder {
 
         self.build_ongoing(stage, &with_budget(ix, cu_limit), alt.clone())
             .map(Some)
+    }
+
+    async fn prepare_iterations(
+        &self,
+        tx_data: &mut TxData,
+        holder: Pubkey,
+        from_data: bool,
+    ) -> anyhow::Result<IterInfo> {
+        // This is a huge number just to make sure we do not get stuck
+        // in an infinite missing accouunt error.
+        const SIMULATE_RETRIES: usize = 20;
+
+        let tx_hash = *tx_data.envelope.tx_hash();
+        for attempt in 0..SIMULATE_RETRIES {
+            let build_tx = |iter_info: &mut IterInfo| {
+                let mut txs = Vec::new();
+                while !iter_info.is_finished() {
+                    let ix =
+                        self.build_step(BuildStep::collect(from_data, iter_info, tx_data, holder))?;
+                    txs.push(Transaction::new_with_payer(
+                        &with_budget(ix, MAX_COMPUTE_UNITS),
+                        Some(&self.pubkey()),
+                    ));
+                }
+                Ok(txs)
+            };
+
+            match self
+                .emulator
+                .calculate_iterations(&tx_hash, &tx_data.emulate, build_tx)
+                .await
+            {
+                Ok(info) => return Ok(info),
+                Err(emulator::Error::MissingAccount(pubkey)) => {
+                    tracing::debug!(%tx_hash, ?pubkey, attempt, "adding missing account");
+                    tx_data.emulate.solana_accounts.push(NeonSolanaAccount {
+                        pubkey,
+                        is_writable: true,
+                        is_legacy: false,
+                    })
+                }
+                Err(emulator::Error::Other(err)) => return Err(err),
+            }
+        }
+        let iter_info = self.emulator.default_iter_info(&tx_data.emulate);
+        tracing::warn!(
+            %tx_hash, ?iter_info,
+            "selected default iter info after {SIMULATE_RETRIES} unsuccessful attempts"
+        );
+        Ok(iter_info)
     }
 
     async fn recovered_step(
