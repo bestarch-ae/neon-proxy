@@ -812,7 +812,10 @@ impl TransactionBuilder {
         let tx_hash = *tx_data.envelope.tx_hash();
         let mut tx_data = tx_data;
         let mut iter_info = match iter_info {
-            Some(iter_info) if iter_info.is_finished() => {
+            Some(iter_info)
+                if iter_info.is_finished()
+                    && self.holder_mgr.is_holder_finalized(holder.pubkey()).await? =>
+            {
                 tracing::debug!(%tx_hash, "iterations finished");
                 return Ok(None);
             }
