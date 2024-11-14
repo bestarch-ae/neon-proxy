@@ -29,6 +29,19 @@ services:
       start_period: 5s
     entrypoint: /opt/solana-run-neon.sh
 
+  solana-create-test-accounts:
+    container_name: solana-create-test-accounts
+    image: neonlabsorg/evm_loader:${NEON_EVM_COMMIT}
+    entrypoint: "/bin/bash"
+    command: -c 'set -xu; keys=($$(ls /opt/docker/operator/*.json)); solana config set -u http://solana:8899; for keypair in "$${keys[@]}"; do solana airdrop 5000 $$(solana address -k $$keypair); done'
+    volumes:
+      - ${NEON_OPERATOR_KEYS_PATH}:/opt/docker/operator
+    networks:
+      - net
+    depends_on:
+      solana:
+        condition: service_healthy
+
   postgres:
     container_name: postgres
     image: postgres:15.3
@@ -53,7 +66,7 @@ services:
 
   db_migration:
     image: ${DOCKERHUB_ORG_NAME}/${NEON_PROXY_REPO_NAME}:${NEON_PROXY_TAG}
-    container_name: db_migration_neon-proxy
+    container_name: db_migration
     entrypoint: /usr/bin/psql
     command: >-
       -W
@@ -74,18 +87,28 @@ services:
   neon-proxy:
     image: ${DOCKERHUB_ORG_NAME}/${NEON_PROXY_REPO_NAME}:${NEON_PROXY_TAG}
     container_name: neon-proxy
-    restart: "always"
+    restart: "no"
     entrypoint: ./proxy
     command: >-
       ${NEON_EVM_ADDRESS}
       -u http://solana:8899
-      -w http://solana:8900
-      --const-gas-price ${CONST_GAS_PRICE}
       -l 0.0.0.0:8018
       --pg-url postgres://neon-proxy:neon-proxy-pass@postgres:5432/neon-db
+      -c BMp6gEnveANdvSvspESJUrNczuHz1GF5UQKjVLCkAZih
+      --chain-id 111
+      --log-format json
+      --operator-keypair-path /opt/docker/operator
       --simulation-commitment ${SIMULATION_COMMITMENT}
+      --pyth-solana-url ${PYTH_MAINNET_SOLANA_URL}
+      --solana-ws-url ${SOLANA_MAINNET_WS_URL}
+      --pyth-mapping-addr AHtgzX45WTKfkPG53L6WYhGEXwQkN1BVknET3sVsLL8J
+      --init-operator-balance
+      --init-holders
     environment:
-      - RUST_LOG=info,proxy=debug,solana_api=debug,db=debug,neon_lib=debug
+      - RUST_LOG=info,indexer=debug,solana_api=debug,db=debug,parse=debug,proxy=debug,mempool=debug,executor=debug,neon_api=debug,solana_rpc_client=debug
+      - RUST_BACKTRACE=full
+    volumes:
+      - ${NEON_OPERATOR_KEYS_PATH}:/opt/docker/operator
     depends_on:
       - neon-indexer
     ports:
@@ -99,14 +122,16 @@ services:
   neon-indexer:
     image: ${DOCKERHUB_ORG_NAME}/${NEON_PROXY_REPO_NAME}:${NEON_PROXY_TAG}
     container_name: neon-indexer
-    restart: "always"
+    restart: "no"
     entrypoint: ./indexer
     command: >-
       ${NEON_EVM_ADDRESS}
       -u http://solana:8899
       --pg-url postgres://neon-proxy:neon-proxy-pass@postgres:5432/neon-db
       --metrics-addr 0.0.0.0:8317
+      --confirmed
       --max-traverse-tasks ${MAX_TRAVERSE_TASKS}
+      --log-format json
     environment:
       - RUST_LOG=info,indexer=debug,solana_api=debug,db=debug,parse=debug
     ports:

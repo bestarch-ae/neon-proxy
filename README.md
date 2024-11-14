@@ -117,8 +117,9 @@ export NEON_PROXY_REPO_NAME=neon-proxy
 export NEON_PROXY_TAG=latest
 export NEON_EVM_ADDRESS=53DfF883gyixYNXnM7s5xhdeyV8mVk9T4i2hGV9vG9io
 export NEON_EVM_COMMIT=67d1bd0ef32e5ab6f96393419ae25053080d2a9e
-export CONST_GAS_PRICE=1000000000
-export MAX_TRAVERSE_TASKS=2
-export SIMULATION_COMMITMENT=confirmed
+export MAX_TRAVERSE_TASKS=16
+export SIMULATION_COMMITMENT=processed
+export PYTH_MAINNET_SOLANA_URL=http(s)://your-solana-mainnet-rpc-endpoint
+export SOLANA_MAINNET_WS_URL=ws(s)://your-solana-mainnet-ws-endpoint
 docker-compose -f docker-compose-evm.yml up -d
 ```
