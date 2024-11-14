@@ -310,20 +310,28 @@ impl HolderManager {
             }
         };
 
-        if let Ok(meta) = self.receiver.try_recv() {
-            return Ok(existing(meta));
+        while let Ok(meta) = self.receiver.try_recv() {
+            if self.can_acquire_holder(&meta).await? {
+                return Ok(existing(meta));
+            }
+            debug!(%self.operator, idx = meta.idx, pubkey = %meta.pubkey, "skipping holder");
         }
 
-        if self.counter.load(SeqCst) < self.max_holders {
-            let info = self.new_holder_info(tx);
-            let ixs = self.create_holder(&info).await?;
-            Ok(AcquireHolder {
-                info,
-                create_ixs: Some(ixs),
-            })
-        } else {
-            let meta = self.receiver.recv().await.expect("Manager dropped?");
-            Ok(existing(meta))
+        loop {
+            // TODO: we should have a counter of available holders
+            if self.counter.load(SeqCst) < self.max_holders {
+                let info = self.new_holder_info(tx);
+                let ixs = self.create_holder(&info).await?;
+                return Ok(AcquireHolder {
+                    info,
+                    create_ixs: Some(ixs),
+                });
+            } else {
+                let meta = self.receiver.recv().await.expect("Manager dropped?");
+                if self.can_acquire_holder(&meta).await? {
+                    return Ok(existing(meta));
+                }
+            }
         }
     }
 
@@ -409,6 +417,31 @@ impl HolderManager {
         };
 
         Ok([sp_ix, neon_ix])
+    }
+
+    async fn can_acquire_holder(&self, meta: &HolderMeta) -> anyhow::Result<bool> {
+        use common::evm_loader::account::{self, legacy, tag};
+
+        let Some(mut account) = self.solana_api.get_account(&meta.pubkey).await? else {
+            error!(%self.operator, idx = meta.idx, pubkey = %meta.pubkey, "holder does not exists");
+            return Ok(false);
+        };
+        let account_info = (&meta.pubkey, &mut account).into_account_info();
+        let state = match tag(&self.program_id, &account_info) {
+            Ok(tag) => tag,
+            Err(err) => {
+                error!(%self.operator, idx = meta.idx, pubkey = %meta.pubkey, ?account_info, ?err, "invalid holder state");
+                return Ok(false);
+            }
+        };
+        let can_acquire = state == account::TAG_HOLDER
+            || state == legacy::TAG_HOLDER_DEPRECATED
+            || state == account::TAG_STATE_FINALIZED
+            || state == legacy::TAG_STATE_FINALIZED_DEPRECATED;
+        if !can_acquire {
+            tracing::warn!(%self.operator, idx = meta.idx, pubkey = %meta.pubkey, state, "holder cannot be acquired");
+        }
+        Ok(can_acquire)
     }
 
     pub(super) fn write_next_holder_chunk(&self, holder: &mut HolderInfo) -> Instruction {
