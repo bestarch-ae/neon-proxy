@@ -350,6 +350,14 @@ impl HolderManager {
         ))
     }
 
+    pub async fn recreate_holder(&self, holder: &HolderInfo) -> anyhow::Result<[Instruction; 3]> {
+        // TODO: should we check if holder is in holder or finalized state?
+        let delete_ix = self.delete_holder(&holder.meta);
+        let create_ixs = self.create_holder(holder).await?;
+        let [create_ix0, create_ix1] = create_ixs;
+        Ok([delete_ix, create_ix0, create_ix1])
+    }
+
     fn holder_key(&self, idx: u8) -> Pubkey {
         let seed = holder_seed(idx);
         Pubkey::create_with_seed(&self.operator, &seed, &self.program_id)
@@ -417,6 +425,20 @@ impl HolderManager {
         };
 
         Ok([sp_ix, neon_ix])
+    }
+
+    fn delete_holder(&self, meta: &HolderMeta) -> Instruction {
+        let data = vec![tag::HOLDER_DELETE; 1];
+        let accounts = vec![
+            AccountMeta::new(meta.pubkey, false),
+            AccountMeta::new_readonly(self.operator, true),
+        ];
+
+        Instruction {
+            program_id: self.program_id,
+            accounts,
+            data,
+        }
     }
 
     async fn can_acquire_holder(&self, meta: &HolderMeta) -> anyhow::Result<bool> {
