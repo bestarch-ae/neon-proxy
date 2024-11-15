@@ -33,7 +33,7 @@ use crate::transactions::holder::parse::StateData;
 const HOLDER_DATA_LEN: usize = 256 * 1024; // neon_proxy.py default
 const HOLDER_META_LEN: usize =
     account::ACCOUNT_PREFIX_LEN + mem::size_of::<account::HolderHeader>();
-const HOLDER_SIZE: usize = HOLDER_META_LEN + HOLDER_DATA_LEN;
+pub const HOLDER_SIZE: usize = HOLDER_META_LEN + HOLDER_DATA_LEN;
 const PREFIX: &str = "holder";
 
 #[derive(Debug, Clone, Copy)]
@@ -161,6 +161,7 @@ pub struct HolderManager {
     sender: Sender<HolderMeta>,
     counter: Arc<AtomicU8>,
     max_holders: u8,
+    holder_size: usize,
 }
 
 #[derive(Debug)]
@@ -175,6 +176,7 @@ impl HolderManager {
         program_id: Pubkey,
         solana_api: SolanaApi,
         max_holders: u8,
+        holder_size: usize,
     ) -> Self {
         let (sender, receiver) = async_channel::bounded(max_holders.into());
 
@@ -186,6 +188,7 @@ impl HolderManager {
             sender,
             counter: Arc::new(0.into()),
             max_holders,
+            holder_size,
         }
     }
 
@@ -265,7 +268,7 @@ impl HolderManager {
         let meta = HolderMeta { idx, pubkey };
         let account_info = (&pubkey, &mut account).into_account_info();
         let holder_size = account_info.data.borrow().len();
-        let recreate = holder_size != HOLDER_SIZE;
+        let recreate = holder_size != self.holder_size;
         let state = match tag(&self.program_id, &account_info).context("invalid holder account")? {
             account::TAG_STATE_FINALIZED | legacy::TAG_STATE_FINALIZED_DEPRECATED => {
                 HolderState::Finalized
@@ -401,9 +404,9 @@ impl HolderManager {
             &self.operator,
             &seed,
             self.solana_api
-                .minimum_rent_for_exemption(HOLDER_SIZE)
+                .minimum_rent_for_exemption(self.holder_size)
                 .await?,
-            HOLDER_SIZE as u64,
+            self.holder_size as u64,
             &self.program_id,
         );
 

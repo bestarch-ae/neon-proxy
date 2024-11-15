@@ -43,6 +43,7 @@ use self::holder::{AcquireHolder, HolderInfo, HolderManager, RecoverableHolderSt
 use self::ongoing::{TxData, TxStage};
 use crate::ExecuteRequest;
 
+pub use self::holder::HOLDER_SIZE;
 pub use self::ongoing::OngoingTransaction;
 pub use self::preflight_error::TxErrorKind;
 
@@ -56,6 +57,7 @@ pub struct Config {
     pub program_id: Pubkey,
     pub operator: Arc<Operator>,
     pub max_holders: u8,
+    pub holder_size: usize,
     #[builder(default)]
     pub pg_pool: Option<db::PgPool>,
 }
@@ -102,6 +104,7 @@ impl TransactionBuilder {
             program_id,
             operator,
             max_holders,
+            holder_size,
             pg_pool,
         } = config;
         let emulator = Emulator::new(neon_api.clone(), 0, operator.pubkey());
@@ -110,6 +113,7 @@ impl TransactionBuilder {
             program_id,
             solana_api.clone(),
             max_holders,
+            holder_size,
         );
         let alt_mgr = AltManager::new(operator.pubkey(), solana_api.clone(), pg_pool).await;
         let this = Self {

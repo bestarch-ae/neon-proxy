@@ -18,7 +18,7 @@ use tokio::sync::oneshot;
 use tokio::time;
 use tokio_util::time::DelayQueue;
 
-use executor::Executor;
+use executor::{Executor, HOLDER_SIZE};
 use neon_api::NeonApi;
 use operator::Operator;
 use solana_api::solana_api::SolanaApi;
@@ -72,6 +72,9 @@ pub struct Config {
     /// Create all holders on service start
     pub init_holders: bool,
 
+    #[arg(long, default_value_t = HOLDER_SIZE)]
+    pub holder_size: usize,
+
     #[arg(long, default_value_t = 9_000_000_000)]
     /// Balance below which a warning is issued
     pub operator_warn_balance: u64,
@@ -96,6 +99,7 @@ struct Bootstrap {
     init_operator_balance: bool,
     max_holders: u8,
     init_holders: bool,
+    holder_size: usize,
 }
 
 impl Bootstrap {
@@ -108,6 +112,7 @@ impl Bootstrap {
             .pg_pool(self.pg_pool.clone())
             .init_operator_balance(self.init_operator_balance)
             .max_holders(self.max_holders)
+            .holder_size(self.holder_size)
             .init_holders(self.init_holders)
             .prepare()
             .start()
@@ -172,6 +177,7 @@ impl OperatorPool {
             init_operator_balance: config.init_operator_balance,
             max_holders: config.max_holders,
             init_holders: config.init_holders,
+            holder_size: config.holder_size,
         };
         let (deactivated, deactivated_rx) = async_channel::bounded(32);
         let map = DashMap::new();

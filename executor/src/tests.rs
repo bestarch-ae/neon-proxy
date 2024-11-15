@@ -46,7 +46,7 @@ use operator::Operator;
 use solana_api::solana_api::SolanaApi;
 
 use self::mock::BanksRpcMock;
-use crate::{Execute, ExecuteRequest, Executor};
+use crate::{Execute, ExecuteRequest, Executor, HOLDER_SIZE};
 
 const NEON_KEY: Pubkey = pubkey!("53DfF883gyixYNXnM7s5xhdeyV8mVk9T4i2hGV9vG9io");
 const NEON_TOKEN: Pubkey = pubkey!("HPsV9Deocecw3GeZv1FkAPNCBRfuVyfw9MMwjwRe1xaU");
@@ -378,6 +378,7 @@ impl ExecutorTestEnvironment {
             .solana_api(solana_api.clone())
             .init_operator_balance(false)
             .max_holders(MAX_HOLDERS)
+            .holder_size(HOLDER_SIZE)
             .prepare()
             .start()
             .await?;
@@ -646,6 +647,7 @@ async fn recover_holder() -> anyhow::Result<()> {
         .solana_api(solana_api.clone())
         .init_operator_balance(false)
         .max_holders(MAX_HOLDERS)
+        .holder_size(HOLDER_SIZE)
         .prepare()
         .start()
         .await?;
@@ -785,6 +787,7 @@ async fn recover_state() -> anyhow::Result<()> {
         .solana_api(solana_api.clone())
         .init_operator_balance(false)
         .max_holders(MAX_HOLDERS)
+        .holder_size(HOLDER_SIZE)
         .prepare()
         .start()
         .await?;
