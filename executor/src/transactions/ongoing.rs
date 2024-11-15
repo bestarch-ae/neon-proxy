@@ -74,6 +74,15 @@ pub(super) enum TxStage {
         tx_hash: B256,
         _holder: HolderInfo,
     },
+    RecreateHolder {
+        info: HolderInfo,
+    },
+    CreateHolder {
+        info: HolderInfo,
+    },
+    DeleteHolder {
+        info: HolderInfo,
+    },
 }
 
 impl TxStage {
@@ -290,7 +299,10 @@ impl OngoingTransaction {
             } => Some(&envelope.tx),
             TxStage::Final { tx_data: None, .. }
             | TxStage::RecoveredHolder { .. }
-            | TxStage::Cancel { .. } => None,
+            | TxStage::Cancel { .. }
+            | TxStage::RecreateHolder { .. }
+            | TxStage::CreateHolder { .. }
+            | TxStage::DeleteHolder { .. } => None,
         }
     }
 
@@ -316,7 +328,10 @@ impl OngoingTransaction {
             TxStage::RecoveredHolder { tx_hash, .. } | TxStage::Cancel { tx_hash, .. } => {
                 Some(tx_hash)
             }
-            TxStage::Final { tx_data: None, .. } => None,
+            TxStage::Final { tx_data: None, .. }
+            | TxStage::RecreateHolder { .. }
+            | TxStage::DeleteHolder { .. }
+            | TxStage::CreateHolder { .. } => None,
         }
     }
 
@@ -332,7 +347,10 @@ impl OngoingTransaction {
             TxStage::Final { tx_data: None, .. }
             | TxStage::Cancel { .. }
             | TxStage::RecoveredHolder { .. }
-            | TxStage::HolderFill { .. } => false,
+            | TxStage::HolderFill { .. }
+            | TxStage::RecreateHolder { .. }
+            | TxStage::DeleteHolder { .. }
+            | TxStage::CreateHolder { .. } => false,
         }
     }
 
@@ -368,7 +386,11 @@ impl OngoingTransaction {
             }
             | TxStage::HolderFill { ref tx, .. } => get_chain_id(&tx.tx),
             TxStage::RecoveredHolder { chain_id, .. } => Some(chain_id),
-            TxStage::Final { tx_data: None, .. } | TxStage::Cancel { .. } => None,
+            TxStage::Final { tx_data: None, .. }
+            | TxStage::Cancel { .. }
+            | TxStage::RecreateHolder { .. }
+            | TxStage::DeleteHolder { .. }
+            | TxStage::CreateHolder { .. } => None,
         }
     }
 

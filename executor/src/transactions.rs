@@ -97,11 +97,7 @@ pub struct TransactionBuilder {
 
 /// ## Utility methods.
 impl TransactionBuilder {
-    pub async fn new(
-        solana_api: SolanaApi,
-        neon_api: NeonApi,
-        config: Config,
-    ) -> anyhow::Result<Self> {
+    pub async fn new(solana_api: SolanaApi, neon_api: NeonApi, config: Config) -> Result<Self> {
         let Config {
             program_id,
             operator,
@@ -130,7 +126,7 @@ impl TransactionBuilder {
         Ok(this)
     }
 
-    pub async fn reload_config(&self) -> anyhow::Result<()> {
+    pub async fn reload_config(&self) -> Result<()> {
         let config = self.neon_api.get_config().await?;
 
         let treasury_pool_count: u32 = config
@@ -172,12 +168,13 @@ impl TransactionBuilder {
         Ok(())
     }
 
-    pub async fn recover(&mut self, init_holders: bool) -> anyhow::Result<Vec<OngoingTransaction>> {
+    pub async fn recover(&mut self, init_holders: bool) -> Result<Vec<OngoingTransaction>> {
         let mut output = Vec::new();
         let holders = self.holder_mgr.recover().await;
 
         for holder in holders {
             let stage = match holder.state {
+                RecoverableHolderState::Recreate => TxStage::RecreateHolder { info: holder.info },
                 RecoverableHolderState::Pending(tx) => {
                     let Some(chain_id) = get_chain_id(&tx) else {
                         tracing::warn!(
@@ -207,11 +204,15 @@ impl TransactionBuilder {
                         .collect();
                     TxStage::recovered_holder(tx_hash, chain_id, holder.info, iter_info, accounts)
                 }
-                RecoverableHolderState::State { chain_id: None, .. } => {
+                RecoverableHolderState::State {
+                    chain_id: None,
+                    tx_hash,
+                    ..
+                } => {
                     tracing::warn!(
                         operator = %self.operator.pubkey(),
                         pubkey = %holder.info.pubkey(),
-                        tx_hash = %holder.state.tx_hash(),
+                        %tx_hash,
                         "cannot determine chain id for recovered holder"
                     );
                     // TODO: Cancel
@@ -264,7 +265,7 @@ impl TransactionBuilder {
         Pubkey::find_program_address(seeds, &self.program_id).0
     }
 
-    pub fn treasury_pool(&self, hash: &B256) -> anyhow::Result<(u32, Pubkey)> {
+    pub fn treasury_pool(&self, hash: &B256) -> Result<(u32, Pubkey)> {
         let base_idx = u32::from_le_bytes(*hash.0.first_chunk().expect("B256 is longer than 4"));
         let evm_config = self.evm_config.load();
         let treasury_pool_idx = base_idx % evm_config.treasury_pool_count;
@@ -310,7 +311,7 @@ impl TransactionBuilder {
 
 /// ## Transaction flow.
 impl TransactionBuilder {
-    pub async fn start_execution(&self, tx: ExecuteRequest) -> anyhow::Result<OngoingTransaction> {
+    pub async fn start_execution(&self, tx: ExecuteRequest) -> Result<OngoingTransaction> {
         let chain_id = get_chain_id(&tx);
         let fits_in_solana_tx = Self::from_data_tx_len(tx.length(), 0) < PACKET_DATA_SIZE;
 
@@ -328,15 +329,24 @@ impl TransactionBuilder {
         }
     }
 
-    pub async fn next_step(
-        &self,
-        tx: OngoingTransaction,
-    ) -> anyhow::Result<Option<OngoingTransaction>> {
+    pub async fn next_step(&self, tx: OngoingTransaction) -> Result<Option<OngoingTransaction>> {
         self.next_step_inner(tx.disassemble()).await
     }
 
-    async fn next_step_inner(&self, stage: TxStage) -> anyhow::Result<Option<OngoingTransaction>> {
+    async fn next_step_inner(&self, stage: TxStage) -> Result<Option<OngoingTransaction>> {
         match stage {
+            TxStage::RecreateHolder { info } => {
+                let ixs = [self.holder_mgr.delete_holder(&info)];
+                Ok(Some(
+                    TxStage::DeleteHolder { info }.ongoing(&ixs, &self.operator.pubkey()),
+                ))
+            }
+            TxStage::DeleteHolder { info } => {
+                let ixs = self.holder_mgr.create_holder(&info).await?;
+                Ok(Some(
+                    TxStage::CreateHolder { info }.ongoing(&ixs, &self.operator.pubkey()),
+                ))
+            }
             TxStage::HolderFill { info, tx: envelope } if info.is_empty() => {
                 self.execute_from_holder(info, envelope).await.map(Some)
             }
@@ -374,7 +384,19 @@ impl TransactionBuilder {
                 self.recovered_step(tx_hash, chain_id, holder, iter_info, accounts)
                     .await
             }
-            TxStage::Final { .. } | TxStage::Cancel { .. } => Ok(None),
+            TxStage::Final { holder, .. } => {
+                let Some(holder) = holder else {
+                    return Ok(None);
+                };
+                Ok(self.recreate_holder_if_needed(holder))
+            }
+            TxStage::Cancel { .. } => Ok(None),
+            TxStage::CreateHolder { info } => {
+                // drop here explicitly for readability purposes;
+                // holder was recreated, we can now drop the info and return it back to the queue
+                drop(info);
+                Ok(None)
+            }
         }
     }
 
@@ -445,7 +467,7 @@ impl TransactionBuilder {
         tx_data: TxData,
         holder: Option<HolderInfo>,
         alt: AltInfo,
-    ) -> anyhow::Result<OngoingTransaction> {
+    ) -> Result<OngoingTransaction> {
         match holder {
             Some(holder) => {
                 self.execute_from_holder_emulated(holder, tx_data, Some(alt))
@@ -458,6 +480,16 @@ impl TransactionBuilder {
                     .await
             }
         }
+    }
+
+    fn recreate_holder_if_needed(&self, holder: HolderInfo) -> Option<OngoingTransaction> {
+        if holder.recreate() {
+            let ixs = [self.holder_mgr.delete_holder(&holder)];
+            return Some(
+                TxStage::DeleteHolder { info: holder }.ongoing(&ixs, &self.operator.pubkey()),
+            );
+        }
+        None
     }
 }
 
@@ -903,9 +935,9 @@ impl TransactionBuilder {
         holder: HolderInfo,
         iter_info: IterInfo,
         accounts: Vec<NeonSolanaAccount>,
-    ) -> anyhow::Result<Option<OngoingTransaction>> {
+    ) -> Result<Option<OngoingTransaction>> {
         if self.holder_mgr.is_holder_finalized(holder.pubkey()).await? {
-            return Ok(None);
+            return Ok(self.recreate_holder_if_needed(holder));
         }
 
         let mut iter_info = iter_info;

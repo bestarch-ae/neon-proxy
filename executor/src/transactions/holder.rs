@@ -52,6 +52,7 @@ pub(super) struct HolderInfo {
     data: Vec<u8>,
     current_offset: usize,
     hash: B256,
+    recreate: bool,
 }
 
 impl Drop for HolderInfo {
@@ -90,6 +91,10 @@ impl HolderInfo {
     pub fn hash(&self) -> &B256 {
         &self.hash
     }
+
+    pub fn recreate(&self) -> bool {
+        self.recreate
+    }
 }
 
 #[derive(Debug)]
@@ -124,6 +129,7 @@ impl HolderState {
 
 #[derive(Debug)]
 pub enum RecoverableHolderState {
+    Recreate,
     Pending(TxEnvelope),
     State {
         tx_hash: B256,
@@ -132,19 +138,11 @@ pub enum RecoverableHolderState {
     },
 }
 
-impl RecoverableHolderState {
-    pub fn tx_hash(&self) -> &B256 {
-        match self {
-            Self::Pending(tx) => tx.tx_hash(),
-            Self::State { tx_hash, .. } => tx_hash,
-        }
-    }
-}
-
 #[derive(Debug)]
 struct RecoveredHolder {
     meta: HolderMeta,
     state: HolderState,
+    recreate: bool,
 }
 
 #[derive(Debug)]
@@ -202,8 +200,15 @@ impl HolderManager {
                 }
                 Ok(Some(recovered_holder)) => {
                     info!(%self.operator, ?recovered_holder, "discovered holder");
-                    let info = self.attach_info(recovered_holder.meta, None);
+                    let mut info = self.attach_info(recovered_holder.meta, None);
+                    info.recreate = recovered_holder.recreate;
                     match recovered_holder.state.recoverable() {
+                        None if recovered_holder.recreate => {
+                            output.push(HolderToFinalize {
+                                info,
+                                state: RecoverableHolderState::Recreate,
+                            });
+                        }
                         None => drop(info),
                         Some(state) => output.push(HolderToFinalize { info, state }),
                     }
@@ -259,6 +264,8 @@ impl HolderManager {
 
         let meta = HolderMeta { idx, pubkey };
         let account_info = (&pubkey, &mut account).into_account_info();
+        let holder_size = account_info.data.borrow().len();
+        let recreate = holder_size != HOLDER_SIZE;
         let state = match tag(&self.program_id, &account_info).context("invalid holder account")? {
             account::TAG_STATE_FINALIZED | legacy::TAG_STATE_FINALIZED_DEPRECATED => {
                 HolderState::Finalized
@@ -296,9 +303,13 @@ impl HolderManager {
                     accounts,
                 }
             }
-            n => anyhow::bail!("invalid holder tag: {n}"),
+            n => bail!("invalid holder tag: {n}"),
         };
-        Ok(Some(RecoveredHolder { meta, state }))
+        Ok(Some(RecoveredHolder {
+            meta,
+            state,
+            recreate,
+        }))
     }
 
     pub async fn acquire_holder(&self, tx: Option<&TxEnvelope>) -> anyhow::Result<AcquireHolder> {
@@ -350,14 +361,6 @@ impl HolderManager {
         ))
     }
 
-    pub async fn recreate_holder(&self, holder: &HolderInfo) -> anyhow::Result<[Instruction; 3]> {
-        // TODO: should we check if holder is in holder or finalized state?
-        let delete_ix = self.delete_holder(&holder.meta);
-        let create_ixs = self.create_holder(holder).await?;
-        let [create_ix0, create_ix1] = create_ixs;
-        Ok([delete_ix, create_ix0, create_ix1])
-    }
-
     fn holder_key(&self, idx: u8) -> Pubkey {
         let seed = holder_seed(idx);
         Pubkey::create_with_seed(&self.operator, &seed, &self.program_id)
@@ -386,10 +389,11 @@ impl HolderManager {
             data,
             current_offset: 0,
             hash,
+            recreate: false,
         }
     }
 
-    async fn create_holder(&self, holder: &HolderInfo) -> anyhow::Result<[Instruction; 2]> {
+    pub async fn create_holder(&self, holder: &HolderInfo) -> anyhow::Result<[Instruction; 2]> {
         let seed = holder_seed(holder.meta.idx);
         let sp_ix = system_instruction::create_account_with_seed(
             &self.operator,
@@ -427,10 +431,10 @@ impl HolderManager {
         Ok([sp_ix, neon_ix])
     }
 
-    fn delete_holder(&self, meta: &HolderMeta) -> Instruction {
+    pub fn delete_holder(&self, holder: &HolderInfo) -> Instruction {
         let data = vec![tag::HOLDER_DELETE; 1];
         let accounts = vec![
-            AccountMeta::new(meta.pubkey, false),
+            AccountMeta::new(holder.meta.pubkey, false),
             AccountMeta::new_readonly(self.operator, true),
         ];
 

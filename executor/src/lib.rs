@@ -333,7 +333,7 @@ impl Executor {
             if current_len > signatures.capacity() {
                 signatures.reserve(current_len - signatures.capacity());
             }
-            for tx in self.pending_transactions.iter() {
+            for tx in &self.pending_transactions {
                 signatures.push(*tx.key());
             }
 
