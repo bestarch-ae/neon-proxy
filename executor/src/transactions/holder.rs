@@ -308,6 +308,15 @@ impl HolderManager {
             }
             n => bail!("invalid holder tag: {n}"),
         };
+        if recreate {
+            info!(
+                ?self.operator,
+                idx,
+                old_size = holder_size,
+                new_size = self.holder_size,
+                "holder will be recreated"
+            );
+        }
         Ok(Some(RecoveredHolder {
             meta,
             state,
