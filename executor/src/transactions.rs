@@ -177,8 +177,13 @@ impl TransactionBuilder {
         let holders = self.holder_mgr.recover().await;
 
         for holder in holders {
-            let stage = match holder.state {
-                RecoverableHolderState::Recreate => TxStage::RecreateHolder { info: holder.info },
+            match holder.state {
+                RecoverableHolderState::Recreate => {
+                    let ixs = [self.holder_mgr.delete_holder(&holder.info)];
+                    let tx = TxStage::DeleteHolder { info: holder.info }
+                        .ongoing(&ixs, &self.operator.pubkey());
+                    output.push(tx);
+                }
                 RecoverableHolderState::Pending(tx) => {
                     let Some(chain_id) = get_chain_id(&tx) else {
                         tracing::warn!(
@@ -190,7 +195,12 @@ impl TransactionBuilder {
                         continue;
                     };
                     let request = ExecuteRequest::new(tx, chain_id);
-                    TxStage::holder_fill(holder.info, request)
+                    let stage = TxStage::holder_fill(holder.info, request);
+                    output.push(
+                        self.next_step_inner(stage)
+                            .await?
+                            .expect("filled holder proceeds to execution"),
+                    );
                 }
                 RecoverableHolderState::State {
                     tx_hash,
@@ -206,7 +216,18 @@ impl TransactionBuilder {
                             is_legacy: true,
                         })
                         .collect();
-                    TxStage::recovered_holder(tx_hash, chain_id, holder.info, iter_info, accounts)
+                    let stage = TxStage::recovered_holder(
+                        tx_hash,
+                        chain_id,
+                        holder.info,
+                        iter_info,
+                        accounts,
+                    );
+                    output.push(
+                        self.next_step_inner(stage)
+                            .await?
+                            .expect("filled holder proceeds to execution"),
+                    );
                 }
                 RecoverableHolderState::State {
                     chain_id: None,
@@ -223,11 +244,6 @@ impl TransactionBuilder {
                     continue;
                 }
             };
-            output.push(
-                self.next_step_inner(stage)
-                    .await?
-                    .expect("filled holder proceeds to execution"),
-            );
         }
 
         if init_holders {
@@ -339,12 +355,6 @@ impl TransactionBuilder {
 
     async fn next_step_inner(&self, stage: TxStage) -> Result<Option<OngoingTransaction>> {
         match stage {
-            TxStage::RecreateHolder { info } => {
-                let ixs = [self.holder_mgr.delete_holder(&info)];
-                Ok(Some(
-                    TxStage::DeleteHolder { info }.ongoing(&ixs, &self.operator.pubkey()),
-                ))
-            }
             TxStage::DeleteHolder { info } => {
                 let ixs = self.holder_mgr.create_holder(&info).await?;
                 Ok(Some(

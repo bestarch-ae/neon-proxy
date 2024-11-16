@@ -205,7 +205,6 @@ impl TransactionBuilder {
             | stage @ TxStage::Final { tx_data: None, .. } // Not an ETH tx
             | stage @ TxStage::Final { tx_data: Some(_), holder: Some(_) } // Has both holder and ALT
             | stage @ TxStage::RecoveredHolder { .. }
-            | stage @ TxStage::RecreateHolder { .. }
             | stage @ TxStage::CreateHolder { .. }
             | stage @ TxStage::DeleteHolder { .. }
             | stage @ TxStage::Cancel { .. } => bail!("cannot shorten tx size: {stage:?}"),
@@ -343,7 +342,6 @@ impl TransactionBuilder {
             | stage @ TxStage::Final { .. }
             | stage @ TxStage::RecoveredHolder { .. }
             | stage @ TxStage::Cancel { .. }
-            | stage @ TxStage::RecreateHolder { .. }
             | stage @ TxStage::CreateHolder { .. }
             | stage @ TxStage::DeleteHolder { .. } => {
                 bail!("{stage:?} cannot fallback to iterative")

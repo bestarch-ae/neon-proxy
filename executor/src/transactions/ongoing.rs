@@ -74,9 +74,6 @@ pub(super) enum TxStage {
         tx_hash: B256,
         _holder: HolderInfo,
     },
-    RecreateHolder {
-        info: HolderInfo,
-    },
     CreateHolder {
         info: HolderInfo,
     },
@@ -300,7 +297,6 @@ impl OngoingTransaction {
             TxStage::Final { tx_data: None, .. }
             | TxStage::RecoveredHolder { .. }
             | TxStage::Cancel { .. }
-            | TxStage::RecreateHolder { .. }
             | TxStage::CreateHolder { .. }
             | TxStage::DeleteHolder { .. } => None,
         }
@@ -329,7 +325,6 @@ impl OngoingTransaction {
                 Some(tx_hash)
             }
             TxStage::Final { tx_data: None, .. }
-            | TxStage::RecreateHolder { .. }
             | TxStage::DeleteHolder { .. }
             | TxStage::CreateHolder { .. } => None,
         }
@@ -348,7 +343,6 @@ impl OngoingTransaction {
             | TxStage::Cancel { .. }
             | TxStage::RecoveredHolder { .. }
             | TxStage::HolderFill { .. }
-            | TxStage::RecreateHolder { .. }
             | TxStage::DeleteHolder { .. }
             | TxStage::CreateHolder { .. } => false,
         }
@@ -388,7 +382,6 @@ impl OngoingTransaction {
             TxStage::RecoveredHolder { chain_id, .. } => Some(chain_id),
             TxStage::Final { tx_data: None, .. }
             | TxStage::Cancel { .. }
-            | TxStage::RecreateHolder { .. }
             | TxStage::DeleteHolder { .. }
             | TxStage::CreateHolder { .. } => None,
         }
