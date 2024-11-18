@@ -863,7 +863,7 @@ impl TransactionBuilder {
                     && self.holder_mgr.is_holder_finalized(holder.pubkey()).await? =>
             {
                 tracing::debug!(%tx_hash, "iterations finished");
-                return Ok(None);
+                return Ok(self.recreate_holder_if_needed(holder));
             }
             Some(info) => info,
             None => {
