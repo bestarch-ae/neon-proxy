@@ -620,18 +620,19 @@ impl NeonCustomApiServer for EthApiImpl {
         let neon_receipt = to_neon_receipt_v2(eth_receipt, logs2);
         let solana_block_hash = neon_receipt.block_hash;
 
-        let neon_event_order = sol_txs
-            .iter()
-            .map(|tx| {
-                tx.solana_instructions
-                    .iter()
-                    .map(|ix| ix.neon_logs.len() as u64)
-                    .sum::<u64>()
-            })
-            .sum::<u64>()
-            + 1;
-
+        // TODO: move this to the indexer
         if detail == ReceiptDetail::SolanaTransactionList {
+            let neon_event_order = sol_txs
+                .iter()
+                .map(|tx| {
+                    tx.solana_instructions
+                        .iter()
+                        .map(|ix| ix.neon_logs.len() as u64)
+                        .sum::<u64>()
+                })
+                .sum::<u64>()
+                + 1;
+
             if let Some(sol_tx) = sol_txs.last_mut() {
                 if let Some(last_ix) = sol_tx.solana_instructions.last_mut() {
                     let inner = neon_event_to_log(&EventLog {
