@@ -32,3 +32,6 @@ thiserror.workspace = true
 futures-util.workspace = true
 rust_decimal = "1.36.0"
 lru = "0.12.5"
+
+[dev-dependencies]
+tracing-subscriber.workspace = true

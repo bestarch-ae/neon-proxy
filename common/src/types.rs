@@ -31,6 +31,7 @@ mod tx_envelope_ext {
         fn gas_price(&self) -> Result<Option<u128>, anyhow::Error>;
         fn value(&self) -> Result<alloy_primitives::U256, anyhow::Error>;
         fn signature(&self) -> Result<&alloy_primitives::Signature, anyhow::Error>;
+        fn nonce(&self) -> Result<u64, anyhow::Error>;
     }
 
     impl TxEnvelopeExt for TxEnvelope {
@@ -90,6 +91,16 @@ mod tx_envelope_ext {
                 TxEnvelope::Eip1559(signed) => Ok(signed.signature()),
                 TxEnvelope::Eip2930(signed) => Ok(signed.signature()),
                 TxEnvelope::Eip4844(signed) => Ok(signed.signature()),
+                _ => bail!("unsupported tx type"),
+            }
+        }
+
+        fn nonce(&self) -> Result<u64, anyhow::Error> {
+            match self {
+                TxEnvelope::Legacy(signed) => Ok(signed.tx().nonce),
+                TxEnvelope::Eip1559(signed) => Ok(signed.tx().nonce),
+                TxEnvelope::Eip2930(signed) => Ok(signed.tx().nonce),
+                TxEnvelope::Eip4844(signed) => Ok(signed.tx().nonce()),
                 _ => bail!("unsupported tx type"),
             }
         }

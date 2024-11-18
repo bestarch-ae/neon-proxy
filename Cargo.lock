@@ -4292,6 +4292,7 @@ dependencies = [
  "tokio",
  "tokio-util 0.7.12",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

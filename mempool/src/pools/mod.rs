@@ -37,6 +37,7 @@ pub enum QueueUpdateMove {
 }
 
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
+#[must_use = "Updates must be applied"]
 pub struct QueuesUpdate {
     pub add_update: Option<QueueUpdateAdd>,
     pub move_update: Option<QueueUpdateMove>,
