@@ -106,50 +106,32 @@ impl SenderPool {
 
     // here we assume that we're adding records with nonce >= tx_count;
     pub fn add(&mut self, record: QueueRecord) -> QueuesUpdate {
-        let mut result = QueuesUpdate::default();
         let nonce = record.nonce;
         self.nonce_map.insert(nonce, record.clone());
-        if let Some((_, &max_nonce)) = self.pending_nonce_queue.peek_max() {
-            if max_nonce + 1 == nonce {
-                self.pending_nonce_queue.push(record.clone(), nonce);
-                result.add_update = Some(QueueUpdateAdd::Pending(record));
-                return result;
-            }
-        } else if (!matches!(self.state, SenderPoolState::Queued(_)) && nonce == self.tx_count)
-            || (matches!(self.state, SenderPoolState::Queued(_)) && nonce == self.tx_count + 1)
-        {
-            self.pending_nonce_queue.push(record.clone(), nonce);
-            result.add_update = Some(QueueUpdateAdd::Pending(record));
-            let mut last_nonce = nonce + 1;
-            let mut move_to = Vec::new();
-            while let Some((_, &nonce)) = self.gapped_nonce_queue.peek_min() {
-                if nonce == last_nonce {
-                    if let Some((record, _)) = self.gapped_nonce_queue.pop_min() {
-                        move_to.push(record.clone());
-                        self.pending_nonce_queue.push(record, nonce);
-                        last_nonce += 1;
-                    }
-                } else {
-                    break;
-                }
-            }
-            if !move_to.is_empty() {
-                result.move_update = Some(QueueUpdateMove::GappedToPending(move_to));
-            }
-            return result;
-        }
 
-        result.add_update = Some(QueueUpdateAdd::Gapped(record.clone()));
-        self.gapped_nonce_queue.push(record, nonce);
+        let QueueMetrics { pending, .. } = self.get_metrics();
+        let fits_by_tx_count = self.queued_tx_count() == nonce;
+        let fits_by_range = pending.map_or(false, |(min, max)| nonce > min && nonce <= max + 1);
+        let add_update = if fits_by_range || fits_by_tx_count {
+            self.pending_nonce_queue.push(record.clone(), nonce);
+            QueueUpdateAdd::Pending(record)
+        } else {
+            self.gapped_nonce_queue.push(record.clone(), nonce);
+            QueueUpdateAdd::Gapped(record)
+        };
+
+        let mut result = self.rebalance();
+        result.add_update = Some(add_update);
         result
     }
 
     pub fn set_tx_count(&mut self, tx_count: u64) -> QueuesUpdate {
-        let mut result = QueuesUpdate::default();
-        if self.tx_count == tx_count {
-            return result;
-        }
         self.tx_count = tx_count;
+        self.rebalance()
+    }
+
+    pub fn rebalance(&mut self) -> QueuesUpdate {
+        let mut result = QueuesUpdate::default();
 
         // drop transactions with nonce < tx_count
         while let Some((_, &queued_nonce)) = self.pending_nonce_queue.peek_min() {
@@ -193,13 +175,8 @@ impl SenderPool {
         }
 
         // move pending txs to gapped if the first pending tx has a nonce > tx_count
-        if self.tx_count
-            < self
-                .pending_nonce_queue
-                .peek_min()
-                .map(|(_, &n)| n)
-                .unwrap_or(u64::MIN)
-        {
+        let min_pending = self.pending_nonce_queue.peek_min();
+        if min_pending.map_or(false, |(_, &min)| min > self.queued_tx_count()) {
             while let Some((record, nonce)) = self.pending_nonce_queue.pop_min() {
                 self.gapped_nonce_queue.push(record.clone(), nonce);
                 move_to_gapped.push(record);
@@ -210,24 +187,29 @@ impl SenderPool {
             return result;
         }
 
-        let mut move_to_pending = Vec::new();
         // if pending queue is empty there's a chance we can move gapped txs to pending
-        if self.pending_nonce_queue.is_empty() {
-            let mut last_nonce = self.tx_count;
-            while let Some((_, &nonce)) = self.gapped_nonce_queue.peek_min() {
-                if nonce == last_nonce {
-                    if let Some((record, _)) = self.gapped_nonce_queue.pop_min() {
-                        move_to_pending.push(record.clone());
-                        self.pending_nonce_queue.push(record, nonce);
-                        last_nonce += 1;
-                    }
-                } else {
-                    break;
-                }
+        let max_pending = self.pending_nonce_queue.peek_max().map(|(_, &n)| n + 1);
+        let min_gapped = self.gapped_nonce_queue.peek_min().map(|(_, &n)| n);
+        if let Some(mut last_nonce) =
+            min_gapped.filter(|min_gapped| max_pending.unwrap_or(self.tx_count) == *min_gapped)
+        {
+            let mut move_to_pending = Vec::new();
+            while self
+                .gapped_nonce_queue
+                .peek_min()
+                .map_or(false, |(_, &nonce)| nonce == last_nonce)
+            {
+                let (record, nonce) = self
+                    .gapped_nonce_queue
+                    .pop_min()
+                    .expect("checked existence");
+                move_to_pending.push(record.clone());
+                self.pending_nonce_queue.push(record, nonce);
+                last_nonce += 1;
             }
-        }
-        if !move_to_pending.is_empty() {
-            result.move_update = Some(QueueUpdateMove::GappedToPending(move_to_pending));
+            if !move_to_pending.is_empty() {
+                result.move_update = Some(QueueUpdateMove::GappedToPending(move_to_pending));
+            }
         }
 
         result
@@ -286,9 +268,53 @@ impl SenderPool {
             .await?;
         Ok(self.set_tx_count(tx_count))
     }
+
+    pub fn log_self(&self, caller: &'static str) {
+        let Self {
+            chain_id,
+            sender,
+            state,
+            tx_count,
+            nonce_map,
+            ..
+        } = self;
+        let QueueMetrics { pending, gapped } = self.get_metrics();
+        let (min_pending, max_pending) = pending.unzip();
+        let (min_gapped, max_gapped) = gapped.unzip();
+        tracing::debug!(
+            chain_id, %sender, ?state, tx_count, nonce_map_len = nonce_map.len(),
+            min_pending, max_pending, min_gapped, max_gapped,
+            caller, "sender pool state"
+        )
+    }
+
+    /// Tx count if queued transaction is considered processed
+    fn queued_tx_count(&self) -> u64 {
+        if let SenderPoolState::Queued(count) = self.state {
+            count + 1
+        } else {
+            self.tx_count
+        }
+    }
+
+    fn get_metrics(&self) -> QueueMetrics {
+        let p_min = |queue: &DoublePriorityQueue<_, _>| queue.peek_min().map(|(_, &p)| p);
+        let p_max = |queue: &DoublePriorityQueue<_, _>| queue.peek_max().map(|(_, &p)| p);
+        let metrics = |queue: &DoublePriorityQueue<_, _>| p_min(queue).zip(p_max(queue));
+        QueueMetrics {
+            pending: metrics(&self.pending_nonce_queue),
+            gapped: metrics(&self.gapped_nonce_queue),
+        }
+    }
+}
+
+struct QueueMetrics {
+    pending: Option<(u64, u64)>,
+    gapped: Option<(u64, u64)>,
 }
 
 #[cfg(test)]
+#[allow(unused)] // TODO
 mod tests {
     use super::*;
     use crate::mempool::EthTxHash;
