@@ -430,6 +430,7 @@ impl TransactionBuilder {
             TxErrorKind::BadExternalCall | TxErrorKind::Other => {
                 self.handle_preflight_error(tx).await
             }
+            TxErrorKind::BlockhashNotFound => Ok(tx), // Tx is ok, just need to re-sign it
             TxErrorKind::AlreadyProcessed => bail!("must be handled before"),
         }
     }

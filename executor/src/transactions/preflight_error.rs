@@ -21,6 +21,7 @@ pub enum TxErrorKind {
     BadExternalCall,
     AlreadyProcessed,
     MissingAccount(Pubkey),
+    BlockhashNotFound,
     Other,
 }
 
@@ -37,11 +38,11 @@ impl TxErrorKind {
             _ => (),
         };
 
-        if matches!(
-            extract_transaction_err(&err.kind),
-            Some(TransactionError::AlreadyProcessed)
-        ) {
-            return Some(Self::AlreadyProcessed);
+        let tx_err = extract_transaction_err(&err.kind);
+        match tx_err {
+            Some(TransactionError::AlreadyProcessed) => return Some(Self::AlreadyProcessed),
+            Some(TransactionError::BlockhashNotFound) => return Some(Self::BlockhashNotFound),
+            _ => (),
         }
 
         if tx.is_alt() {
@@ -77,6 +78,7 @@ fn extract_transaction_err(err: &ClientErrorKind) -> Option<&TransactionError> {
                 ),
             ..
         }) => err.as_ref(),
+        ClientErrorKind::TransactionError(ref err) => Some(err),
         _ => None,
     }
 }
