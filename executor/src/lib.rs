@@ -33,6 +33,8 @@ use solana_api::solana_api::SolanaApi;
 use self::entry::TransactionEntry;
 use self::transactions::{OngoingTransaction, TransactionBuilder, TxErrorKind};
 
+pub use transactions::HOLDER_SIZE;
+
 #[derive(Args, Clone)]
 pub struct Config {
     #[arg(long, default_value_t = false)]
@@ -112,6 +114,7 @@ pub struct ExecutorBuilder {
     max_holders: u8,
     #[builder(default = false)]
     init_holders: bool,
+    holder_size: usize,
 
     operator: Arc<Operator>,
     neon_api: NeonApi,
@@ -164,6 +167,7 @@ impl Executor {
             init_operator_balance,
             max_holders,
             init_holders,
+            holder_size,
             operator,
             neon_api,
             solana_api,
@@ -175,6 +179,7 @@ impl Executor {
             .program_id(neon_pubkey)
             .operator(operator)
             .max_holders(max_holders)
+            .holder_size(holder_size)
             .pg_pool(pg_pool)
             .build();
 
@@ -333,7 +338,7 @@ impl Executor {
             if current_len > signatures.capacity() {
                 signatures.reserve(current_len - signatures.capacity());
             }
-            for tx in self.pending_transactions.iter() {
+            for tx in &self.pending_transactions {
                 signatures.push(*tx.key());
             }
 

@@ -46,7 +46,7 @@ use operator::Operator;
 use solana_api::solana_api::SolanaApi;
 
 use self::mock::BanksRpcMock;
-use crate::{Execute, ExecuteRequest, Executor};
+use crate::{Execute, ExecuteRequest, Executor, HOLDER_SIZE};
 
 const NEON_KEY: Pubkey = pubkey!("53DfF883gyixYNXnM7s5xhdeyV8mVk9T4i2hGV9vG9io");
 const NEON_TOKEN: Pubkey = pubkey!("HPsV9Deocecw3GeZv1FkAPNCBRfuVyfw9MMwjwRe1xaU");
@@ -378,6 +378,7 @@ impl ExecutorTestEnvironment {
             .solana_api(solana_api.clone())
             .init_operator_balance(false)
             .max_holders(MAX_HOLDERS)
+            .holder_size(HOLDER_SIZE)
             .prepare()
             .start()
             .await?;
@@ -646,6 +647,7 @@ async fn recover_holder() -> anyhow::Result<()> {
         .solana_api(solana_api.clone())
         .init_operator_balance(false)
         .max_holders(MAX_HOLDERS)
+        .holder_size(HOLDER_SIZE)
         .prepare()
         .start()
         .await?;
@@ -785,6 +787,7 @@ async fn recover_state() -> anyhow::Result<()> {
         .solana_api(solana_api.clone())
         .init_operator_balance(false)
         .max_holders(MAX_HOLDERS)
+        .holder_size(HOLDER_SIZE)
         .prepare()
         .start()
         .await?;
@@ -998,6 +1001,70 @@ async fn parallel_transfers() -> Result<()> {
         assert!(balance[0].balance < eth_to_wei(100));
         assert_eq!(balance[1].balance, eth_to_wei(900));
     }
+    Ok(())
+}
+
+async fn find_holder(idx: u8, solana_api: SolanaApi, operator: &Pubkey) -> Result<Option<Account>> {
+    let seed = format!("holder{}", idx);
+    let pubkey =
+        Pubkey::create_with_seed(operator, &seed, &NEON_KEY).expect("create with seed failed");
+    let Some(account) = solana_api.get_account(&pubkey).await? else {
+        return Ok(None);
+    };
+    Ok(Some(account))
+}
+
+#[tokio::test]
+#[serial]
+async fn holder_recreate() -> Result<()> {
+    let ExecutorTestEnvironment {
+        executor,
+        neon_api,
+        solana_api,
+        ..
+    } = ExecutorTestEnvironment::start().await?;
+
+    drop(executor);
+
+    let operator = Operator::read_from_file("tests/keys/operator.json").map(Arc::new)?;
+    let (executor, _task) = Executor::builder()
+        .neon_pubkey(NEON_KEY)
+        .operator(operator.clone())
+        .neon_api(neon_api.clone())
+        .solana_api(solana_api.clone())
+        .init_operator_balance(false)
+        .max_holders(MAX_HOLDERS)
+        .holder_size(HOLDER_SIZE)
+        .init_holders(true)
+        .prepare()
+        .start()
+        .await?;
+    executor.join_current_transactions().await;
+
+    let holder = find_holder(0, solana_api.clone(), &operator.pubkey()).await?;
+    let holder_len = holder.unwrap().data.len();
+    assert_eq!(holder_len, HOLDER_SIZE);
+
+    drop(executor);
+
+    let (executor, _task) = Executor::builder()
+        .neon_pubkey(NEON_KEY)
+        .operator(operator.clone())
+        .neon_api(neon_api.clone())
+        .solana_api(solana_api.clone())
+        .init_operator_balance(false)
+        .max_holders(MAX_HOLDERS)
+        .holder_size(HOLDER_SIZE + 100)
+        .init_holders(true)
+        .prepare()
+        .start()
+        .await?;
+    executor.join_current_transactions().await;
+
+    let holder = find_holder(0, solana_api.clone(), &operator.pubkey()).await?;
+    let holder_len = holder.unwrap().data.len();
+    assert_eq!(holder_len, HOLDER_SIZE + 100);
+
     Ok(())
 }
 

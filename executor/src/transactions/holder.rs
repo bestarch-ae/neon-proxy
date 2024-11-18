@@ -33,7 +33,7 @@ use crate::transactions::holder::parse::StateData;
 const HOLDER_DATA_LEN: usize = 256 * 1024; // neon_proxy.py default
 const HOLDER_META_LEN: usize =
     account::ACCOUNT_PREFIX_LEN + mem::size_of::<account::HolderHeader>();
-const HOLDER_SIZE: usize = HOLDER_META_LEN + HOLDER_DATA_LEN;
+pub const HOLDER_SIZE: usize = HOLDER_META_LEN + HOLDER_DATA_LEN;
 const PREFIX: &str = "holder";
 
 #[derive(Debug, Clone, Copy)]
@@ -52,6 +52,7 @@ pub(super) struct HolderInfo {
     data: Vec<u8>,
     current_offset: usize,
     hash: B256,
+    recreate: bool,
 }
 
 impl Drop for HolderInfo {
@@ -90,6 +91,10 @@ impl HolderInfo {
     pub fn hash(&self) -> &B256 {
         &self.hash
     }
+
+    pub fn recreate(&self) -> bool {
+        self.recreate
+    }
 }
 
 #[derive(Debug)]
@@ -124,6 +129,7 @@ impl HolderState {
 
 #[derive(Debug)]
 pub enum RecoverableHolderState {
+    Recreate,
     Pending(TxEnvelope),
     State {
         tx_hash: B256,
@@ -132,19 +138,11 @@ pub enum RecoverableHolderState {
     },
 }
 
-impl RecoverableHolderState {
-    pub fn tx_hash(&self) -> &B256 {
-        match self {
-            Self::Pending(tx) => tx.tx_hash(),
-            Self::State { tx_hash, .. } => tx_hash,
-        }
-    }
-}
-
 #[derive(Debug)]
 struct RecoveredHolder {
     meta: HolderMeta,
     state: HolderState,
+    recreate: bool,
 }
 
 #[derive(Debug)]
@@ -163,6 +161,7 @@ pub struct HolderManager {
     sender: Sender<HolderMeta>,
     counter: Arc<AtomicU8>,
     max_holders: u8,
+    holder_size: usize,
 }
 
 #[derive(Debug)]
@@ -177,6 +176,7 @@ impl HolderManager {
         program_id: Pubkey,
         solana_api: SolanaApi,
         max_holders: u8,
+        holder_size: usize,
     ) -> Self {
         let (sender, receiver) = async_channel::bounded(max_holders.into());
 
@@ -188,6 +188,7 @@ impl HolderManager {
             sender,
             counter: Arc::new(0.into()),
             max_holders,
+            holder_size,
         }
     }
 
@@ -202,8 +203,15 @@ impl HolderManager {
                 }
                 Ok(Some(recovered_holder)) => {
                     info!(%self.operator, ?recovered_holder, "discovered holder");
-                    let info = self.attach_info(recovered_holder.meta, None);
+                    let mut info = self.attach_info(recovered_holder.meta, None);
+                    info.recreate = recovered_holder.recreate;
                     match recovered_holder.state.recoverable() {
+                        None if recovered_holder.recreate => {
+                            output.push(HolderToFinalize {
+                                info,
+                                state: RecoverableHolderState::Recreate,
+                            });
+                        }
                         None => drop(info),
                         Some(state) => output.push(HolderToFinalize { info, state }),
                     }
@@ -259,6 +267,8 @@ impl HolderManager {
 
         let meta = HolderMeta { idx, pubkey };
         let account_info = (&pubkey, &mut account).into_account_info();
+        let holder_size = account_info.data.borrow().len();
+        let recreate = holder_size != self.holder_size;
         let state = match tag(&self.program_id, &account_info).context("invalid holder account")? {
             account::TAG_STATE_FINALIZED | legacy::TAG_STATE_FINALIZED_DEPRECATED => {
                 HolderState::Finalized
@@ -296,9 +306,22 @@ impl HolderManager {
                     accounts,
                 }
             }
-            n => anyhow::bail!("invalid holder tag: {n}"),
+            n => bail!("invalid holder tag: {n}"),
         };
-        Ok(Some(RecoveredHolder { meta, state }))
+        if recreate {
+            info!(
+                ?self.operator,
+                idx,
+                old_size = holder_size,
+                new_size = self.holder_size,
+                "holder will be recreated"
+            );
+        }
+        Ok(Some(RecoveredHolder {
+            meta,
+            state,
+            recreate,
+        }))
     }
 
     pub async fn acquire_holder(&self, tx: Option<&TxEnvelope>) -> anyhow::Result<AcquireHolder> {
@@ -378,10 +401,11 @@ impl HolderManager {
             data,
             current_offset: 0,
             hash,
+            recreate: false,
         }
     }
 
-    async fn create_holder(&self, holder: &HolderInfo) -> anyhow::Result<[Instruction; 2]> {
+    pub async fn create_holder(&self, holder: &HolderInfo) -> anyhow::Result<[Instruction; 2]> {
         let seed = holder_seed(holder.meta.idx);
         let sp_ix = system_instruction::create_account_with_seed(
             &self.operator,
@@ -389,9 +413,9 @@ impl HolderManager {
             &self.operator,
             &seed,
             self.solana_api
-                .minimum_rent_for_exemption(HOLDER_SIZE)
+                .minimum_rent_for_exemption(self.holder_size)
                 .await?,
-            HOLDER_SIZE as u64,
+            self.holder_size as u64,
             &self.program_id,
         );
 
@@ -417,6 +441,20 @@ impl HolderManager {
         };
 
         Ok([sp_ix, neon_ix])
+    }
+
+    pub fn delete_holder(&self, holder: &HolderInfo) -> Instruction {
+        let data = vec![tag::HOLDER_DELETE; 1];
+        let accounts = vec![
+            AccountMeta::new(holder.meta.pubkey, false),
+            AccountMeta::new_readonly(self.operator, true),
+        ];
+
+        Instruction {
+            program_id: self.program_id,
+            accounts,
+            data,
+        }
     }
 
     async fn can_acquire_holder(&self, meta: &HolderMeta) -> anyhow::Result<bool> {
