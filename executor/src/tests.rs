@@ -1009,6 +1009,7 @@ async fn find_holder(idx: u8, solana_api: SolanaApi, operator: &Pubkey) -> Resul
     let pubkey =
         Pubkey::create_with_seed(operator, &seed, &NEON_KEY).expect("create with seed failed");
     let Some(account) = solana_api.get_account(&pubkey).await? else {
+        println!("holder: {pubkey}");
         return Ok(None);
     };
     Ok(Some(account))
@@ -1018,13 +1019,10 @@ async fn find_holder(idx: u8, solana_api: SolanaApi, operator: &Pubkey) -> Resul
 #[serial]
 async fn holder_recreate() -> Result<()> {
     let ExecutorTestEnvironment {
-        executor,
         neon_api,
         solana_api,
         ..
     } = ExecutorTestEnvironment::start().await?;
-
-    drop(executor);
 
     let operator = Operator::read_from_file("tests/keys/operator.json").map(Arc::new)?;
     let (executor, _task) = Executor::builder()
@@ -1033,7 +1031,7 @@ async fn holder_recreate() -> Result<()> {
         .neon_api(neon_api.clone())
         .solana_api(solana_api.clone())
         .init_operator_balance(false)
-        .max_holders(MAX_HOLDERS)
+        .max_holders(1)
         .holder_size(HOLDER_SIZE)
         .init_holders(true)
         .prepare()
@@ -1045,15 +1043,13 @@ async fn holder_recreate() -> Result<()> {
     let holder_len = holder.unwrap().data.len();
     assert_eq!(holder_len, HOLDER_SIZE);
 
-    drop(executor);
-
     let (executor, _task) = Executor::builder()
         .neon_pubkey(NEON_KEY)
         .operator(operator.clone())
         .neon_api(neon_api.clone())
         .solana_api(solana_api.clone())
         .init_operator_balance(false)
-        .max_holders(MAX_HOLDERS)
+        .max_holders(1)
         .holder_size(HOLDER_SIZE + 100)
         .init_holders(true)
         .prepare()
