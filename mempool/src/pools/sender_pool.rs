@@ -316,6 +316,10 @@ struct QueueMetrics {
 #[cfg(test)]
 #[allow(unused)] // TODO
 mod tests {
+    use std::collections::VecDeque;
+
+    use proptest::prelude::*;
+
     use super::*;
     use crate::mempool::EthTxHash;
 
@@ -732,5 +736,29 @@ mod tests {
             pool.pending_nonce_queue,
             DoublePriorityQueue::<QueueRecord, TxNonce>::from(vec![(record3, 3)])
         );
+    }
+
+    proptest! {
+        /// Tests that all transactions from an arbitrary shuffled continuous valid sequence
+        /// get eventually queued.
+        #[test]
+        fn test_continuous_sequence(
+            nonces in (1..1000u64)                            // Sequence of length from 1 to 1000
+                .prop_map(|len| (0..len).collect::<Vec<_>>()) // of all numbers from 0 to len
+                .prop_shuffle()                               // arbitrarily shuffled
+        ) {
+            let mut pool = create_sender_pool();
+            for nonce in &nonces {
+                let rec = create_record(*nonce);
+                pool.add(rec);
+            }
+            for nonce in 0..nonces.len() {
+                let rec = pool.get_for_queueing().unwrap();
+                assert_eq!(rec.nonce, nonce as u64);
+                pool.set_processing(rec.nonce);
+                pool.set_idle();
+            }
+            assert!(pool.is_empty())
+        }
     }
 }

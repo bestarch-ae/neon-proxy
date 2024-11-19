@@ -16,7 +16,7 @@ use neon_api::NeonApi;
 
 use crate::error::MempoolError;
 use crate::pools::{ChainPool, ChainPoolConfig, NeonApiGetTxCount};
-use crate::GasPricesTrait;
+use crate::{GasPricesTrait, EXEC_INTERVAL_MS};
 
 pub type EthTxHash = B256;
 pub type GasPrice = u128;
@@ -250,6 +250,7 @@ impl<E: Execute, G: GasPricesTrait> Mempool<E, G> {
                 eviction_timeout_sec: self.config.eviction_timeout_sec,
                 tx_cache_size: self.config.tx_cache_size,
                 tx_count_cache_size: self.config.tx_count_cache_size,
+                exec_interval_ms: EXEC_INTERVAL_MS,
             };
             ChainPool::create_and_start(
                 config,

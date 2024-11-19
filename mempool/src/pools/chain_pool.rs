@@ -29,7 +29,7 @@ use crate::{GasPricesTrait, MempoolError};
 
 const EXEC_RESULT_CHANNEL_SIZE: usize = 1024;
 const ONE_BLOCK_MS: u64 = 400;
-const EXEC_INTERVAL_MS: u64 = ONE_BLOCK_MS;
+pub const EXEC_INTERVAL_MS: u64 = ONE_BLOCK_MS;
 
 pub trait GetTxCountTrait: Clone + Send + Sync + 'static {
     fn get_transaction_count(
@@ -60,6 +60,7 @@ pub struct Config {
     pub eviction_timeout_sec: u64,
     pub tx_cache_size: usize,
     pub tx_count_cache_size: usize,
+    pub exec_interval_ms: u64,
 }
 
 struct HeartBeatTask {
@@ -99,6 +100,7 @@ pub struct ChainPool<E: Execute, G: GasPricesTrait, C: GetTxCountTrait> {
     eviction_timeout_sec: u64,
     tx_count_cache: Option<LruCache<Address, u64>>,
     tx_cache: Option<LruCache<EthTxHash, ()>>,
+    exec_interval_ms: u64,
 }
 
 impl<E: Execute, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C> {
@@ -128,6 +130,7 @@ impl<E: Execute, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C> {
             eviction_timeout_sec: config.eviction_timeout_sec,
             tx_count_cache: init_cache(config.tx_count_cache_size),
             tx_cache: init_cache(config.tx_cache_size),
+            exec_interval_ms: config.exec_interval_ms,
         }
     }
 
@@ -147,7 +150,12 @@ impl<E: Execute, G: GasPricesTrait, C: GetTxCountTrait> ChainPool<E, G, C> {
         let mut cmd_rx = cmd_rx;
         let (exec_result_tx, mut exec_result_rx) =
             mpsc::channel::<ExecutionResult>(EXEC_RESULT_CHANNEL_SIZE);
-        let mut exec_interval = tokio::time::interval(Duration::from_millis(EXEC_INTERVAL_MS));
+        let interval = if self.exec_interval_ms == 0 {
+            Duration::from_micros(1)
+        } else {
+            Duration::from_millis(self.exec_interval_ms)
+        };
+        let mut exec_interval = tokio::time::interval(interval);
         loop {
             tokio::select! {
                  _ = exec_interval.tick() => {
@@ -779,6 +787,7 @@ where
     Some(LruCache::new(size))
 }
 
+// TODO: move out
 #[cfg(test)]
 mod tests {
     use std::io::IsTerminal;
@@ -788,7 +797,9 @@ mod tests {
     use alloy_consensus::{SignableTransaction, TxLegacy};
     use alloy_network::TxSignerSync;
     use alloy_signer_wallet::LocalWallet;
+    use proptest::prelude::*;
     use reth_primitives::{TxKind, U256};
+    use tokio::runtime::Runtime;
     use tokio::sync::mpsc::channel;
     use tokio::time::sleep;
     use tracing_subscriber::filter::EnvFilter;
@@ -872,6 +883,7 @@ mod tests {
             eviction_timeout_sec: 60,
             tx_cache_size: 0,
             tx_count_cache_size: 0,
+            exec_interval_ms: 0,
         };
         let executor = MockExecutor::default();
         ChainPool::new(
@@ -1034,16 +1046,11 @@ mod tests {
         assert!(matches!(result, Err(MempoolError::NonceTooHigh)));
     }
 
-    #[tokio::test]
-    async fn test_random_sequence_from_basic() {
+    async fn test_sequence(nonces: Vec<u64>) {
         let sender = LocalWallet::random();
         let mut chain_pool = create_chain_pool();
-        let chain = [
-            22, 2, 5, 24, 19, 10, 6, 17, 4, 16, 11, 14, 12, 15, 0, 18, 1, 21, 8, 23, 20, 9, 3, 13,
-            7,
-        ];
-        let chain_len = chain.len();
-        for nonce in chain {
+        let len = nonces.len();
+        for nonce in nonces {
             let tx = create_req_with_addr(&sender, nonce);
             chain_pool.add_tx(tx.try_into().unwrap()).await.unwrap();
         }
@@ -1051,10 +1058,7 @@ mod tests {
         let txs = chain_pool.executor.txs.clone();
         let (_tx, rx) = channel(1);
         tokio::spawn(chain_pool.start(rx));
-        sleep(Duration::from_millis(
-            EXEC_INTERVAL_MS * (chain_len as u64 + 5),
-        ))
-        .await;
+        sleep(Duration::from_millis(len as u64 * 2)).await;
 
         let done = txs
             .lock()
@@ -1062,7 +1066,36 @@ mod tests {
             .iter()
             .map(|tx| tx.tx().nonce().unwrap())
             .collect::<Vec<_>>();
-        let expected = (0..25).collect::<Vec<_>>();
+        let expected = (0..len as u64).collect::<Vec<_>>();
         assert_eq!(done, expected);
+    }
+
+    #[tokio::test]
+    async fn test_random_sequence_from_basic() {
+        let chain = [
+            22, 2, 5, 24, 19, 10, 6, 17, 4, 16, 11, 14, 12, 15, 0, 18, 1, 21, 8, 23, 20, 9, 3, 13,
+            7,
+        ];
+        test_sequence(chain.into()).await
+    }
+
+    #[tokio::test]
+    async fn test_simple_sequence() {
+        let chain = [0, 1];
+        test_sequence(chain.into()).await
+    }
+
+    proptest! {
+        /// Tests that all transactions from an arbitrary shuffled continuous valid sequence
+        /// get eventually queued.
+        #[test]
+        #[ignore] // Won't work with timers in chain pool
+        fn test_continuous_sequence(
+            nonces in (1..300u64)                            // Sequence of length from 1 to 300
+                .prop_map(|len| (0..len).collect::<Vec<_>>()) // of all numbers from 0 to len
+                .prop_shuffle()                               // arbitrarily shuffled
+        ) {
+            Runtime::new().unwrap().block_on(test_sequence(nonces));
+        }
     }
 }

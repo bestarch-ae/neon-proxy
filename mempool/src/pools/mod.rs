@@ -6,7 +6,7 @@ use reth_primitives::{Address, ChainId};
 
 use crate::mempool::{EthTxHash, GasPrice};
 
-pub use chain_pool::{ChainPool, Config as ChainPoolConfig, NeonApiGetTxCount};
+pub use chain_pool::{ChainPool, Config as ChainPoolConfig, NeonApiGetTxCount, EXEC_INTERVAL_MS};
 pub use sender_pool::{SenderPool, SenderPoolState};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
