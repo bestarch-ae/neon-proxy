@@ -20,11 +20,11 @@ use common::neon_lib::commands::get_balance::BalanceStatus;
 use common::neon_lib::types::{BalanceAddress, SerializedAccount, TxParams};
 use common::solana_sdk::pubkey::Pubkey;
 use common::solana_sdk::signature::Signature;
-use common::types::EventKind;
+use common::types::{EventKind, EventLog};
 use mempool::GasPriceModel;
 
 use crate::convert::{
-    convert_rich_log, neon_to_eth, neon_to_eth_receipt, to_neon_receipt_v2,
+    convert_rich_log, neon_event_to_log, neon_to_eth, neon_to_eth_receipt, to_neon_receipt_v2,
     NeonTransactionReceiptV2,
 };
 use crate::error::{internal_error, Error};
@@ -606,6 +606,11 @@ impl NeonCustomApiServer for EthApiImpl {
             }
         }
 
+        let event_type = if tx_info.inner.is_cancelled {
+            EventKind::Cancel
+        } else {
+            EventKind::Return
+        };
         let solana_complete_transaction_signature = tx_info.inner.sol_signature;
         let solana_complete_instruction_index = tx_info.inner.sol_ix_idx;
         let solana_complete_inner_instruction_index = tx_info.inner.sol_ix_inner_idx;
@@ -614,6 +619,61 @@ impl NeonCustomApiServer for EthApiImpl {
             neon_to_eth_receipt(tx_info.inner, tx_info.blockhash).map_err(Error::from)?;
         let neon_receipt = to_neon_receipt_v2(eth_receipt, logs2);
         let solana_block_hash = neon_receipt.block_hash;
+
+        // TODO: move this to the indexer
+        if detail == ReceiptDetail::SolanaTransactionList {
+            let neon_event_order = sol_txs
+                .iter()
+                .map(|tx| {
+                    tx.solana_instructions
+                        .iter()
+                        .map(|ix| ix.neon_logs.len() as u64)
+                        .sum::<u64>()
+                })
+                .sum::<u64>()
+                + 1;
+
+            if let Some(sol_tx) = sol_txs.last_mut() {
+                if let Some(last_ix) = sol_tx.solana_instructions.last_mut() {
+                    let inner = neon_event_to_log(&EventLog {
+                        event_type,
+                        is_hidden: true,
+                        is_reverted: false,
+                        address: None,
+                        topic_list: vec![],
+                        data: 1_u8.to_le_bytes().to_vec(),
+                        tx_log_idx: 0,  // we don't care
+                        blk_log_idx: 0, // we don't care
+                        level: 0,
+                        order: (last_ix.neon_logs.len() + 1) as u64,
+                    });
+                    let inner_log = Log {
+                        inner,
+                        transaction_index: Some(0),
+                        block_hash: solana_block_hash,
+                        block_number: neon_receipt.block_number,
+                        block_timestamp: None,
+                        transaction_hash: Some(neon_receipt.transaction_hash),
+                        log_index: None,
+                        removed: false,
+                    };
+                    let return_log = NeonLog {
+                        log: inner_log,
+                        removed: false,
+                        solana_transaction_signature: solana_complete_transaction_signature,
+                        solana_instruction_index: solana_complete_instruction_index,
+                        solana_inner_instruction_index: solana_complete_inner_instruction_index,
+                        solana_address: None,
+                        neon_event_type: event_type,
+                        neon_event_level: 0,
+                        neon_event_order,
+                        neon_is_hidden: true,
+                        neon_is_reverted: false,
+                    };
+                    last_ix.neon_logs.push(return_log);
+                }
+            }
+        }
 
         let receipt = NeonReceipt {
             receipt: neon_receipt,
