@@ -403,6 +403,7 @@ impl ExecutorTestEnvironment {
 #[tokio::test]
 #[serial]
 async fn transfer() -> Result<()> {
+    println!("started transfer");
     let ExecutorTestEnvironment {
         rpc,
         test_kp: kp1,
@@ -420,6 +421,7 @@ async fn transfer() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn transfer_deprecated() -> Result<()> {
+    println!("started transfer_deprecated");
     let ExecutorTestEnvironment {
         rpc,
         test_kp: kp1,
@@ -476,6 +478,7 @@ async fn do_transfer(
 #[tokio::test]
 #[serial]
 async fn transfer_no_chain_id() -> Result<()> {
+    println!("started transfer_no_chain_id");
     let ExecutorTestEnvironment {
         rpc,
         test_kp: kp1,
@@ -529,6 +532,7 @@ fn build_transfer_no_chain_id(kp1: &Wallet, addr2: Address) -> anyhow::Result<Ex
 #[tokio::test]
 #[serial]
 async fn deploy_contract() -> anyhow::Result<()> {
+    println!("started deploy_contract");
     let ExecutorTestEnvironment {
         test_ctx: mut env,
         test_kp: kp,
@@ -561,6 +565,7 @@ async fn deploy_contract() -> anyhow::Result<()> {
 #[tokio::test]
 #[serial]
 async fn holder_detection() -> anyhow::Result<()> {
+    println!("started holder_detection");
     let ExecutorTestEnvironment {
         test_ctx: mut env,
         test_kp: kp,
@@ -617,6 +622,7 @@ async fn holder_detection() -> anyhow::Result<()> {
 #[tokio::test]
 #[serial]
 async fn recover_holder() -> anyhow::Result<()> {
+    println!("started recover_holder");
     let ExecutorTestEnvironment {
         test_ctx: mut env,
         test_kp: kp,
@@ -669,6 +675,7 @@ async fn recover_holder() -> anyhow::Result<()> {
 #[tokio::test]
 #[serial]
 async fn iterations() -> anyhow::Result<()> {
+    println!("started iterations");
     let ExecutorTestEnvironment {
         test_ctx: mut env,
         test_kp: kp,
@@ -725,6 +732,7 @@ async fn iterations() -> anyhow::Result<()> {
 #[tokio::test]
 #[serial]
 async fn recover_state() -> anyhow::Result<()> {
+    println!("started recover_state");
     let ExecutorTestEnvironment {
         test_ctx: mut env,
         test_kp: kp,
@@ -802,6 +810,7 @@ async fn recover_state() -> anyhow::Result<()> {
 #[tokio::test]
 #[ignore] // TODO: Include this when solana crates are updated
 async fn alt() -> anyhow::Result<()> {
+    println!("started alt");
     let ExecutorTestEnvironment {
         test_ctx: mut env,
         test_kp: kp,
@@ -858,6 +867,7 @@ async fn alt() -> anyhow::Result<()> {
 #[tokio::test]
 #[serial]
 async fn sol_call() -> anyhow::Result<()> {
+    println!("started sol_call");
     let ExecutorTestEnvironment {
         test_ctx: mut env,
         test_kp: kp,
@@ -891,6 +901,7 @@ async fn sol_call() -> anyhow::Result<()> {
 #[tokio::test]
 #[ignore]
 async fn reload_config() -> Result<()> {
+    println!("started reload_config");
     let ExecutorTestEnvironment {
         rpc,
         test_kp: kp1,
@@ -957,6 +968,7 @@ async fn reload_config() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn parallel_transfers() -> Result<()> {
+    println!("started parallel_transfers");
     const NUM_TRANSFERS: usize = 100;
     let ExecutorTestEnvironment {
         rpc,
@@ -1009,7 +1021,6 @@ async fn find_holder(idx: u8, solana_api: SolanaApi, operator: &Pubkey) -> Resul
     let pubkey =
         Pubkey::create_with_seed(operator, &seed, &NEON_KEY).expect("create with seed failed");
     let Some(account) = solana_api.get_account(&pubkey).await? else {
-        println!("holder: {pubkey}");
         return Ok(None);
     };
     Ok(Some(account))
@@ -1018,6 +1029,7 @@ async fn find_holder(idx: u8, solana_api: SolanaApi, operator: &Pubkey) -> Resul
 #[tokio::test]
 #[serial]
 async fn holder_recreate() -> Result<()> {
+    println!("started holder_recreate");
     let ExecutorTestEnvironment {
         neon_api,
         solana_api,
