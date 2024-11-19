@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE neon_holder_log\n            SET is_stuck = $1\n            WHERE pubkey = $2 AND block_slot = $3\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5731dd4892f622a34dde25f406fe4223b6dd3fb27fed16a3a1ca13fd6d6af302"
+}
