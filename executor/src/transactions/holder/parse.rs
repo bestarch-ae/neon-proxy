@@ -34,6 +34,13 @@ const FIRST_ACCOUNT_DATA_OFFSET: usize =
 /// See <https://solana.com/docs/programs/faq#memory-map> for more details.
 const PROGRAM_DATA_INPUT_PARAMETERS_OFFSET: usize = 0x0004_0000_0000_usize;
 
+const HEADER_START: usize = evm_loader::account::ACCOUNT_PREFIX_LEN;
+const DATA_OFFSET_OFFSET: usize = HEADER_START
+    // NEON uses `usize` for all three fields which is unfortunate
+    // but we have to rely on the fact that `u64` is `usize` in SBF
+    + mem::size_of::<u64>() // executor_state_offset
+    + mem::size_of::<u64>(); // evm_machine_offset;
+
 #[derive(Debug)]
 pub struct StateData {
     pub tx_hash: B256,
@@ -43,13 +50,6 @@ pub struct StateData {
 
 pub fn parse_state(program_id: &Pubkey, account: &AccountInfo<'_>) -> anyhow::Result<StateData> {
     evm_loader::account::validate_tag(program_id, account, TAG_STATE)?;
-
-    const HEADER_START: usize = evm_loader::account::ACCOUNT_PREFIX_LEN;
-    const DATA_OFFSET_OFFSET: usize = HEADER_START
-        // NEON uses `usize` for all three fields which is unfortunate
-        // but we have to rely on the fact that `u64` is `usize` in SBF
-        + mem::size_of::<u64>() // executor_state_offset 
-        + mem::size_of::<u64>(); // evm_machine_offset;
 
     let data = account.data.borrow();
     let data_offset: u64 =
@@ -129,6 +129,22 @@ pub fn parse_state(program_id: &Pubkey, account: &AccountInfo<'_>) -> anyhow::Re
     };
 
     Ok(data)
+}
+
+pub fn parse_owner(account: &AccountInfo<'_>) -> anyhow::Result<Pubkey> {
+    let data = account.data.borrow();
+    let data_offset: u64 =
+        pod_read_unaligned(&data[DATA_OFFSET_OFFSET..(DATA_OFFSET_OFFSET + mem::size_of::<u64>())]);
+
+    let offset = |offset| data_offset as usize + offset;
+
+    const OWNER_OFFSET: usize = 0;
+    const OWNER_LEN: usize = 32;
+
+    let mut owner_bytes = [0; OWNER_LEN];
+    owner_bytes.copy_from_slice(&data[offset(OWNER_OFFSET)..offset(OWNER_OFFSET + OWNER_LEN)]);
+    let owner = Pubkey::from(owner_bytes);
+    Ok(owner)
 }
 
 fn read_vec(data: &[u8], start: usize, offset: isize) -> anyhow::Result<Vec<Pubkey>> {

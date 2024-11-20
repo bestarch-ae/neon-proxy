@@ -17,7 +17,7 @@ use evm_loader::account;
 use evm_loader::account::Holder;
 use evm_loader::types::Transaction;
 use reth_primitives::B256;
-use solana_sdk::account_info::IntoAccountInfo;
+use solana_sdk::account_info::{AccountInfo, IntoAccountInfo};
 use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::system_instruction;
@@ -27,6 +27,7 @@ use tracing::{error, info};
 use common::neon_instruction::tag;
 use solana_api::solana_api::SolanaApi;
 
+pub use self::parse::parse_owner;
 use crate::transactions::holder::parse::parse_state;
 use crate::transactions::holder::parse::StateData;
 
@@ -38,8 +39,8 @@ const PREFIX: &str = "holder";
 
 #[derive(Debug, Clone, Copy)]
 struct HolderMeta {
-    idx: u8,
-    pubkey: Pubkey,
+    pub idx: u8,
+    pub pubkey: Pubkey,
 }
 
 fn holder_seed(idx: u8) -> String {
@@ -53,13 +54,17 @@ pub(super) struct HolderInfo {
     current_offset: usize,
     hash: B256,
     recreate: bool,
+    /// If true, the holder will not be sent on drop
+    disarm: bool,
 }
 
 impl Drop for HolderInfo {
     fn drop(&mut self) {
-        match self.sender.try_send(self.meta) {
-            Ok(()) | Err(TrySendError::Closed(_)) => (),
-            Err(TrySendError::Full(meta)) => panic!("holder do not fit: {}", meta.pubkey),
+        if !self.disarm {
+            match self.sender.try_send(self.meta) {
+                Ok(()) | Err(TrySendError::Closed(_)) => (),
+                Err(TrySendError::Full(meta)) => panic!("holder do not fit: {}", meta.pubkey),
+            }
         }
     }
 }
@@ -110,6 +115,53 @@ enum HolderState {
 }
 
 impl HolderState {
+    pub fn try_from_account_info(
+        program_id: &Pubkey,
+        account_info: AccountInfo,
+    ) -> anyhow::Result<Self> {
+        use common::evm_loader::account::{self, legacy, tag};
+
+        match tag(program_id, &account_info).context("invalid holder account")? {
+            account::TAG_STATE_FINALIZED | legacy::TAG_STATE_FINALIZED_DEPRECATED => {
+                Ok(HolderState::Finalized)
+            }
+            account::TAG_HOLDER | legacy::TAG_HOLDER_DEPRECATED => {
+                let holder = Holder::from_account(program_id, account_info)
+                    .context("cannot parse holder")?;
+                // [`Transaction::from_rlp`] can panic if first byte is invalid
+                let state = if !common::has_valid_tx_first_byte(holder.transaction().as_ref()) {
+                    Ok(HolderState::Incomplete)
+                } else {
+                    match Transaction::from_rlp(holder.transaction().as_ref())
+                        .and_then(|trx| holder.validate_transaction(&trx))
+                    {
+                        Ok(()) => {
+                            let tx_buf = holder.transaction();
+                            let tx = TxEnvelope::decode_2718(&mut tx_buf.as_ref())
+                                .context("cannot decode transaction from holder")?;
+                            Ok(HolderState::Pending(tx))
+                        }
+                        Err(_) => Ok(HolderState::Incomplete),
+                    }
+                };
+                state
+            }
+            account::TAG_STATE | legacy::TAG_STATE_DEPRECATED => {
+                let StateData {
+                    tx_hash,
+                    chain_id,
+                    accounts,
+                } = parse_state(program_id, &account_info)?;
+                Ok(HolderState::State {
+                    tx_hash,
+                    chain_id,
+                    accounts,
+                })
+            }
+            n => bail!("invalid holder tag: {n}"),
+        }
+    }
+
     fn recoverable(self) -> Option<RecoverableHolderState> {
         match self {
             Self::Incomplete | Self::Finalized => None,
@@ -139,7 +191,7 @@ pub enum RecoverableHolderState {
 }
 
 #[derive(Debug)]
-struct RecoveredHolder {
+pub struct RecoveredHolder {
     meta: HolderMeta,
     state: HolderState,
     recreate: bool,
@@ -253,8 +305,6 @@ impl HolderManager {
     }
 
     async fn try_recover_holder(&self, idx: u8) -> anyhow::Result<Option<RecoveredHolder>> {
-        use common::evm_loader::account::{self, legacy, tag};
-
         let seed = holder_seed(idx);
         let pubkey = Pubkey::create_with_seed(&self.operator, &seed, &self.program_id)
             .expect("create with seed failed");
@@ -269,45 +319,7 @@ impl HolderManager {
         let account_info = (&pubkey, &mut account).into_account_info();
         let holder_size = account_info.data.borrow().len();
         let recreate = holder_size != self.holder_size;
-        let state = match tag(&self.program_id, &account_info).context("invalid holder account")? {
-            account::TAG_STATE_FINALIZED | legacy::TAG_STATE_FINALIZED_DEPRECATED => {
-                HolderState::Finalized
-            }
-            account::TAG_HOLDER | legacy::TAG_HOLDER_DEPRECATED => {
-                let holder = Holder::from_account(&self.program_id, account_info)
-                    .context("cannot parse holder")?;
-                // [`Transaction::from_rlp`] can panic if first byte is invalid
-                let state = if !common::has_valid_tx_first_byte(holder.transaction().as_ref()) {
-                    HolderState::Incomplete
-                } else {
-                    match Transaction::from_rlp(holder.transaction().as_ref())
-                        .and_then(|trx| holder.validate_transaction(&trx))
-                    {
-                        Ok(()) => {
-                            let tx_buf = holder.transaction();
-                            let tx = TxEnvelope::decode_2718(&mut tx_buf.as_ref())
-                                .context("cannot decode transaction from holder")?;
-                            HolderState::Pending(tx)
-                        }
-                        Err(_) => HolderState::Incomplete,
-                    }
-                };
-                state
-            }
-            account::TAG_STATE | legacy::TAG_STATE_DEPRECATED => {
-                let StateData {
-                    tx_hash,
-                    chain_id,
-                    accounts,
-                } = parse_state(&self.program_id, &account_info)?;
-                HolderState::State {
-                    tx_hash,
-                    chain_id,
-                    accounts,
-                }
-            }
-            n => bail!("invalid holder tag: {n}"),
-        };
+        let state = HolderState::try_from_account_info(&self.program_id, account_info)?;
         if recreate {
             info!(
                 ?self.operator,
@@ -322,6 +334,36 @@ impl HolderManager {
             state,
             recreate,
         }))
+    }
+
+    pub fn try_recover_holder_by_account(
+        &self,
+        account: AccountInfo,
+    ) -> anyhow::Result<Option<HolderToFinalize>> {
+        let owner = parse_owner(&account)?;
+        let meta = HolderMeta {
+            idx: 0, // we don't care about the idx, will only be used for logging;
+            pubkey: owner,
+        };
+        let state = HolderState::try_from_account_info(&self.program_id, account)?;
+
+        if let HolderState::State {
+            tx_hash,
+            chain_id: Some(chain_id),
+            accounts,
+        } = state
+        {
+            let mut info = self.attach_info(meta, None);
+            let state = RecoverableHolderState::State {
+                tx_hash,
+                chain_id: Some(chain_id),
+                accounts,
+            };
+            info.disarm = true;
+            return Ok(Some(HolderToFinalize { info, state }));
+        }
+
+        Ok(None)
     }
 
     pub async fn acquire_holder(&self, tx: Option<&TxEnvelope>) -> anyhow::Result<AcquireHolder> {
@@ -402,6 +444,7 @@ impl HolderManager {
             current_offset: 0,
             hash,
             recreate: false,
+            disarm: false,
         }
     }
 

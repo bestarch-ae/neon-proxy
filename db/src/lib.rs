@@ -216,6 +216,8 @@ impl HolderRepo {
         Self { pool }
     }
 
+    pub async fn get_stuck(&self) {}
+
     pub async fn get_by_pubkey(
         &self,
         pubkey: &Pubkey,
