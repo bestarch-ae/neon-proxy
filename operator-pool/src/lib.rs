@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::future::Future;
 use std::path::Path;
@@ -10,7 +10,9 @@ use dashmap::DashMap;
 use futures_util::StreamExt;
 use humantime::format_duration;
 use reth_primitives::Address;
+use solana_api::solana_api::SolanaApi;
 use solana_cli_config::CONFIG_FILE;
+use solana_sdk::account_info::IntoAccountInfo;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 use thiserror::Error;
@@ -18,10 +20,9 @@ use tokio::sync::oneshot;
 use tokio::time;
 use tokio_util::time::DelayQueue;
 
-use executor::{Executor, HOLDER_SIZE};
+use executor::{parse_owner, Executor, HOLDER_SIZE};
 use neon_api::NeonApi;
 use operator::Operator;
-use solana_api::solana_api::SolanaApi;
 
 const RELOAD_INTERVAL: Duration = Duration::from_secs(60);
 const RECHECK_INTERVAL: Duration = Duration::from_secs(20);
@@ -146,6 +147,7 @@ impl OperatorHealth {
 #[derive(Debug)]
 pub struct OperatorPool {
     map: DashMap<Address, PoolEntry>,
+    pubkey_map: DashMap<Pubkey, Address>,
     queue: (Sender<Address>, Receiver<Address>),
     bootstrap: Bootstrap,
     deactivated: Sender<Address>,
@@ -181,15 +183,18 @@ impl OperatorPool {
         };
         let (deactivated, deactivated_rx) = async_channel::bounded(32);
         let map = DashMap::new();
+        let pubkey_map = DashMap::new();
         let queue = async_channel::unbounded();
         let mut operator_order = Vec::new();
         for operator in operators {
             let operator = Arc::new(operator);
             let address = operator.address();
+            let pubkey = operator.pubkey();
             let entry = bootstrap.start_executor(operator).await?;
             tracing::info!(operator = ?entry.operator, "loaded operator");
             operator_order.push(entry.operator.address());
             map.insert(entry.operator.address(), entry);
+            pubkey_map.insert(pubkey, address.clone());
             queue.0.send(address).await.expect("never closed");
         }
 
@@ -197,6 +202,7 @@ impl OperatorPool {
 
         let this = Arc::new(Self {
             map,
+            pubkey_map,
             queue,
             bootstrap,
             deactivated,
@@ -232,6 +238,7 @@ impl OperatorPool {
         self.map.iter().map(|ref_| *ref_.key()).collect()
     }
 
+    // TODO: update pubkey_map here as well
     async fn reload(&self) -> Result<()> {
         let mut to_add = load_operators(&self.path, self.prefix.as_deref())?;
 
@@ -246,14 +253,13 @@ impl OperatorPool {
             tracing::debug!("operator set did not change, nothing to reload");
         } else {
             tracing::info!(?to_add, ?to_remove, "reloading operators");
-            let mut map = HashMap::new();
-            let mut operator_order = Vec::new();
             for address in to_remove {
                 let Some((_, entry)) = self.map.remove(&address) else {
                     tracing::warn!("cannot remove operator, not found in map");
                     continue;
                 };
                 let operator = &entry.operator;
+                self.pubkey_map.remove(&operator.pubkey());
                 tracing::info!(?operator, "deactivating operator");
                 continue;
             }
@@ -263,8 +269,9 @@ impl OperatorPool {
                 let address = operator.address();
                 let entry = self.bootstrap.start_executor(operator).await?;
                 tracing::info!(operator = ?entry.operator, "loaded operator");
-                operator_order.push(entry.operator.address());
-                map.insert(entry.operator.address(), entry);
+                self.pubkey_map
+                    .insert(entry.operator.pubkey(), entry.operator.address());
+                self.map.insert(entry.operator.address(), entry);
                 self.queue.0.send(address).await.expect("never closed");
             }
 
@@ -311,6 +318,53 @@ impl OperatorPool {
             tracing::info!(%address, "reactivated operator");
             true
         }
+    }
+
+    async fn get_healthy_executor(&self, address: &Address) -> Option<Arc<Executor>> {
+        let Some(executor) = self.map.get(address).map(|ref_| ref_.executor.clone()) else {
+            return None;
+        };
+        let balance = self
+            .get_operator_balance(&address, &executor.pubkey())
+            .await;
+        let health = self.balance_to_health(balance);
+        match health {
+            OperatorHealth::Bad => None,
+            OperatorHealth::Good | OperatorHealth::Warn => Some(executor),
+        }
+    }
+
+    async fn try_continue_from_holder_account(&self, holder_pkey: Pubkey) -> anyhow::Result<()> {
+        let Some(mut account) = self.bootstrap.solana_api.get_account(&holder_pkey).await? else {
+            return Ok(()); // TODO:
+        };
+        let account_info = (&holder_pkey, &mut account).into_account_info();
+        let owner = parse_owner(&account_info)?;
+        let Some(operator_addr) = self.pubkey_map.get(&owner).map(|v| v.value().clone()) else {
+            return Ok(()); // TODO:
+        };
+        let executor = if let Some(executor) = self.get_healthy_executor(&operator_addr).await {
+            executor
+        } else {
+            loop {
+                let address = self.queue.1.recv().await.expect("never closed");
+                // TODO: deactivate operator if it's not healthy;
+                let Some(executor) = self.get_healthy_executor(&address).await else {
+                    continue;
+                };
+
+                self.queue
+                    .0
+                    .send(address)
+                    .await
+                    .expect("never full and never closed");
+                break executor;
+            }
+        };
+
+        executor
+            .try_continue_from_holder_account(account_info)
+            .await
     }
 
     fn run(
