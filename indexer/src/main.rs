@@ -6,7 +6,7 @@ use clap::Parser;
 use common::solana_sdk::pubkey::Pubkey;
 // use futures::stream::StreamExt;
 
-use indexer::Indexer;
+use indexer::{Indexer, DEFAULT_STUCK_HOLDER_BLOCKOUT};
 use metrics::metrics;
 use solana::traverse::v2::{TraverseConfig, TraverseLedger};
 use tokio::sync::mpsc;
@@ -79,6 +79,9 @@ struct Args {
 
     #[arg(long)]
     log_format: Option<LogFormat>,
+
+    #[arg(long, default_value_t = DEFAULT_STUCK_HOLDER_BLOCKOUT)]
+    stuck_holder_blockout: u64,
 }
 
 #[tokio::main]
@@ -100,7 +103,7 @@ async fn main() -> Result<()> {
 
     let pool = db::connect(&opts.pg_url).await?;
 
-    let mut indexer = Indexer::new(pool, opts.target);
+    let mut indexer = Indexer::new(pool, opts.target, opts.stuck_holder_blockout);
     let last_block = indexer.get_latest_block().await?.map(|x| x + 1);
     let start_slot = last_block.or(opts.slot);
 

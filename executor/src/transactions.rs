@@ -20,6 +20,7 @@ use neon_lib::commands::get_config::ChainInfo;
 use neon_lib::types::Address;
 use reth_primitives::B256;
 use semver::Version;
+use solana_sdk::account_info::AccountInfo;
 use solana_sdk::compute_budget::ComputeBudgetInstruction;
 use solana_sdk::hash::HASH_BYTES;
 use solana_sdk::instruction::{AccountMeta, Instruction};
@@ -43,7 +44,7 @@ use self::holder::{AcquireHolder, HolderInfo, HolderManager, RecoverableHolderSt
 use self::ongoing::{TxData, TxStage};
 use crate::ExecuteRequest;
 
-pub use self::holder::HOLDER_SIZE;
+pub use self::holder::{parse_owner, HOLDER_SIZE};
 pub use self::ongoing::OngoingTransaction;
 pub use self::preflight_error::TxErrorKind;
 
@@ -170,6 +171,41 @@ impl TransactionBuilder {
         self.emulator.set_evm_steps_min(evm_steps_min);
 
         Ok(())
+    }
+
+    pub async fn try_continue_from_holder_account(
+        &self,
+        account: AccountInfo<'_>,
+    ) -> Result<Option<OngoingTransaction>> {
+        let Some(holder) = self.holder_mgr.try_recover_holder_by_account(account)? else {
+            return Ok(None);
+        };
+
+        if let RecoverableHolderState::State {
+            tx_hash,
+            chain_id: Some(chain_id),
+            accounts,
+        } = holder.state
+        {
+            let iter_info = IterInfo::max(self.emulator.evm_steps_min() as u32); // FIXME
+            let accounts = accounts
+                .into_iter()
+                .map(|pubkey| NeonSolanaAccount {
+                    pubkey,
+                    is_writable: true,
+                    is_legacy: true,
+                })
+                .collect();
+            let stage =
+                TxStage::recovered_holder(tx_hash, chain_id, holder.info, iter_info, accounts);
+            return Ok(Some(
+                self.next_step_inner(stage)
+                    .await?
+                    .expect("filled holder proceeds to execution"),
+            ));
+        };
+
+        Ok(None)
     }
 
     pub async fn recover(&mut self, init_holders: bool) -> Result<Vec<OngoingTransaction>> {

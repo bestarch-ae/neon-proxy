@@ -216,6 +216,8 @@ impl HolderRepo {
         Self { pool }
     }
 
+    pub async fn get_stuck(&self) {}
+
     pub async fn get_by_pubkey(
         &self,
         pubkey: &Pubkey,
@@ -310,6 +312,27 @@ impl HolderRepo {
             data
         )
         .execute(&mut **txn)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn set_is_stuck(
+        &self,
+        pubkey: Pubkey,
+        block_slot: u64,
+        is_stuck: bool,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"
+            UPDATE neon_holder_log
+            SET is_stuck = $1
+            WHERE pubkey = $2 AND block_slot = $3
+            "#,
+            is_stuck,
+            pubkey.to_string(),
+            block_slot as i64
+        )
+        .execute(&self.pool)
         .await?;
         Ok(())
     }

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -17,6 +18,7 @@ use crate::accountsdb::{DummyAdb, DummyTdb};
 use crate::metrics::metrics;
 
 const ONE_BLOCK_SEC: f64 = 0.4;
+pub const DEFAULT_STUCK_HOLDER_BLOCKOUT: u64 = 64;
 
 #[derive(Copy, Clone, Debug)]
 struct LastBlock {
@@ -24,12 +26,72 @@ struct LastBlock {
     time: UnixTimestamp,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct HolderEntry {
+    pub last_slot: Option<u64>,
+    pub is_stuck: bool,
+}
+
+impl HolderEntry {
+    /// Update holder entry with new operation and slot
+    pub fn update(&mut self, slot: u64) {
+        let last_slot = self.last_slot.unwrap_or(0);
+        if self.last_slot.is_none() || last_slot < slot {
+            self.last_slot = Some(slot);
+            self.is_stuck = false;
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Holders {
+    /// Holder check interval in slots
+    check_interval: u64,
+    inner: HashMap<Pubkey, HolderEntry>,
+}
+
+impl Holders {
+    pub fn new(check_interval: u64) -> Self {
+        Self {
+            check_interval,
+            inner: HashMap::new(),
+        }
+    }
+
+    pub fn update(&mut self, slot: u64, pubkey: Pubkey, op: &HolderOperation) {
+        match op {
+            HolderOperation::Create(_) => {}
+            HolderOperation::Delete(_) => {
+                self.inner.remove(&pubkey);
+            }
+            HolderOperation::Write { .. } => {
+                let entry = self.inner.entry(pubkey).or_default();
+                entry.update(slot);
+            }
+        }
+    }
+
+    /// Updates inner state and returns a vector of stuck holders
+    pub fn check(&mut self, slot: u64) -> Vec<(u64, Pubkey)> {
+        let mut stuck = Vec::new();
+        for (pubkey, holder) in &mut self.inner {
+            if let Some(last_slot) = holder.last_slot {
+                if !holder.is_stuck && slot - last_slot > self.check_interval {
+                    stuck.push((last_slot, *pubkey));
+                    holder.is_stuck = true;
+                }
+            }
+        }
+        stuck
+    }
+}
+
 struct NeonBlock {
     block: SolanaBlock,
     txs: Vec<NeonTxInfo>,
     signatures: Vec<(u32, Signature)>,
     canceled: Vec<CanceledNeonTxInfo>,
-    holders: Vec<(u32, bool, HolderOperation)>,
+    holders: Vec<(u32, HolderOperation)>,
 }
 
 pub struct Indexer {
@@ -44,10 +106,11 @@ pub struct Indexer {
     tdb: DummyTdb,
     target: Pubkey,
     last_block: Option<LastBlock>,
+    holders: Holders,
 }
 
 impl Indexer {
-    pub fn new(pool: db::PgPool, target: Pubkey) -> Self {
+    pub fn new(pool: db::PgPool, target: Pubkey, stuck_holder_blockout: u64) -> Self {
         let tx_repo = db::TransactionRepo::new(pool.clone());
         let sig_repo = db::SolanaSignaturesRepo::new(pool.clone());
         let holder_repo = db::HolderRepo::new(pool.clone());
@@ -55,6 +118,7 @@ impl Indexer {
         let adb = DummyAdb::new(target, holder_repo.clone());
         let tdb = DummyTdb::new(tx_repo.clone());
         let tx_log_idx = TxLogIdx::new(tx_repo.clone());
+        let holders = Holders::new(stuck_holder_blockout);
 
         Self {
             tx_repo,
@@ -68,6 +132,7 @@ impl Indexer {
             tdb,
             target,
             last_block: None,
+            holders,
         }
     }
 
@@ -89,6 +154,16 @@ impl Indexer {
             .latest_block_time()
             .await?
             .map(|(slot, _)| slot))
+    }
+
+    async fn save_stuck_holders(&mut self, slot: u64) -> Result<()> {
+        let stuck = self.holders.check(slot);
+        for (block_slot, pubkey) in stuck {
+            self.holder_repo
+                .set_is_stuck(pubkey, block_slot, true)
+                .await?
+        }
+        Ok(())
     }
 
     async fn save_block(&mut self, block: &NeonBlock) -> anyhow::Result<()> {
@@ -113,9 +188,9 @@ impl Indexer {
         }
 
         let _blk_timer = metrics().block_processing_time.start_timer();
-        for (tx_idx, stuck, op) in &block.holders {
+        for (tx_idx, op) in &block.holders {
             self.holder_repo
-                .insert(slot, *tx_idx, *stuck, op, &mut txn)
+                .insert(slot, *tx_idx, false, op, &mut txn)
                 .await
                 .context("failed to save neon holder")?;
             metrics().holders_saved.inc();
@@ -169,6 +244,11 @@ impl Indexer {
                 }
             }
         }
+        if let Err(err) = self.save_stuck_holders(slot).await {
+            metrics().database_errors.inc();
+            tracing::warn!(slot = %slot, ?err, "failed to save stuck holders");
+        }
+
         metrics().current_slot.set(slot as i64);
 
         Ok(())
@@ -268,7 +348,8 @@ impl Indexer {
                         if let HolderOperation::Delete(pubkey) = &op {
                             self.adb.delete_account(*pubkey);
                         }
-                        neon_block.holders.push((tx_idx, false, op));
+                        self.holders.update(slot, op.pubkey(), &op);
+                        neon_block.holders.push((tx_idx, op));
                     }
                 }
             }

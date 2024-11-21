@@ -13,6 +13,7 @@ use alloy_rlp::Decodable;
 use anyhow::{anyhow, Context};
 use clap::Args;
 use dashmap::DashMap;
+use solana_sdk::account_info::AccountInfo;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 use solana_sdk::transaction::TransactionError;
@@ -33,7 +34,7 @@ use solana_api::solana_api::SolanaApi;
 use self::entry::TransactionEntry;
 use self::transactions::{OngoingTransaction, TransactionBuilder, TxErrorKind};
 
-pub use transactions::HOLDER_SIZE;
+pub use transactions::{parse_owner, HOLDER_SIZE};
 
 #[derive(Args, Clone)]
 pub struct Config {
@@ -252,6 +253,24 @@ impl Executor {
 
     pub async fn reload_config(&self) -> anyhow::Result<()> {
         self.builder.reload_config().await
+    }
+
+    pub async fn try_continue_from_holder_account(
+        &self,
+        holder_account: AccountInfo<'_>,
+    ) -> anyhow::Result<()> {
+        let Some(tx) = self
+            .builder
+            .try_continue_from_holder_account(holder_account)
+            .await?
+        else {
+            return Ok(());
+        };
+
+        let tx = TransactionEntry::new(tx, None.into());
+        self.sign_and_send_transaction(tx).await?;
+
+        Ok(())
     }
 
     /// Sign, send and register transaction to be confirmed.
